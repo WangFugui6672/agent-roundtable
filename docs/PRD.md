@@ -1,7 +1,8 @@
 # Agent Roundtable 产品需求文档
 
-**文档状态：** Draft v0.1  
-**更新日期：** 2026-10-25  
+**文档状态：** MVP Requirements Final v1.0
+
+**更新日期：** 2026-10-26
 **产品形态：** iOS 原生 App + Django 后端服务  
 **目标平台顺序：** iOS 先行，Android 后补  
 **代码管理：** GitHub
@@ -53,7 +54,8 @@ Agent Roundtable 是一个面向移动端的 AI 多智能体圆桌应用。用�
 
 - 展示 SwiftUI 原生开发、实时通信、状态恢复和复杂聊天界面能力。
 - 展示 Django 后端、WebSocket、Agent 调度和 LLM 工程能力。
-- 形成可公开演示的 GitHub 项目、APK/TestFlight 版本及技术文档。
+- 形成可公开演示的 GitHub 项目、iOS 可运行版本及技术文档。
+- TestFlight 在 Apple Developer 账号可用时作为可选分发方式；Android APK 在后续阶段提供。
 - 为后续 Android 客户端复用同一套 API 和事件协议。
 
 ### 2.3 成功指标
@@ -179,13 +181,17 @@ MVP 上线测试后统计，不在开发前伪造数据：
 - MVP 使用匿名设备会话。
 - 匿名会话标识由后端生成，并以安全方式保存在设备端。
 - 用户无需注册即可创建和恢复自己的圆桌。
+- 服务端圆桌、消息和总结在最后活动后保留 90 天。
+- 用户删除圆桌时立即删除服务端和本地相关数据。
+- Keychain 中的 API Key 不受 90 天规则影响，保留到用户主动删除。
 - P1 支持 Apple 登录和跨设备同步。
 
 ### 7.2 首页与历史
 
 - 展示最近圆桌。
 - 展示进行中、已完成和已归档状态。
-- 支持删除本地历史。
+- 已完成的圆桌保持只读；继续追问时创建带原结论上下文的新圆桌。
+- 删除圆桌时同时删除服务端消息、总结、事件记录和本地缓存。
 - 无网络时可查看已缓存的圆桌和结论。
 
 ### 7.3 创建与编辑圆桌
@@ -193,7 +199,9 @@ MVP 上线测试后统计，不在开发前伪造数据：
 - 议题必填，长度建议 10-500 字。
 - 选择 3 个 Agent 后开始；P1 支持 2-4 个。
 - 展示 Agent 的角色、目标、立场和语气。
-- 默认讨论两轮，最多三轮。
+- MVP 固定进行两轮讨论。
+- 真实 Provider 不设置每日圆桌数量上限，但同时最多保留 3 个进行中的圆桌。
+- Mock 演示模式每天最多创建 10 个圆桌。
 - 可配置单次讨论的 Token 预算档位，不暴露复杂参数。
 
 ### 7.4 Agent 角色
@@ -233,7 +241,6 @@ MVP 提供以下预设角色：
 - **第 0 步：** 主持人生成讨论议程。
 - **第一轮：** Agent 独立表达观点，不重复已有主张。
 - **第二轮：** 每位参与者至少引用并评价一条其他观点。
-- **可选第三轮：** 仅用于回应用户插话或解决关键分歧。
 - 达到最大轮数、预算耗尽或主持人判断已收敛时结束。
 
 ### 7.7 结构化发言
@@ -263,6 +270,7 @@ MVP 提供以下预设角色：
 
 - 用户可以发送普通消息。
 - 用户可以 `@` 某个 Agent。
+- 用户插话后，当前 Agent 完成本条消息，随后暂停并重新调度。
 - 用户可以暂停自动讨论。
 - 用户可以要求重新生成当前 Agent 的回复。
 - 用户可以提前结束。
@@ -273,6 +281,8 @@ MVP 提供以下预设角色：
 - 总结必须引用讨论中的具体观点。
 - 总结区分共识、分歧、建议和未决问题。
 - 总结不允许引入讨论中没有出现的新事实。
+- 总结由 iOS 使用当前 Provider 生成，再提交给后端校验和保存。
+- 用户可以重新生成总结，但不能直接编辑共识、分歧和建议正文。
 - 模型失败时可回退到规则化摘要，并标明“降级总结”。
 
 ### 7.10 结论卡
@@ -280,6 +290,7 @@ MVP 提供以下预设角色：
 - 卡片包含议题、三个 Agent、主要观点、共识、分歧和建议。
 - 由原生 SwiftUI 绘制。
 - 支持保存到相册和系统分享。
+- MVP 只生成图片，不提供公开链接、二维码或可导入房间。
 - 卡片不包含 API Key、内部 ID 或未公开的 Prompt。
 
 ### 7.11 实时状态
@@ -292,6 +303,7 @@ MVP 提供以下预设角色：
 - 网络连接状态。
 - 剩余预算的简化表示。
 - 用户可以暂停和结束。
+- App 进入后台或锁屏时立即暂停模型生成和自动讨论，回前台后由用户手动继续。
 
 ### 7.12 错误与恢复
 
@@ -301,6 +313,20 @@ MVP 提供以下预设角色：
 - 单个 Agent 失败不影响其他 Agent 已完成的内容。
 - 整个房间失败时保留草稿并允许重试。
 - App 被终止后，重新打开可恢复最近房间的界面状态。
+
+### 7.13 模型 Provider 与本地密钥
+
+- 真实模型调用只使用用户自己的 API Key，不提供服务端托管模型额度。
+- 支持 Qwen、DeepSeek 和自定义 OpenAI-compatible Provider。
+- Provider 名称、BaseURL 和 Model 保存为普通本地配置。
+- API Key 只保存在 iOS Keychain，不发送给 Django 后端。
+- Keychain item 使用 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`。
+- 模型请求由 iOS 直接发送给用户选择的 Provider。
+- 所有 Agent 在单场圆桌中共用同一套 Provider、BaseURL、API Key 和 Model。
+- App 重启后从 Keychain 读取 Key；缺失时要求用户重新输入。
+- 删除 Provider 配置时同步删除对应 Keychain item。
+- Key 无效、模型不存在、余额不足或超时时明确显示 Provider 错误，不静默切换模型。
+- Mock Provider 继续用于测试和免 Key 演示，不产生真实模型调用。
 
 ## 8. 用户故事
 
@@ -333,7 +359,7 @@ MVP 提供以下预设角色：
 27. 作为维护者，我希望调度逻辑可测试，以便稳定复现讨论过程。
 28. 作为维护者，我希望 API 和 WebSocket 协议有文档，以便后续开发 Android。
 29. 作为维护者，我希望客户端使用 Mock Provider 可演示，以便没有 API Key 时也能验收。
-30. 作为求职作品评审者，我希望快速看到 APK/TestFlight、README、架构图和演示视频，以便判断项目完成度。
+30. 作为求职作品评审者，我希望快速看到 iOS 演示、README、架构图和演示视频，以便判断项目完成度。
 
 ## 9. 版本范围
 
@@ -350,7 +376,8 @@ MVP 提供以下预设角色：
 - SwiftData 本地持久化。
 - WebSocket 断线重连和事件游标恢复。
 - Django + DRF + Channels + PostgreSQL + Redis + Celery 后端。
-- Mock Provider 和正式 LLM Provider。
+- BYOK Provider、Keychain 本地密钥和 Mock Provider。
+- TestFlight 分发（仅在 Apple Developer 配置可用时）。
 - GitHub Actions、测试、README、演示视频。
 
 ### 9.2 P1
@@ -360,7 +387,6 @@ MVP 提供以下预设角色：
 - 头脑风暴和正反辩论模式。
 - 语音输入和 TTS。
 - 分享链接导入房间。
-- TestFlight 分发。
 - Android 客户端。
 
 ### 9.3 P2
@@ -379,7 +405,7 @@ MVP 提供以下预设角色：
 - 不做多人真人协作。
 - 不做短视频或数字人视频。
 - 不做公众人物克隆。
-- 不把 API Key 放入客户端。
+- 不把 API Key 发送给后端或服务端托管。
 - 不在 MVP 同时开发 Android。
 - 不在 MVP 使用 Flutter、React Native 或 Compose Multiplatform。
 - 不依赖公司商标、素材或内部代码。
@@ -427,6 +453,8 @@ MVP 提供以下预设角色：
 - Swift Concurrency
 - `URLSessionWebSocketTask`
 - SwiftData
+- Security framework / Keychain
+- URLSession Provider Client
 - XCTest / Swift Testing
 
 ### 12.2 后端
@@ -453,14 +481,18 @@ RoomUseCase / Reducer
 Repository
     ├── REST Client
     ├── WebSocket Client
-    └── SwiftData Store
+    ├── SwiftData Store
+    ├── Keychain Store
+    └── Provider Client → Qwen / DeepSeek / Custom
+
+Model execution happens on iOS.
+The API key never goes to Django.
 
 Django REST + Channels
     ├── Room Service
     ├── Turn Scheduler
-    ├── Agent Executor
-    ├── Summary Service
-    └── LLM Provider
+    ├── Message Store
+    └── Summary Validator
 ```
 
 ## 13. 领域模型
@@ -548,8 +580,10 @@ Agent 状态：
 ### 15.1 调度约束
 
 - 最多 4 个 Agent，MVP 固定 3 个。
-- 最多 3 轮。
-- 单条 Agent 发言最长 1,200 字；可配置。
+- MVP 最多两轮。
+- 同一时间只允许一个 Agent 输出。
+- 单条 Agent 发言控制在约 60-180 个汉字。
+- 两轮讨论目标在 90 秒内完成。
 - 单次圆桌有 Token 预算上限。
 - 同一 Agent 连续发言需满足点名、直接回复或用户要求。
 - 低相关度 Agent 必须可以 `pass`。
@@ -572,9 +606,11 @@ Agent 输出必须经过后端校验：
 
 - 明确标识所有 Agent 为 AI。
 - 阻止冒充真实公众人物。
-- 对违法、危险、仇恨和不适宜内容进行基础过滤。
+- 使用本地规则过滤违法、危险、仇恨和不适宜内容。
+- MVP 提供用户举报和隐藏能力，不引入服务端模型审核。
 - 安全和隐私说明必须在设置页可见。
 - 用户可以删除自己的圆桌和匿名会话数据。
+- 调用真实 Provider 前明确提示消息将发送给用户选择的模型服务商。
 
 ## 16. 非功能需求
 
@@ -596,7 +632,9 @@ Agent 输出必须经过后端校验：
 ### 16.3 安全
 
 - 全部生产请求使用 HTTPS/WSS。
-- LLM API Key 仅保存在服务端。
+- LLM API Key 仅保存在 iOS Keychain，不发送给 Django 后端。
+- 自定义 BaseURL 由 iOS 直接访问，不由后端代理。
+- API Key 不进入日志、崩溃报告、SwiftData、UserDefaults 或 Git。
 - 用户输入与模型输出进行长度和格式校验。
 - 日志不得记录完整敏感 Prompt，除非显式开启调试模式。
 - 匿名 Token 可轮换和失效。
@@ -640,7 +678,7 @@ Agent 输出必须经过后端校验：
 - 消息协议校验测试。
 - REST API 集成测试。
 - Channels WebSocket 集成测试。
-- Mock Provider 端到端测试。
+- Mock Agent 事件与后端编排端到端测试。
 - Token 预算和最大轮数测试。
 - 安全过滤器测试。
 
@@ -650,6 +688,8 @@ Agent 输出必须经过后端校验：
 - 事件解码和去重测试。
 - WebSocket 重连与游标恢复测试。
 - SwiftData 持久化测试。
+- Keychain 保存、读取、更新、删除和缺失项测试。
+- Provider 配置与 Key 生命周期测试。
 - 关键流程 UI 测试。
 - 真机或模拟器性能检查。
 
@@ -674,16 +714,16 @@ Agent 输出必须经过后端校验：
 
 ### 18.1 仓库
 
-- 建议仓库名：`agent-roundtable`。
-- 开发初期可用私有仓库，MVP 完成后转为公开作品仓库。
+- 仓库名：`WangFugui6672/agent-roundtable`。
+- 开发期间保持私有，MVP 完成后转为公开作品仓库。
 - 仓库描述不得暗示与量子堆栈存在官方隶属关系。
 - 不提交公司素材、内部链接、账号和 API Key。
 
 当前环境状态：
 
-- 当前目录尚未初始化为 Git 仓库。
-- `gh` CLI 已安装，但尚未登录 GitHub。
-- 完成认证后才能创建远程仓库、Issues 和 Actions。
+- Git 仓库、远程地址和 `main` 分支已建立。
+- `gh` CLI 已登录，PRD Epic、标签和里程碑已创建。
+- GitHub Actions 尚未配置。
 
 ### 18.2 分支与 PR
 
@@ -761,7 +801,8 @@ iOS 检查：
 
 - 使用语义化版本标签，如 `v0.1.0`。
 - GitHub Release 附演示视频、变更说明和安装方式。
-- iOS 正式分发优先使用 TestFlight；GitHub 保存客户端源码和测试构建说明。
+- GitHub 保存客户端源码、模拟器演示和构建说明。
+- TestFlight 在 Apple Developer 账号可用时作为可选 Beta 分发，不阻塞 MVP。
 - Android 阶段使用 GitHub Release 提供签名 APK。
 
 ## 19. 建议的 GitHub 垂直切片
@@ -824,7 +865,7 @@ iOS 检查：
 
 ### 10. MVP 发布
 
-**交付：** 测试、CI、README、架构图、演示视频、TestFlight 构建和 GitHub Release。
+**交付：** 测试、CI、README、架构图、演示视频和 GitHub Release；TestFlight 构建在账号可用时补充。
 
 **Blocked by：** 07、09。
 
@@ -832,7 +873,7 @@ iOS 检查：
 
 ### 20.1 主要风险
 
-- 多 Agent 成本高于单次问答。
+- 多 Agent 会更多消耗用户自己的模型额度。
 - Agent 输出可能重复、空泛或互相附和。
 - WebSocket 重连和事件去重容易出错。
 - SwiftUI 长消息流可能出现性能问题。
@@ -840,24 +881,24 @@ iOS 检查：
 - iOS 真机与 TestFlight 需要 Apple Developer 配置。
 - 多 Agent 产品已有竞品，必须在结构和结论质量上形成差异。
 
-### 20.2 待决策
+### 20.2 已关闭的 MVP 决策
 
-1. GitHub 仓库名称、所有者和公开/私有策略。
-2. 首个正式 LLM Provider 与模型。
-3. 后端演示环境部署位置。
-4. 是否在 MVP 加入 TestFlight 分发。
-5. 内容审核使用模型审核、规则审核还是组合方案。
-6. 匿名会话的过期周期。
-7. 是否在 MVP 支持自定义 Agent。
-8. 结论卡是否包含二维码或公开分享链接。
+1. 仓库开发期间私有，MVP 完成后转为公开。
+2. TestFlight 为可选分发，不阻塞 MVP。
+3. 匿名会话和讨论记录保留 90 天，删除时立即清理。
+4. 内容安全采用 AI 标识、本地规则和用户举报，不在 MVP 引入服务端模型审核。
+5. 自定义 Agent、公开分享链接和二维码进入 P1。
 
-### 20.3 推荐默认值
+### 20.3 已锁定默认值
 
 - 仓库：私有开发，MVP 后公开。
-- 模型：OpenAI-compatible Provider，MVP 使用 Mock 作为默认演示。
+- 模型：用户 BYOK；提供 Qwen、DeepSeek 和自定义 OpenAI-compatible 预设。
+- 密钥：iOS Keychain，`WhenUnlockedThisDeviceOnly`。
 - Agent：固定三个预设角色。
+- 部署：本地 Docker Compose + 单机公网演示环境。
+- 发布：GitHub 演示版本为主，TestFlight 在账号可用时补充。
 - 会话：匿名模式，保留 90 天。
-- 安全：规则过滤 + 模型审核。
+- 安全：AI 标识 + 规则过滤 + 用户报告，不在 MVP 引入服务端模型审核。
 - 分享：MVP 只分享本地生成的结论图片。
 
 ## 21. 完成定义
@@ -873,5 +914,5 @@ MVP 只有同时满足以下条件才算完成：
 - 正常路径和关键失败路径有自动化测试。
 - GitHub CI 通过。
 - GitHub Release、README、架构图、协议文档和演示视频齐全。
-- 项目中不存在 API Key、公司内部资料或侵权素材。
+- 仓库中不存在 API Key、公司内部资料或侵权素材。
 

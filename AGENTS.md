@@ -31,6 +31,8 @@
 - 客户端采用 iOS 先行、Android 后补的顺序。
 - iOS 使用 SwiftUI、Swift Concurrency、URLSessionWebSocketTask 和 SwiftData。
 - 后端使用 Django、Django REST Framework、Django Channels、PostgreSQL、Redis 和 Celery。
+- 真实模型调用由 iOS 直接访问用户选择的 Provider，API Key 保存在 iOS Keychain。
+- Django 不接触模型 API Key，也不代理用户自定义 BaseURL。
 - MVP 不引入第二后端、跨平台 UI 框架或无限自动对话。
 - LLM API Key 和签名密钥不得提交到仓库。
 

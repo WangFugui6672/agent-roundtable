@@ -95,6 +95,14 @@ Agent 评估当前消息后决定不发言的状态。Pass 是正常行为，不
 
 无需注册即可使用的设备会话。它用于隔离用户数据和恢复圆桌，不等同于正式账号。
 
+## BYOK
+
+Bring Your Own Key。用户提供自己的模型服务凭据，产品不提供或代付服务端模型额度。
+
+## Provider 配置（Provider Configuration）
+
+一场圆桌调用模型所需的非秘密信息，包括 Provider、BaseURL 和 Model。API Key 是秘密，不属于普通 Provider 配置。
+
 ## Mock Provider
 
 用于开发和演示的确定性 LLM 替代实现。它必须能产生稳定的测试事件，不调用真实模型。
