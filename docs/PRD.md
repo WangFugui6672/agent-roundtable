@@ -805,69 +805,75 @@ iOS 检查：
 - TestFlight 在 Apple Developer 账号可用时作为可选 Beta 分发，不阻塞 MVP。
 - Android 阶段使用 GitHub Release 提供签名 APK。
 
-## 19. 建议的 GitHub 垂直切片
+## 19. 已发布的 GitHub 垂直切片
 
-以下切片需要用户确认后再发布为 Issues。每个切片都必须贯穿 iOS、后端、数据和验证。
+以下切片已作为 Issue #2-#12 发布，并通过 GitHub 原生依赖关系连接到 PRD Issue #1。
 
-### 01. 仓库与协议基线
+### 01. Mock 圆桌纵向切片
 
-**交付：** 初始化 GitHub 仓库、文档结构、Django/iOS 可运行骨架、Mock WebSocket 往返。
+[Issue #2](https://github.com/WangFugui6672/agent-roundtable/issues/2) · Blocked by: None
 
-**Blocked by：** 无。
+交付 iOS 创建圆桌、选择三个 Agent、Django 持久化、WebSocket 空房间、Mock 事件往返、最小 CI 和协议文档。
 
-### 02. 创建第一个圆桌
+### 02. BYOK Provider 与 Keychain
 
-**交付：** iOS 输入议题并选择三个 Agent，后端持久化，客户端成功进入空房间。
+[Issue #3](https://github.com/WangFugui6672/agent-roundtable/issues/3) · Blocked by: #2
 
-**Blocked by：** 01。
+交付 Qwen、DeepSeek 和 Custom 配置，Keychain 密钥管理，普通 Provider 配置，以及后端 Provider 元数据快照。
 
-### 03. 第一个 Agent 流式发言
+### 03. 单个真实 Agent 流式发言
 
-**交付：** 主持人调度一个 Mock Agent，客户端显示思考、输入和完整消息。
+[Issue #4](https://github.com/WangFugui6672/agent-roundtable/issues/4) · Blocked by: #3
 
-**Blocked by：** 02。
+交付 iOS 直连 Provider、流式 Agent 消息、完成/失败状态和后端结构化消息保存。
 
-### 04. 第一轮三人讨论
+### 04. 三 Agent 第一轮讨论
 
-**交付：** 三个 Agent 依次表达不同观点，支持 `pass`，客户端展示轮次和参与者状态。
+[Issue #5](https://github.com/WangFugui6672/agent-roundtable/issues/5) · Blocked by: #4
 
-**Blocked by：** 03。
+交付三个角色、调度器、`pass`、轮次状态和第一轮完整记录。
 
-### 05. 用户插话与暂停
+### 05. 用户插话、点名与暂停
 
-**交付：** 用户可以发送消息、点名、暂停和继续，调度器按新状态调整发言。
+[Issue #6](https://github.com/WangFugui6672/agent-roundtable/issues/6) · Blocked by: #5
 
-**Blocked by：** 04。
+交付用户消息、点名、当前消息完成后暂停、继续、提前结束和重新调度。
 
 ### 06. 第二轮引用式互评
 
-**交付：** 第二轮每个参与者引用并评价至少一个已有观点，UI 展示引用关系和立场。
+[Issue #7](https://github.com/WangFugui6672/agent-roundtable/issues/7) · Blocked by: #6
 
-**Blocked by：** 05。
+交付结构化的引用、立场、主张、质疑关系和客户端引用视图。
 
 ### 07. 断线与进程恢复
 
-**交付：** WebSocket 断线后按游标补发，App 被终止后从 SwiftData 恢复房间状态。
+[Issue #8](https://github.com/WangFugui6672/agent-roundtable/issues/8) · Blocked by: #7
 
-**Blocked by：** 06。
+交付事件游标、补发、去重、SwiftData 恢复和 App 终止后的状态恢复。
 
 ### 08. 结论与结论卡
 
-**交付：** 结束讨论后生成共识、分歧和建议，并导出可分享的原生结论卡。
+[Issue #9](https://github.com/WangFugui6672/agent-roundtable/issues/9) · Blocked by: #7
 
-**Blocked by：** 06。
+交付客户端生成的总结、后端校验、重新生成、只读完成态和原生分享卡片。
 
-### 09. 安全与成本控制
+### 09. 失败、预算与限流
 
-**交付：** Token 预算、轮数限制、请求限流、内容校验、AI 标识和敏感信息保护。
+[Issue #10](https://github.com/WangFugui6672/agent-roundtable/issues/10) · Blocked by: #5
 
-**Blocked by：** 08。
+交付局部 Agent 失败、Provider 错误、两轮上限、Token/时间预算和并发/每日额度。
 
-### 10. MVP 发布
+### 10. 内容安全、隐私与删除
 
-**交付：** 测试、CI、README、架构图、演示视频和 GitHub Release；TestFlight 构建在账号可用时补充。
+[Issue #11](https://github.com/WangFugui6672/agent-roundtable/issues/11) · Blocked by: #7, #10
 
-**Blocked by：** 07、09。
+交付 AI 标识、本地规则、举报/隐藏、第三方 Provider 提示、90 天保留和删除级联。
+
+### 11. MVP 发布
+
+[Issue #12](https://github.com/WangFugui6672/agent-roundtable/issues/12) · Blocked by: #8, #9, #10, #11
+
+交付测试、CI、README、架构图、协议文档、演示视频、GitHub Release 和可选 TestFlight。
 
 ## 20. 风险与开放问题
 
