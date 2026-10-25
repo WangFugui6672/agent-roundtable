@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.sqlite3
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.mobileprovision
+
+# JavaScript tooling
+node_modules/
+
+# Editors
+.idea/
+.vscode/
+
+# Logs and temporary files
+*.log
+tmp/
+
