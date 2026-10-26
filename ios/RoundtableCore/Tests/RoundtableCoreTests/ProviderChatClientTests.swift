@@ -348,4 +348,66 @@ final class AgentPromptTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("还没有人发言"))
     }
+
+    func testSecondRoundPromptRequestsStructuredReviewWithReferenceCandidates() {
+        let participant = Participant(
+            id: UUID(),
+            position: 0,
+            state: .waiting,
+            agent: agent
+        )
+        let message = Message(
+            id: UUID(uuidString: "6F0E0000-0000-4000-8000-000000000004")!,
+            roundNumber: 1,
+            author: MessageAuthor(
+                roundtableAgentId: UUID(uuidString: "E00E0000-0000-4000-8000-000000000005")!,
+                agentKey: "skeptic",
+                name: "质疑派"
+            ),
+            messageType: .challenge,
+            claim: "指标可能被自选。",
+            body: "验证指标需要预先写清，避免事后挑选。",
+            stance: .challenge,
+            references: [],
+            confidence: 0.7,
+            createdAt: Date()
+        )
+
+        let system = AgentPrompt.systemPrompt(
+            topic: topic,
+            agent: agent,
+            roundNumber: 2
+        )
+        let user = AgentPrompt.userPrompt(
+            topic: topic,
+            transcript: [message],
+            roundNumber: 2,
+            participant: participant
+        )
+
+        XCTAssertTrue(system.contains("JSON"))
+        XCTAssertTrue(system.contains("reference_message_id"))
+        XCTAssertTrue(system.contains("challenge_target_agent_id"))
+        XCTAssertTrue(user.contains("6F0E0000"))
+        XCTAssertTrue(user.contains("指标可能被自选"))
+    }
+
+    func testSecondRoundPromptWithoutCandidatesRequestsPass() {
+        let participant = Participant(
+            id: UUID(),
+            position: 0,
+            state: .waiting,
+            agent: agent
+        )
+
+        let prompt = AgentPrompt.userPrompt(
+            topic: topic,
+            transcript: [],
+            roundNumber: 2,
+            participant: participant
+        )
+
+        XCTAssertTrue(prompt.contains("没有可引用的有效观点"))
+        XCTAssertTrue(prompt.contains("PASS"))
+    }
 }

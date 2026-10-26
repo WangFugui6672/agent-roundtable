@@ -15,6 +15,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.roundtables import mock
 from apps.roundtables import protocol as p
+from apps.roundtables.message_validation import validate_agent_message
 from apps.roundtables.models import Message, RoomEvent, Roundtable, RoundtableAgent, Turn
 from apps.roundtables.scheduler import select_next_speaker
 from apps.roundtables.serializers import MessageSerializer, RoundtableSerializer, TurnSerializer
@@ -431,6 +432,12 @@ def create_message(
             raise ValidationError({"turn_id": "turn 已过期、重复或不属于当前圆桌。"})
         if turn.roundtable_agent_id != agent.id:
             raise ValidationError({"roundtable_agent_id": "提交者不是当前 turn 的发言人。"})
+        validate_agent_message(
+            roundtable=room,
+            agent=agent,
+            turn=turn,
+            data=validated,
+        )
         message = Message.objects.create(
             id=uuid.uuid4(),
             roundtable=room,
@@ -442,6 +449,7 @@ def create_message(
             body=validated.get("body", ""),
             stance=validated.get("stance") or "",
             confidence=validated.get("confidence", 0.6),
+            challenge_target_id=validated.get("challenge_target_agent_id"),
         )
         message.references.set(validated.get("references") or [])
 
@@ -486,10 +494,20 @@ def next_turn(
         )
         if room is None:
             return None
+        if (
+            room.status == Roundtable.Status.COMPLETED
+            and RoomEvent.objects.filter(
+                roundtable=room,
+                event_type=p.ROUND_COMPLETED,
+                payload__round=room.current_round,
+            ).exists()
+        ):
+            return room.current_round, None, []
+        if room.status == Roundtable.Status.COMPLETED:
+            raise ValidationError({"status": "圆桌当前状态不能签发新的 turn。"})
         if room.status in {
             Roundtable.Status.PAUSED,
             Roundtable.Status.SUMMARIZING,
-            Roundtable.Status.COMPLETED,
             Roundtable.Status.FAILED,
             Roundtable.Status.ARCHIVED,
         }:
@@ -581,17 +599,71 @@ def next_turn(
             event_type=p.ROUND_COMPLETED,
             payload__round=room.current_round,
         ).exists():
-            if room.current_round >= room.max_rounds:
-                room.status = Roundtable.Status.COMPLETED
-            event = _append_room_event(
-                room,
-                p.ROUND_COMPLETED,
-                {"round": room.current_round},
-            )
+            completed_round = room.current_round
+            created = [
+                _append_room_event(
+                    room,
+                    p.ROUND_COMPLETED,
+                    {"round": completed_round},
+                )
+            ]
+            if completed_round < room.max_rounds:
+                room.current_round = completed_round + 1
+                for agent in agents:
+                    agent.state = RoundtableAgent.State.WAITING
+                preferred_ids = _preferred_agent_ids(room, agents)
+                speaker = select_next_speaker(agents, preferred_ids)
+                if speaker is None:
+                    raise RuntimeError("A roundtable must have a participant.")
+                speaker.state = RoundtableAgent.State.THINKING
+                RoundtableAgent.objects.bulk_update(agents, ["state"])
+                turn = Turn.objects.create(
+                    id=uuid.uuid4(),
+                    roundtable=room,
+                    roundtable_agent=speaker,
+                    round_number=room.current_round,
+                )
+                created.extend(
+                    [
+                        _append_room_event(
+                            room,
+                            p.ROUND_STARTED,
+                            {
+                                "round": room.current_round,
+                                "max_rounds": room.max_rounds,
+                                "topic": room.topic,
+                            },
+                        ),
+                        _append_room_event(
+                            room,
+                            p.AGENT_THINKING,
+                            {
+                                "turn_id": str(turn.id),
+                                "round": room.current_round,
+                                "agent_id": str(speaker.id),
+                                "agent_name": speaker.agent_profile.name,
+                            },
+                        ),
+                    ]
+                )
+                room.status = Roundtable.Status.RUNNING
+                room.save(
+                    update_fields=[
+                        "current_round",
+                        "status",
+                        "event_sequence",
+                        "updated_at",
+                    ]
+                )
+                envelopes = [_event_envelope(event) for event in created]
+                _broadcast_after_commit(room.id, envelopes)
+                return room.current_round, TurnSerializer(turn).data, envelopes
+
+            room.status = Roundtable.Status.COMPLETED
             room.save(update_fields=["status", "event_sequence", "updated_at"])
-            envelope = _event_envelope(event)
+            envelope = _event_envelope(created[0])
             _broadcast_after_commit(room.id, [envelope])
-            return room.current_round, None, [envelope]
+            return completed_round, None, [envelope]
 
         return room.current_round, None, []
 

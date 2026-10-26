@@ -279,7 +279,7 @@ def test_pass_is_recorded_once_for_the_current_turn(api_client):
     assert Turn.objects.get(id=turn["turn_id"]).status == Turn.Status.PASSED
 
 
-def test_first_round_completes_after_every_agent_speaks_or_passes(api_client):
+def test_first_round_automatically_starts_round_two(api_client):
     room = make_room()
 
     first = request_next_turn(api_client, room).json()["turn"]
@@ -325,17 +325,22 @@ def test_first_round_completes_after_every_agent_speaks_or_passes(api_client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["turn"] is None
-    assert [event["event_type"] for event in body["events"]] == ["round.completed"]
-    assert body["events"][0]["sequence"] == 8
+    assert body["round"] == 2
+    assert body["turn"]["round"] == 2
+    assert [event["event_type"] for event in body["events"]] == [
+        "round.completed",
+        "round.started",
+        "agent.thinking",
+    ]
+    assert [event["sequence"] for event in body["events"]] == [8, 9, 10]
     assert body["events"][0]["payload"] == {"round": 1}
     room.refresh_from_db()
-    assert room.current_round == 1
+    assert room.current_round == 2
     assert room.status == Roundtable.Status.RUNNING
     assert list(room.agents.values_list("state", flat=True)) == [
-        RoundtableAgent.State.COMPLETED,
-        RoundtableAgent.State.COMPLETED,
-        RoundtableAgent.State.PASSED,
+        RoundtableAgent.State.THINKING,
+        RoundtableAgent.State.WAITING,
+        RoundtableAgent.State.WAITING,
     ]
     assert Message.objects.filter(roundtable=room).count() == 2
 
@@ -404,6 +409,8 @@ async def test_websocket_receives_the_first_round_in_scheduler_order(api_client)
 
     completed = await sync_to_async(request_next_turn)(api_client, room)
     round_completed = await communicator.receive_json_from(timeout=2)
+    round_two_started = await communicator.receive_json_from(timeout=2)
+    round_two_thinking = await communicator.receive_json_from(timeout=2)
     await communicator.disconnect()
 
     events = [
@@ -414,8 +421,10 @@ async def test_websocket_receives_the_first_round_in_scheduler_order(api_client)
         third_thinking,
         passed,
         round_completed,
+        round_two_started,
+        round_two_thinking,
     ]
-    assert completed.json()["turn"] is None
+    assert completed.json()["turn"]["round"] == 2
     assert [event["event_type"] for event in events] == [
         "round.started",
         "agent.thinking",
@@ -425,8 +434,10 @@ async def test_websocket_receives_the_first_round_in_scheduler_order(api_client)
         "agent.thinking",
         "agent.passed",
         "round.completed",
+        "round.started",
+        "agent.thinking",
     ]
-    assert [event["sequence"] for event in events] == list(range(1, 9))
+    assert [event["sequence"] for event in events] == list(range(1, 11))
     assert [
         event["payload"]["message"]["author"]["agent_key"]
         for event in events
@@ -434,7 +445,12 @@ async def test_websocket_receives_the_first_round_in_scheduler_order(api_client)
     ] == ["advocate", "skeptic"]
     assert [
         event["payload"]["turn_id"] for event in events if event["event_type"] == "agent.thinking"
-    ] == [first_turn["turn_id"], second_turn["turn_id"], third_turn["turn_id"]]
+    ] == [
+        first_turn["turn_id"],
+        second_turn["turn_id"],
+        third_turn["turn_id"],
+        completed.json()["turn"]["turn_id"],
+    ]
     assert [
         event["payload"]["message"]["turn_id"]
         for event in events

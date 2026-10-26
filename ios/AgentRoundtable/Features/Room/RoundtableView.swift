@@ -235,7 +235,11 @@ struct RoundtableView: View {
                         emptyState
                     } else {
                         ForEach(room.messages) { message in
-                            MessageRow(message: message)
+                            MessageRow(
+                                message: message,
+                                messages: room.messages,
+                                participants: room.participants
+                            )
                                 .id(message.id)
                         }
                         if let draft = turn.draft {

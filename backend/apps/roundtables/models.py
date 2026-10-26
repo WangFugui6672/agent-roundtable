@@ -211,6 +211,13 @@ class Message(models.Model):
     body = models.TextField(blank=True, default="")
     stance = models.CharField(max_length=16, choices=Stance.choices, blank=True, default="")
     references = models.ManyToManyField("self", symmetrical=False, related_name="referenced_by")
+    challenge_target = models.ForeignKey(
+        RoundtableAgent,
+        on_delete=models.PROTECT,
+        related_name="challenged_by_messages",
+        null=True,
+        blank=True,
+    )
     confidence = models.FloatField(default=0.6, null=True, blank=True)
     mentioned_agent_ids = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
