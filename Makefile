@@ -1,4 +1,7 @@
-.PHONY: help db-up db-down backend-install backend-migrate backend-run backend-test backend-lint ios-project ios-build ios-test verify
+.PHONY: help db-up db-down backend-install backend-migrate backend-run backend-test backend-lint ios-project ios-build ios-test ios-app-test verify
+
+# 可用 `make ios-app-test SIMULATOR="iPhone 16"` 覆盖。
+SIMULATOR ?= iPhone 17
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -32,5 +35,10 @@ ios-build: ## 编译 iOS 核心包（Command Line Tools 即可）
 
 ios-test: ## 运行 iOS 核心逻辑测试（需要 Xcode 提供的 XCTest）
 	cd ios/RoundtableCore && swift test
+
+ios-app-test: ios-project ## 在模拟器运行 App 单元测试（Keychain，需签名）
+	cd ios && xcodebuild -project AgentRoundtable.xcodeproj -scheme AgentRoundtable \
+		-destination 'platform=iOS Simulator,name=$(SIMULATOR)' \
+		-only-testing:AgentRoundtableTests test
 
 verify: backend-lint backend-test ios-build ## 本机可执行的最小验证

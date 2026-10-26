@@ -50,6 +50,24 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
 
+  AgentRoundtableTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: AgentRoundtableTests
+    dependencies:
+      - target: AgentRoundtable
+      - package: RoundtableCore
+        product: RoundtableCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wangfugui.agentroundtable.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/AgentRoundtable.app/AgentRoundtable"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
   AgentRoundtableUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -75,6 +93,7 @@ schemes:
     test:
       config: Debug
       targets:
+        - AgentRoundtableTests
         - AgentRoundtableUITests
     archive:
       config: Release

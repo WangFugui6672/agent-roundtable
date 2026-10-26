@@ -79,13 +79,18 @@ public struct APIClient: Sendable {
         try await send(makeRequest(path: "api/v1/agent-profiles", method: "GET"))
     }
 
-    public func createRoundtable(topic: String, agentProfileIds: [UUID]) async throws -> RoundtableSnapshot {
+    public func createRoundtable(
+        topic: String,
+        agentProfileIds: [UUID],
+        provider: ProviderMetadata? = nil
+    ) async throws -> RoundtableSnapshot {
         struct Body: Encodable {
             let topic: String
             let agentProfileIds: [UUID]
+            let provider: ProviderMetadata?
         }
         let body = try JSONEncoder.roundtable.encode(
-            Body(topic: topic, agentProfileIds: agentProfileIds)
+            Body(topic: topic, agentProfileIds: agentProfileIds, provider: provider)
         )
         return try await send(
             makeRequest(path: "api/v1/roundtables", method: "POST", body: body)

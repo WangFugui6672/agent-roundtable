@@ -104,6 +104,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let maxRounds: Int
     public var currentRound: Int
     public let lastSequence: Int
+    public let provider: ProviderMetadata?
     public let createdAt: Date
     public let updatedAt: Date
     public var participants: [Participant]
@@ -116,6 +117,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         maxRounds: Int,
         currentRound: Int,
         lastSequence: Int,
+        provider: ProviderMetadata? = nil,
         createdAt: Date,
         updatedAt: Date,
         participants: [Participant]
@@ -127,6 +129,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         self.maxRounds = maxRounds
         self.currentRound = currentRound
         self.lastSequence = lastSequence
+        self.provider = provider
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.participants = participants
