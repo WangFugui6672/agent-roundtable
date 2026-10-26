@@ -50,6 +50,33 @@ AgentProfile 在某个圆桌中的实例。它保存该圆桌内的当前目标�
 
 用户、Agent、主持人或系统产生的一条可持久化内容。Agent 消息必须遵循结构化消息协议。
 
+消息作者用 `author.type` 显式区分：
+
+- `agent`：必须关联 `RoundtableAgent` 和当前 `Turn`。
+- `user`：用户消息，不关联 Agent，不要求 claim 或立场。
+
+代码与协议不要把用户消息改写成 Agent 消息。
+
+## 用户消息（User Message）
+
+用户插入普通讨论内容或点名 Agent 的群聊消息。用户消息会持久化、参与后续 Agent 上下文，并可携带显式 `mentioned_agent_ids`。正文中的 `@名字` 只是展示文本，不是调度依据。
+
+## 点名（Mention）
+
+用户通过一个或多个 `RoundtableAgent.id` 明确要求某位 Agent 在下一 turn 优先回应。被点名者必须是当前圆桌参与者；调度器只把仍然可发言的参与者作为优先候选。
+
+## 暂停边界（Pause Boundary）
+
+用户插话或请求暂停后，允许当前已签发 turn 完成其 message/pass 的安全边界。存在在途 turn 时先记录 `pause_pending`；当前 turn 关闭后才进入 `paused`。暂停不是取消当前 Provider 生成，提前结束才是。
+
+## 暂停（Paused）
+
+圆桌停止自动签发新 turn 的状态。只有显式继续可以恢复自动讨论；用户仍可在暂停状态下发送其他用户消息。
+
+## 提前结束（End）
+
+用户主动把圆桌推进到 `completed`。服务端取消 pending turn，后续 message、pass 和 turn 签发均被拒绝；客户端同时取消本地 Provider 生成 Task。
+
 ## 主张（Claim）
 
 一条发言中的核心命题，通常是一句话。结论和观点面板优先引用 Claim，而不是整段正文。

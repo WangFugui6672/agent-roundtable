@@ -18,8 +18,17 @@ from apps.roundtables.serializers import (
     RoundtableCreateSerializer,
     RoundtableSerializer,
     TurnPassSerializer,
+    UserMessageCreateSerializer,
 )
-from apps.roundtables.services import create_message, next_turn, pass_turn
+from apps.roundtables.services import (
+    create_message,
+    create_user_message,
+    end_room,
+    next_turn,
+    pass_turn,
+    pause_room,
+    resume_room,
+)
 from roundtable.exceptions import GuestSessionRequired, RoundtableNotFound
 
 GUEST_SESSION_HEADER = "X-Guest-Session"
@@ -122,6 +131,76 @@ class RoundtableMessageView(APIView):
             raise RoundtableNotFound()
 
         return Response(envelope, status=status.HTTP_201_CREATED)
+
+
+class RoundtableUserMessageView(APIView):
+    """Persist a user message without impersonating a RoundtableAgent."""
+
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        roundtable = Roundtable.objects.filter(id=roundtable_id, guest_session=session).first()
+        if roundtable is None:
+            raise RoundtableNotFound()
+
+        body = UserMessageCreateSerializer(data=request.data, context={"roundtable": roundtable})
+        body.is_valid(raise_exception=True)
+        result = create_user_message(
+            str(roundtable.id),
+            str(session.id),
+            body.validated_data["body"],
+            [str(agent_id) for agent_id in body.validated_data["mentioned_agent_ids"]],
+        )
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(
+            {
+                "roundtable": RoundtableSerializer(result.room).data,
+                "events": result.events,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class RoundtablePauseView(APIView):
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        result = pause_room(str(roundtable_id), str(session.id))
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(
+            {
+                "roundtable": RoundtableSerializer(result.room).data,
+                "events": result.events,
+            }
+        )
+
+
+class RoundtableResumeView(APIView):
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        result = resume_room(str(roundtable_id), str(session.id))
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(
+            {
+                "roundtable": RoundtableSerializer(result.room).data,
+                "events": result.events,
+            }
+        )
+
+
+class RoundtableEndView(APIView):
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        result = end_room(str(roundtable_id), str(session.id))
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(
+            {
+                "roundtable": RoundtableSerializer(result.room).data,
+                "events": result.events,
+            }
+        )
 
 
 class RoundtableNextTurnView(APIView):
