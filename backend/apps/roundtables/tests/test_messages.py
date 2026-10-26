@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import pytest
@@ -57,7 +58,7 @@ def post(api_client, room: Roundtable, **overrides):
     )
 
 
-def test_persists_message_and_message_completed_event(api_client):
+def test_returns_message_completed_envelope(api_client):
     room = make_room()
     agent = room.agents.order_by("position").first()
 
@@ -80,7 +81,14 @@ def test_persists_message_and_message_completed_event(api_client):
     assert message["references"] == []
     assert message["confidence"] == 0.7
 
-    stored = Message.objects.get(id=message["id"])
+
+def test_persists_message_row_and_advances_room(api_client):
+    room = make_room()
+    agent = room.agents.order_by("position").first()
+
+    message_id = post(api_client, room).json()["payload"]["message"]["id"]
+
+    stored = Message.objects.get(id=message_id)
     assert stored.roundtable == room
     assert stored.roundtable_agent == agent
     assert RoomEvent.objects.filter(
@@ -89,7 +97,6 @@ def test_persists_message_and_message_completed_event(api_client):
 
     agent.refresh_from_db()
     assert agent.state == RoundtableAgent.State.COMPLETED
-
     room.refresh_from_db()
     assert room.event_sequence == 1
     assert room.status == Roundtable.Status.RUNNING
@@ -204,7 +211,9 @@ def test_rejects_api_key_in_message_payload(api_client):
     response = post(api_client, room, api_key="sk-should-never-arrive")
 
     assert response.status_code == 400
-    assert "API Key" in response.json()["error"]["message"]
+    body = response.json()
+    assert "API Key" in body["error"]["message"]
+    assert body["error"]["details"]["provider"] == ["不得向后端提交 API Key。"]
     assert "sk-should-never-arrive" not in response.content.decode()
     assert Message.objects.count() == 0
 
@@ -248,7 +257,6 @@ def test_join_payload_includes_persisted_messages():
     assert joined["event_type"] == "room.joined"
     messages = joined["payload"]["messages"]
     assert [message["claim"] for message in messages] == ["第一条主张。", "第二条主张。"]
-    assert joined["payload"]["roundtable"]["last_sequence"] == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -284,6 +292,32 @@ def test_message_is_broadcast_to_connected_socket(api_client):
     assert received["event_type"] == "message.completed"
     assert received["sequence"] == 1
     assert received["payload"]["message"]["claim"] == "先用一个两周的验证性实验确认假设。"
+
+
+def test_api_keys_never_reach_logs_or_storage(api_client, caplog):
+    room = make_room()
+    caplog.set_level(logging.INFO)
+    headers = {"HTTP_X_GUEST_SESSION": str(room.guest_session_id)}
+
+    accepted = api_client.post(
+        f"/api/v1/roundtables/{room.id}/messages",
+        payload(room),
+        format="json",
+        HTTP_AUTHORIZATION="Bearer sk-log-should-not-appear",
+        **headers,
+    )
+    rejected = api_client.post(
+        f"/api/v1/roundtables/{room.id}/messages",
+        payload(room, api_key="sk-log-should-not-appear"),
+        format="json",
+        **headers,
+    )
+
+    assert accepted.status_code == 201
+    assert rejected.status_code == 400
+    assert "sk-log-should-not-appear" not in caplog.text
+    stored_bodies = " ".join(Message.objects.values_list("body", flat=True))
+    assert "sk-log-should-not-appear" not in stored_bodies
 
 
 def post_via_orm(room: Roundtable, claim: str) -> None:

@@ -168,6 +168,20 @@ final class ProviderChatClientTests: XCTestCase {
         XCTAssertTrue(error.message.contains("网络"))
     }
 
+    func testTimeoutHasItsOwnMessage() async {
+        let client = ProviderChatClient(
+            streaming: StubLineStream(error: URLError(.timedOut))
+        )
+
+        let result = await collect(client)
+
+        guard case let .failure(error as ProviderError) = result else {
+            return XCTFail("expected ProviderError, got \(result)")
+        }
+        XCTAssertEqual(error, .timeout)
+        XCTAssertTrue(error.message.contains("超时"))
+    }
+
     func testProviderErrorMessagesAreActionable() {
         XCTAssertTrue(ProviderError.http(status: 402, detail: "").message.contains("余额"))
         XCTAssertTrue(ProviderError.http(status: 404, detail: "").message.contains("BaseURL"))

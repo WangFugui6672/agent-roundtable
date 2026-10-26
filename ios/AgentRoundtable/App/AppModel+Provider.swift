@@ -65,7 +65,7 @@ extension AppModel {
             setActiveProvider(draft.kind)
             return true
         } catch {
-            providerError = Self.providerMessage(for: error)
+            providerError = Self.userMessage(for: error)
             return false
         }
     }
@@ -84,7 +84,7 @@ extension AppModel {
             let outcome = await probe.check(configuration: configuration, apiKey: key)
             providerCheckMessage = outcome.message
         } catch {
-            providerError = Self.providerMessage(for: error)
+            providerError = Self.userMessage(for: error)
         }
     }
 
@@ -120,9 +120,16 @@ extension AppModel {
             providerCheckMessage = "已删除该 Provider 及其 Keychain 中的 API Key。"
             return true
         } catch {
-            providerError = Self.providerMessage(for: error)
+            providerError = Self.userMessage(for: error)
             return false
         }
+    }
+
+    /// Configuration for the active provider, but only when its Keychain item
+    /// is still readable. Keeps the turn logic from reaching into the store.
+    var activeConfiguration: ProviderConfiguration? {
+        guard case let .ready(metadata) = providerAvailability else { return nil }
+        return providerStore.configuration(for: metadata.kind)
     }
 
     func clearProviderFeedback() {
@@ -137,15 +144,5 @@ extension AppModel {
         } else {
             defaults.removeObject(forKey: Self.activeProviderKey)
         }
-    }
-
-    static func providerMessage(for error: Error) -> String {
-        if let validation = error as? ProviderValidationError {
-            return validation.message
-        }
-        if let keychain = error as? KeychainError {
-            return keychain.message
-        }
-        return error.localizedDescription
     }
 }

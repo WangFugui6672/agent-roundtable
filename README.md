@@ -87,10 +87,10 @@ open ios/AgentRoundtable.xcodeproj
 
 ```bash
 make verify       # ruff + pytest + RoundtableCore 编译 + SwiftLint
-make backend-test # 58 个后端测试（WebSocket、Provider 快照、消息校验与广播）
-make ios-test     # 62 个 RoundtableCore 测试（需要 Xcode 提供 XCTest）
+make backend-test # 60 个后端测试（WebSocket、Provider 快照、消息校验与广播）
+make ios-test     # 63 个 RoundtableCore 测试（需要 Xcode 提供 XCTest）
 make ios-lint     # SwiftLint --strict（首次需 brew install swiftlint）
-make ios-app-test # 21 个 App 单元测试（Keychain、Provider、真实发言编排，需模拟器签名）
+make ios-app-test # 24 个 App 单元测试（Keychain、Provider、真实发言编排，需模拟器签名）
 ```
 
 UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8000`。先启动后端，再运行：
@@ -98,8 +98,11 @@ UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost
 ```bash
 cd backend && DJANGO_DEBUG=1 uv run python manage.py runserver 0.0.0.0:8000
 cd ios && xcodebuild test -project AgentRoundtable.xcodeproj -scheme AgentRoundtable \
-  -destination 'platform=iOS Simulator,name=iPhone 17'
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -collect-test-diagnostics never
 ```
+
+`-collect-test-diagnostics never` 可以避免 Xcode 27 在测试结束后卡在模拟器诊断收集（表现为命令长时间不退出）。
 
 iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Command Line Tools 不包含 XCTest）。Keychain 测试需要模拟器的 ad-hoc 签名（`CODE_SIGNING_ALLOWED=NO` 会让 Keychain 返回 `errSecMissingEntitlement`），所以用 `make ios-app-test` 或去掉该参数的 `xcodebuild test`。CI 的 `iOS` job 在 `macos-15` 上执行 SwiftLint、`swift test` 与模拟器编译（`build-for-testing`）。
 
@@ -124,11 +127,12 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 ## 已知边界
 
 - `mock.run` 由客户端触发，是切片阶段的临时驱动；Issue #5 的调度器落地后改由服务端自动推进。
-- Redis 与 Celery 尚未接入：当前切片没有跨进程广播与异步任务的需要，等调度器/总结阶段再引入。
+- Redis 与 Celery 尚未接入：消息广播暂时使用 Channels 的 `InMemoryChannelLayer`，只在单进程内有效；调度器（Issue #5）落地时换成 Redis，并把广播扩展到跨进程。
 - iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
 - 真实发言目前是「点谁谁说一句」，三个 Agent 的顺序调度、`pass` 与暂停由 Issue #5 实现；同一圆桌的所有 Agent 共用一套 Provider 配置。
 - `agent.thinking` / `agent.typing` 是客户端本地状态，本切片不落库；`message.completed` 才是持久化事件。
-- 引用关系（`references`）后端已支持校验，客户端暂未自动填写，随第二轮互评（Issue #7）一起做。
+- 引用关系（`references`）后端已支持校验，客户端暂未自动填写；「挑战对象」字段尚未建模，二者随第二轮互评（Issue #7）一起处理。
+- 消息的 `message_type` / `stance` 由预设角色推导（方案派→proposal、质疑派→challenge、体验派→supplement），`confidence` 固定 0.6；让模型自己产出结构化字段与真实置信度随 #7 评估阶段再做。
 - SwiftLint 已接入（`ios/.swiftlint.yml`，`make verify` 与 CI 都执行 `--strict`）；UI 测试仍未在 CI 执行（需要本地后端），CI 只做 `build-for-testing`。
 - Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
 - AppModel 暂时直接持有 `APIClient`、`ProviderStore` 与 `ProviderProbe`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。

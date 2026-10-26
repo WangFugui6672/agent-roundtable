@@ -35,11 +35,15 @@ public struct MessageSubmission: Codable, Equatable, Sendable {
 /// Message type and stance come from the agent's preset role, so a model that
 /// returns prose (or malformed JSON) can never produce an invalid message type.
 public enum MessageComposer {
-    public static func compose(
-        participant: Participant,
-        text: String,
-        references: [UUID] = []
-    ) -> MessageSubmission {
+    /// Protocol limits (docs/protocol.md 2.7). The backend enforces the same
+    /// numbers; the client stays inside them so a model overrun degrades into
+    /// a shorter message instead of a failed submission.
+    public enum Limits {
+        public static let claim = 80
+        public static let defaultConfidence = 0.6
+    }
+
+    public static func compose(participant: Participant, text: String) -> MessageSubmission {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let (messageType, stance) = mapping(for: participant.agent.key)
         return MessageSubmission(
@@ -48,8 +52,8 @@ public enum MessageComposer {
             claim: claim(from: trimmed),
             body: String(trimmed.prefix(participant.agent.maxReplyChars)),
             stance: stance,
-            references: references,
-            confidence: 0.6
+            references: [],
+            confidence: Limits.defaultConfidence
         )
     }
 
@@ -68,6 +72,6 @@ public enum MessageComposer {
         let candidate = (firstSentence.map(String.init) ?? text)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let source = candidate.isEmpty ? text : candidate
-        return String(source.prefix(80))
+        return String(source.prefix(Limits.claim))
     }
 }
