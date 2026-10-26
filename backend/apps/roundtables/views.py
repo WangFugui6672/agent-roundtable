@@ -67,12 +67,16 @@ class RoundtableListCreateView(APIView):
             AgentProfile.objects.filter(id__in=body.validated_data["agent_profile_ids"])
         )
         by_id = {profile.id: profile for profile in profiles}
+        provider = body.validated_data.get("provider") or {}
 
         with transaction.atomic():
             roundtable = Roundtable.objects.create(
                 id=uuid.uuid4(),
                 guest_session=session,
                 topic=body.validated_data["topic"],
+                provider_kind=provider.get("kind", ""),
+                provider_base_url=provider.get("base_url", ""),
+                provider_model=provider.get("model", ""),
             )
             for position, profile_id in enumerate(body.validated_data["agent_profile_ids"]):
                 RoundtableAgent.objects.create(
