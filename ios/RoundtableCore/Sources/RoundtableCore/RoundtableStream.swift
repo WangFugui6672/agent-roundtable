@@ -15,7 +15,7 @@ public struct ReconnectPolicy: Equatable, Sendable {
     public init(
         initialDelay: TimeInterval = 1,
         multiplier: Double = 2,
-        maxDelay: TimeInterval = 30,
+        maxDelay: TimeInterval = 5,
         maxAttempts: Int? = nil
     ) {
         self.initialDelay = max(0, initialDelay)

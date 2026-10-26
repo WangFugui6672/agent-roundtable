@@ -108,6 +108,13 @@ def _room_for_session(roundtable_id: str, guest_session_id: str) -> Roundtable |
     )
 
 
+def _room_access_allowed(roundtable_id: str, guest_session_id: str) -> bool:
+    return Roundtable.objects.filter(
+        id=roundtable_id,
+        guest_session_id=guest_session_id,
+    ).exists()
+
+
 def _turn_failure_payload(turn: Turn) -> dict[str, Any]:
     agent = turn.roundtable_agent
     return {
@@ -1102,6 +1109,7 @@ def fail_turn(
         return envelopes[0]
 
 
+room_access_allowed = database_sync_to_async(_room_access_allowed)
 join_snapshot = database_sync_to_async(_join_snapshot)
 events_after = database_sync_to_async(_events_after)
 run_mock_round = database_sync_to_async(_run_mock_round)

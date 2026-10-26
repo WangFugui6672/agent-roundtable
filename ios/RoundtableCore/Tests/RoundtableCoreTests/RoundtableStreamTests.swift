@@ -4,6 +4,12 @@ import XCTest
 @testable import RoundtableCore
 
 final class RoundtableStreamTests: XCTestCase {
+    func testDefaultReconnectDelayStaysWithinRecoveryTarget() {
+        let policy = ReconnectPolicy()
+
+        XCTAssertEqual(policy.delay(afterFailureAttempt: 12), 5, accuracy: 0.001)
+    }
+
     func testReconnectUsesLastProcessedCursorAndStopsOnDemand() async throws {
         let firstEvent = try EventEnvelope.decode(
             from: Fixtures.envelope(

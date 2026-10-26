@@ -295,6 +295,64 @@ async def test_live_events_wait_for_replay_to_finish(monkeypatch):
     await communicator.disconnect()
 
 
+async def test_live_event_during_snapshot_build_is_not_lost(monkeypatch):
+    session_id, room_id = await sync_to_async(_seed_room)()
+    snapshot = p.make_envelope(
+        event_id=str(uuid.uuid4()),
+        room_id=room_id,
+        sequence=0,
+        event_type=p.ROOM_JOINED,
+        payload={
+            "roundtable": {"id": room_id, "last_sequence": 0},
+            "messages": [],
+            "failures": [],
+            "replay": {
+                "requested_cursor": 0,
+                "oldest_sequence": None,
+                "latest_sequence": 0,
+                "window_days": 90,
+                "cursor_expired": True,
+            },
+        },
+    )
+    live = p.make_envelope(
+        event_id=str(uuid.uuid4()),
+        room_id=room_id,
+        sequence=1,
+        event_type="future.live",
+        payload={"sequence": 1},
+    )
+    entered_snapshot = asyncio.Event()
+    release_snapshot = asyncio.Event()
+
+    async def blocked_snapshot(*_args):
+        entered_snapshot.set()
+        await release_snapshot.wait()
+        return snapshot
+
+    monkeypatch.setattr(consumer_module, "join_snapshot", blocked_snapshot)
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/v1/roundtables/{room_id}/?guest_session={session_id}&cursor=0",
+    )
+    connect_task = asyncio.create_task(communicator.connect())
+
+    await asyncio.wait_for(entered_snapshot.wait(), timeout=1)
+    await get_channel_layer().group_send(
+        f"room.{room_id}",
+        {"type": "room.event", "envelope": live},
+    )
+    release_snapshot.set()
+    connected, _ = await asyncio.wait_for(connect_task, timeout=1)
+
+    assert connected
+    first = await communicator.receive_json_from(timeout=1)
+    second = await communicator.receive_json_from(timeout=1)
+    assert first["event_type"] == p.ROOM_JOINED
+    assert second["event_id"] == live["event_id"]
+    await communicator.disconnect()
+
+
 async def test_connection_without_guest_session_is_rejected():
     _, room_id = await sync_to_async(_seed_room)()
     communicator = WebsocketCommunicator(application, f"/ws/v1/roundtables/{room_id}/")

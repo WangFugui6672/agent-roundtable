@@ -288,11 +288,26 @@ final class AppModel {
 
     func enterBackground() {
         isSceneActive = false
+        let shouldPause = generationTask != nil
+            || isFirstRoundRunning
+            || turnState.isBusy
+            || room?.activeTurn != nil
+            || room?.status == .running
         generationTask?.cancel()
         generationTask = nil
         generationID = nil
+        isFirstRoundRunning = false
+        scheduledTurn = nil
+        if shouldPause {
+            switch turnState {
+            case .failed, .completed, .passed, .roundCompleted, .ended:
+                break
+            default:
+                turnState = .paused
+            }
+        }
         repository.disconnect(reason: "App 已进入后台，连接已暂停。")
-        guard room?.status == .running else { return }
+        guard shouldPause else { return }
         Task { [weak self] in
             await self?.pauseDiscussion()
         }
