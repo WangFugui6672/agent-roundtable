@@ -18,6 +18,10 @@ AGENT_TYPING = "agent.typing"
 AGENT_PASSED = "agent.passed"
 MESSAGE_COMPLETED = "message.completed"
 ROUND_COMPLETED = "round.completed"
+ROOM_PAUSE_PENDING = "room.pause_pending"
+ROOM_PAUSED = "room.paused"
+ROOM_RESUMED = "room.resumed"
+ROOM_ENDED = "room.ended"
 
 #: ``room.joined`` is an ephemeral snapshot, not a log entry, so it must never
 #: move the client's resume cursor.

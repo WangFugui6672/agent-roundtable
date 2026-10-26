@@ -27,6 +27,26 @@ enum Fixtures {
     }
     """
 
+    static let userMessageJSON = """
+    {
+      "id": "7F0E0000-0000-4000-8000-000000000007",
+      "turn_id": null,
+      "round_number": 0,
+      "author": {
+        "type": "user",
+        "name": "用户"
+      },
+      "message_type": "user_message",
+      "claim": null,
+      "body": "先补充一个约束：团队只有两个人。",
+      "stance": null,
+      "references": [],
+      "confidence": null,
+      "mentioned_agent_ids": ["D00D0000-0000-4000-8000-000000000003"],
+      "created_at": "2026-10-26T01:02:05.000Z"
+    }
+    """
+
     static let snapshotJSON = """
     {
       "id": "C0DEC0DE-0000-4000-8000-000000000001",

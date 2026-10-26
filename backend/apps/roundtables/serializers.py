@@ -118,6 +118,7 @@ class RoundtableSerializer(serializers.ModelSerializer):
             "max_rounds",
             "current_round",
             "last_sequence",
+            "pause_pending",
             "active_turn",
             "provider",
             "created_at",
@@ -187,6 +188,9 @@ class MessageSerializer(serializers.ModelSerializer):
     references = serializers.SerializerMethodField()
     created_at = serializers.SerializerMethodField()
     stance = serializers.SerializerMethodField()
+    claim = serializers.SerializerMethodField()
+    confidence = serializers.SerializerMethodField()
+    mentioned_agent_ids = serializers.SerializerMethodField()
     turn_id = serializers.UUIDField(source="turn.id", allow_null=True, read_only=True)
 
     class Meta:
@@ -202,13 +206,19 @@ class MessageSerializer(serializers.ModelSerializer):
             "stance",
             "references",
             "confidence",
+            "mentioned_agent_ids",
             "created_at",
         ]
         read_only_fields = fields
 
     def get_author(self, obj: Message) -> dict[str, str]:
+        if obj.author_type == Message.AuthorType.USER:
+            return {"type": "user", "name": "用户"}
+        if obj.roundtable_agent is None:
+            raise ValueError("Agent messages require a RoundtableAgent.")
         agent = obj.roundtable_agent
         return {
+            "type": "agent",
             "roundtable_agent_id": str(agent.id),
             "agent_key": agent.agent_profile.key,
             "name": agent.agent_profile.name,
@@ -220,8 +230,49 @@ class MessageSerializer(serializers.ModelSerializer):
     def get_stance(self, obj: Message) -> str | None:
         return obj.stance or None
 
+    def get_claim(self, obj: Message) -> str | None:
+        return obj.claim or None
+
+    def get_confidence(self, obj: Message) -> float | None:
+        return obj.confidence
+
+    def get_mentioned_agent_ids(self, obj: Message) -> list[str]:
+        return obj.mentioned_agent_ids
+
     def get_created_at(self, obj: Message) -> str:
         return iso8601_millis(obj.created_at)
+
+
+class UserMessageCreateSerializer(serializers.Serializer):
+    """Request body of ``POST /api/v1/roundtables/{id}/user-messages``."""
+
+    body = serializers.CharField(
+        max_length=BODY_HARD_MAX_CHARS,
+        trim_whitespace=True,
+        allow_blank=False,
+    )
+    mentioned_agent_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        max_length=MVP_AGENT_COUNT,
+        default=list,
+    )
+
+    def validate(self, attrs: dict) -> dict:
+        if contains_secret(self.initial_data):
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
+
+        mentioned_ids = attrs.get("mentioned_agent_ids") or []
+        if len(set(mentioned_ids)) != len(mentioned_ids):
+            raise serializers.ValidationError({"mentioned_agent_ids": "被点名的 Agent 不能重复。"})
+
+        roundtable: Roundtable = self.context["roundtable"]
+        found = RoundtableAgent.objects.filter(id__in=mentioned_ids, roundtable=roundtable).count()
+        if found != len(mentioned_ids):
+            raise serializers.ValidationError(
+                {"mentioned_agent_ids": "被点名的 Agent 不存在或不属于此圆桌。"}
+            )
+        return attrs
 
 
 class MessageCreateSerializer(serializers.Serializer):
@@ -272,6 +323,10 @@ class MessageCreateSerializer(serializers.Serializer):
         if attrs["message_type"] == Message.Type.PASS:
             raise serializers.ValidationError(
                 {"message_type": "沉默必须通过 turns/pass 提交，不能作为普通发言。"}
+            )
+        if attrs["message_type"] == Message.Type.USER_MESSAGE:
+            raise serializers.ValidationError(
+                {"message_type": "用户消息必须通过 user-messages 提交，不能伪装成 Agent 发言。"}
             )
 
         body = attrs.get("body", "")

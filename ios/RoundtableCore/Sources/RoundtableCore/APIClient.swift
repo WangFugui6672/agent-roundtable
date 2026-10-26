@@ -145,6 +145,39 @@ public struct APIClient: Sendable {
         )
     }
 
+    public func sendUserMessage(
+        roundtableID: UUID,
+        body: String,
+        mentionedAgentIDs: [UUID]
+    ) async throws -> RoomCommandResponse {
+        struct Body: Encodable {
+            let body: String
+            let mentionedAgentIds: [UUID]
+        }
+        let payload = try JSONEncoder.roundtable.encode(
+            Body(body: body, mentionedAgentIds: mentionedAgentIDs)
+        )
+        return try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/user-messages",
+                method: "POST",
+                body: payload
+            )
+        )
+    }
+
+    public func pauseRoundtable(roundtableID: UUID) async throws -> RoomCommandResponse {
+        try await controlRoundtable(roundtableID: roundtableID, action: "pause")
+    }
+
+    public func resumeRoundtable(roundtableID: UUID) async throws -> RoomCommandResponse {
+        try await controlRoundtable(roundtableID: roundtableID, action: "resume")
+    }
+
+    public func endRoundtable(roundtableID: UUID) async throws -> RoomCommandResponse {
+        try await controlRoundtable(roundtableID: roundtableID, action: "end")
+    }
+
     public func fetchRoundtable(id: UUID) async throws -> RoundtableSnapshot {
         try await send(
             makeRequest(
@@ -155,6 +188,18 @@ public struct APIClient: Sendable {
     }
 
     // MARK: - Plumbing
+
+    private func controlRoundtable(
+        roundtableID: UUID,
+        action: String
+    ) async throws -> RoomCommandResponse {
+        try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/\(action)",
+                method: "POST"
+            )
+        )
+    }
 
     private func makeRequest(path: String, method: String, body: Data? = nil) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
