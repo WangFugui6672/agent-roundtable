@@ -145,6 +145,7 @@ final class APIClientTests: XCTestCase {
             guestSessionId: guestSessionID
         )
         let submission = MessageSubmission(
+            turnId: Fixtures.turnID,
             roundtableAgentId: Fixtures.advocateID,
             messageType: .proposal,
             claim: "先做一个两周实验",
@@ -170,7 +171,7 @@ final class APIClientTests: XCTestCase {
         let request = try XCTUnwrap(requests.first)
         XCTAssertEqual(
             request.url?.path,
-            "/api/v1/roundtables/\(Fixtures.roomID.uuidString)/messages"
+            "/api/v1/roundtables/\(Fixtures.roomID.uuidString.lowercased())/messages"
         )
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
         let body = try XCTUnwrap(request.httpBody)
@@ -180,7 +181,123 @@ final class APIClientTests: XCTestCase {
             json["roundtable_agent_id"] as? String,
             Fixtures.advocateID.uuidString
         )
+        XCTAssertEqual(json["turn_id"] as? String, Fixtures.turnID.uuidString)
         XCTAssertNil(json["api_key"])
+    }
+
+    func testRequestsAndDecodesTheNextScheduledTurn() async throws {
+        let response = """
+        {
+          "round": 1,
+          "turn": {
+            "turn_id": "A11CE000-0000-4000-8000-000000000010",
+            "round": 1,
+            "roundtable_agent_id": "D00D0000-0000-4000-8000-000000000003",
+            "position": 0,
+            "agent_key": "advocate",
+            "agent_name": "方案派"
+          },
+          "events": [
+            {
+              "event_id": "0F9A0000-0000-4000-8000-000000000002",
+              "room_id": "C0DEC0DE-0000-4000-8000-000000000001",
+              "sequence": 1,
+              "created_at": "2026-10-26T01:02:03.456Z",
+              "event_type": "round.started",
+              "payload": {"round": 1, "max_rounds": 2, "topic": "议题"}
+            },
+            {
+              "event_id": "0F9A0000-0000-4000-8000-000000000003",
+              "room_id": "C0DEC0DE-0000-4000-8000-000000000001",
+              "sequence": 2,
+              "created_at": "2026-10-26T01:02:03.456Z",
+              "event_type": "agent.thinking",
+              "payload": {
+                "turn_id": "A11CE000-0000-4000-8000-000000000010",
+                "round": 1,
+                "agent_id": "D00D0000-0000-4000-8000-000000000003",
+                "agent_name": "方案派"
+              }
+            }
+          ]
+        }
+        """
+        let transport = StubTransport(responses: [.init(data: Data(response.utf8), statusCode: 200)])
+        let client = APIClient(
+            baseURL: baseURL,
+            transport: transport,
+            guestSessionId: guestSessionID
+        )
+
+        let next = try await client.nextTurn(roundtableID: Fixtures.roomID)
+
+        XCTAssertEqual(next.round, 1)
+        XCTAssertEqual(
+            next.turn?.turnId,
+            UUID(uuidString: "A11CE000-0000-4000-8000-000000000010")
+        )
+        XCTAssertEqual(next.turn?.round, 1)
+        XCTAssertEqual(next.turn?.roundtableAgentId, Fixtures.advocateID)
+        XCTAssertEqual(next.turn?.agentKey, "advocate")
+        XCTAssertEqual(next.events.map(\.eventType), ["round.started", "agent.thinking"])
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(
+            request.url?.path,
+            "/api/v1/roundtables/\(Fixtures.roomID.uuidString.lowercased())/turns/next"
+        )
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "X-Guest-Session"),
+            guestSessionID.uuidString
+        )
+    }
+
+    func testPassesTheCurrentTurnWithItsIdentity() async throws {
+        let envelope = Fixtures.envelope(
+            eventType: "agent.passed",
+            sequence: 3,
+            payload: """
+            {
+              "turn_id": "\(Fixtures.turnID.uuidString)",
+              "round": 1,
+              "agent_id": "\(Fixtures.advocateID.uuidString)",
+              "agent_name": "方案派"
+            }
+            """
+        )
+        let transport = StubTransport(responses: [.init(data: envelope, statusCode: 201)])
+        let client = APIClient(
+            baseURL: baseURL,
+            transport: transport,
+            guestSessionId: guestSessionID
+        )
+
+        let event = try await client.passTurn(
+            roundtableID: Fixtures.roomID,
+            agentID: Fixtures.advocateID,
+            turnID: Fixtures.turnID
+        )
+
+        XCTAssertEqual(event.eventType, "agent.passed")
+        guard case let .agentPassed(activity) = event.payload else {
+            return XCTFail("expected agent.passed, got \(event.payload)")
+        }
+        XCTAssertEqual(activity.turnId, Fixtures.turnID)
+        XCTAssertEqual(activity.round, 1)
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(
+            request.url?.path,
+            "/api/v1/roundtables/\(Fixtures.roomID.uuidString.lowercased())/turns/pass"
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["turn_id"] as? String, Fixtures.turnID.uuidString)
+        XCTAssertEqual(
+            json["roundtable_agent_id"] as? String,
+            Fixtures.advocateID.uuidString
+        )
     }
 
     func testFetchesAgentProfiles() async throws {

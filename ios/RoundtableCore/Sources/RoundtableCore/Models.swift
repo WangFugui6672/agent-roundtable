@@ -96,6 +96,43 @@ public struct Participant: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public struct ScheduledTurn: Codable, Equatable, Sendable {
+    public let turnId: UUID
+    public let round: Int
+    public let roundtableAgentId: UUID
+    public let position: Int
+    public let agentKey: String
+    public let agentName: String
+
+    public init(
+        turnId: UUID,
+        round: Int,
+        roundtableAgentId: UUID,
+        position: Int,
+        agentKey: String,
+        agentName: String
+    ) {
+        self.turnId = turnId
+        self.round = round
+        self.roundtableAgentId = roundtableAgentId
+        self.position = position
+        self.agentKey = agentKey
+        self.agentName = agentName
+    }
+}
+
+public struct NextTurnResponse: Decodable, Equatable, Sendable {
+    public let round: Int
+    public let turn: ScheduledTurn?
+    public let events: [EventEnvelope]
+
+    public init(round: Int, turn: ScheduledTurn?, events: [EventEnvelope]) {
+        self.round = round
+        self.turn = turn
+        self.events = events
+    }
+}
+
 public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let topic: String
@@ -104,6 +141,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let maxRounds: Int
     public var currentRound: Int
     public let lastSequence: Int
+    public let activeTurn: ScheduledTurn?
     public let provider: ProviderMetadata?
     public let createdAt: Date
     public let updatedAt: Date
@@ -117,6 +155,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         maxRounds: Int,
         currentRound: Int,
         lastSequence: Int,
+        activeTurn: ScheduledTurn? = nil,
         provider: ProviderMetadata? = nil,
         createdAt: Date,
         updatedAt: Date,
@@ -129,6 +168,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         self.maxRounds = maxRounds
         self.currentRound = currentRound
         self.lastSequence = lastSequence
+        self.activeTurn = activeTurn
         self.provider = provider
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -179,6 +219,8 @@ public struct MessageAuthor: Codable, Equatable, Sendable {
 
 public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
+    public let turnId: UUID?
+    public let roundNumber: Int
     public let author: MessageAuthor
     public let messageType: MessageType
     public let claim: String
@@ -190,6 +232,8 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
 
     public init(
         id: UUID,
+        turnId: UUID? = nil,
+        roundNumber: Int = 0,
         author: MessageAuthor,
         messageType: MessageType,
         claim: String,
@@ -200,6 +244,8 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         createdAt: Date
     ) {
         self.id = id
+        self.turnId = turnId
+        self.roundNumber = roundNumber
         self.author = author
         self.messageType = messageType
         self.claim = claim

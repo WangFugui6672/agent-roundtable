@@ -14,6 +14,7 @@ public final class RoundtableRoomModel {
     public private(set) var status: RoundtableStatus?
     public private(set) var currentRound = 0
     public private(set) var activeParticipantId: UUID?
+    public private(set) var activeTurn: ScheduledTurn?
 
     /// Last persisted sequence the client has applied. ``room.joined`` never
     /// moves it (see docs/adr/0002).
@@ -33,6 +34,8 @@ public final class RoundtableRoomModel {
         status = snapshot.status
         currentRound = snapshot.currentRound
         lastSequence = snapshot.lastSequence
+        activeTurn = snapshot.activeTurn
+        activeParticipantId = snapshot.activeTurn?.roundtableAgentId
     }
 
     public func apply(_ envelope: EventEnvelope) {
@@ -54,21 +57,27 @@ public final class RoundtableRoomModel {
         case let .roundStarted(started):
             currentRound = started.round
         case let .agentThinking(activity):
-            mark(activity.agentId, as: .thinking)
-            activeParticipantId = activity.agentId
+            apply(thinking: activity)
         case let .agentTyping(activity):
             mark(activity.agentId, as: .typing)
             activeParticipantId = activity.agentId
         case let .agentPassed(activity):
             mark(activity.agentId, as: .passed)
             activeParticipantId = nil
+            if activity.turnId == activeTurn?.turnId {
+                activeTurn = nil
+            }
         case let .messageCompleted(message):
             appendMessage(message)
             mark(message.author.roundtableAgentId, as: .completed)
             activeParticipantId = nil
+            if message.turnId == activeTurn?.turnId {
+                activeTurn = nil
+            }
         case let .roundCompleted(round):
             currentRound = round.round
             status = round.round >= (snapshot?.maxRounds ?? 2) ? .completed : .running
+            activeTurn = nil
         case .unknown:
             // Forward compatibility: the payload is ignored, but the cursor
             // still advances or reconnects would replay the event forever.
@@ -81,6 +90,8 @@ public final class RoundtableRoomModel {
         participants = joined.roundtable.participants
         status = joined.roundtable.status
         currentRound = joined.roundtable.currentRound
+        activeTurn = joined.roundtable.activeTurn
+        activeParticipantId = joined.roundtable.activeTurn?.roundtableAgentId
         for message in joined.messages {
             appendMessage(message)
         }
@@ -94,5 +105,23 @@ public final class RoundtableRoomModel {
     private func mark(_ participantId: UUID, as state: AgentState) {
         guard let index = participants.firstIndex(where: { $0.id == participantId }) else { return }
         participants[index].state = state
+    }
+
+    private func apply(thinking activity: AgentActivity) {
+        mark(activity.agentId, as: .thinking)
+        activeParticipantId = activity.agentId
+        guard let turnId = activity.turnId,
+              let round = activity.round,
+              let participant = participants.first(where: { $0.id == activity.agentId })
+        else { return }
+
+        activeTurn = ScheduledTurn(
+            turnId: turnId,
+            round: round,
+            roundtableAgentId: activity.agentId,
+            position: participant.position,
+            agentKey: participant.agent.key,
+            agentName: participant.agent.name
+        )
     }
 }

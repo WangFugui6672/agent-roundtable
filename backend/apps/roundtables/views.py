@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import uuid
 
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 from django.db import transaction
 from rest_framework import status
 from rest_framework.request import Request
@@ -19,8 +17,9 @@ from apps.roundtables.serializers import (
     MessageCreateSerializer,
     RoundtableCreateSerializer,
     RoundtableSerializer,
+    TurnPassSerializer,
 )
-from apps.roundtables.services import create_message, room_group_name
+from apps.roundtables.services import create_message, next_turn, pass_turn
 from roundtable.exceptions import GuestSessionRequired, RoundtableNotFound
 
 GUEST_SESSION_HEADER = "X-Guest-Session"
@@ -122,10 +121,34 @@ class RoundtableMessageView(APIView):
         if envelope is None:
             raise RoundtableNotFound()
 
-        channel_layer = get_channel_layer()
-        if channel_layer is not None:
-            async_to_sync(channel_layer.group_send)(
-                room_group_name(roundtable.id),
-                {"type": "room.event", "envelope": envelope},
-            )
+        return Response(envelope, status=status.HTTP_201_CREATED)
+
+
+class RoundtableNextTurnView(APIView):
+    """Reserve the next scheduled Agent for the first round."""
+
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        result = next_turn(str(roundtable_id), str(session.id))
+        if result is None:
+            raise RoundtableNotFound()
+        round_number, turn, events = result
+        return Response({"round": round_number, "turn": turn, "events": events})
+
+
+class RoundtableTurnPassView(APIView):
+    """Persist the scheduled Agent's explicit decision not to speak."""
+
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        body = TurnPassSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        envelope = pass_turn(
+            str(roundtable_id),
+            str(session.id),
+            str(body.validated_data["turn_id"]),
+            str(body.validated_data["roundtable_agent_id"]),
+        )
+        if envelope is None:
+            raise RoundtableNotFound()
         return Response(envelope, status=status.HTTP_201_CREATED)

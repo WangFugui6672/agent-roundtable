@@ -41,6 +41,8 @@ final class EventEnvelopeTests: XCTestCase {
             return XCTFail("expected a completed message, got \(envelope.payload)")
         }
         XCTAssertEqual(message.id, Fixtures.messageID)
+        XCTAssertEqual(message.turnId, Fixtures.turnID)
+        XCTAssertEqual(message.roundNumber, 1)
         XCTAssertEqual(message.author.name, "方案派")
         XCTAssertEqual(message.author.agentKey, "advocate")
         XCTAssertEqual(message.author.roundtableAgentId, Fixtures.advocateID)

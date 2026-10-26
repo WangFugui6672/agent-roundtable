@@ -3,12 +3,15 @@ import Foundation
 enum Fixtures {
     static let roomID = UUID(uuidString: "C0DEC0DE-0000-4000-8000-000000000001")!
     static let eventID = UUID(uuidString: "0F9A0000-0000-4000-8000-000000000002")!
+    static let turnID = UUID(uuidString: "A11CE000-0000-4000-8000-000000000010")!
     static let advocateID = UUID(uuidString: "D00D0000-0000-4000-8000-000000000003")!
     static let messageID = UUID(uuidString: "6F0E0000-0000-4000-8000-000000000004")!
 
     static let messageJSON = """
     {
       "id": "6F0E0000-0000-4000-8000-000000000004",
+      "turn_id": "A11CE000-0000-4000-8000-000000000010",
+      "round_number": 1,
       "author": {
         "roundtable_agent_id": "D00D0000-0000-4000-8000-000000000003",
         "agent_key": "advocate",
@@ -114,6 +117,33 @@ enum Fixtures {
             eventType: "room.joined",
             sequence: 0,
             payload: "{\"roundtable\": \(snapshotJSON), \"messages\": []}"
+        )
+    }
+
+    static var activeTurnSnapshotJSON: String {
+        snapshotJSON
+            .replacingOccurrences(of: "\"current_round\": 0,", with: "\"current_round\": 1,")
+            .replacingOccurrences(
+                of: "\"last_sequence\": 0,",
+                with: """
+                "last_sequence": 2,
+                  "active_turn": {
+                    "turn_id": "A11CE000-0000-4000-8000-000000000010",
+                    "round": 1,
+                    "roundtable_agent_id": "D00D0000-0000-4000-8000-000000000003",
+                    "position": 0,
+                    "agent_key": "advocate",
+                    "agent_name": "方案派"
+                  },
+                """
+            )
+    }
+
+    static var activeTurnJoinedEnvelope: Data {
+        envelope(
+            eventType: "room.joined",
+            sequence: 0,
+            payload: "{\"roundtable\": \(activeTurnSnapshotJSON), \"messages\": []}"
         )
     }
 

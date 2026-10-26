@@ -48,19 +48,12 @@ struct RoundtableView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(room.participants) { participant in
-                    Button {
-                        Task { await model.runRealTurn(participant: participant) }
-                    } label: {
-                        ParticipantChip(
-                            participant: participant,
-                            isActive: room.activeParticipantId == participant.id
-                                || turn.agentID == participant.id
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.turnState.isBusy)
-                    .accessibilityIdentifier("room.speak.\(participant.position)")
-                    .accessibilityHint("让 \(participant.agent.name) 使用真实模型发言")
+                    ParticipantChip(
+                        participant: participant,
+                        isActive: room.activeParticipantId == participant.id
+                            || turn.agentID == participant.id
+                    )
+                    .accessibilityIdentifier("room.participant.\(participant.position)")
                 }
             }
             .padding(.horizontal, 16)
@@ -137,6 +130,25 @@ struct RoundtableView: View {
                 ),
                 agentID: agentID
             )
+        case let .passed(agentID):
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "\(name(agentID)) 已查看观点，但不发言",
+                    icon: "eye.slash",
+                    tint: .orange,
+                    identifier: "room.turn.passed"
+                ),
+                agentID: agentID
+            )
+        case let .roundCompleted(round):
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "第 \(round) 轮讨论已完成",
+                    icon: "checkmark.circle",
+                    tint: .green,
+                    identifier: "room.round.completed"
+                )
+            )
         case let .failed(agentID, message, partial):
             return TurnPresentation(
                 failure: TurnFailure(message: message, partial: partial),
@@ -182,11 +194,14 @@ struct RoundtableView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier(banner.identifier)
                 Spacer()
-                if case .completed = model.turnState {
+                switch model.turnState {
+                case .completed, .passed, .roundCompleted:
                     Button("关闭") { model.dismissTurnError() }
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("room.turn.dismiss")
+                default:
+                    EmptyView()
                 }
             }
             .padding(.horizontal, 16)
@@ -236,7 +251,7 @@ struct RoundtableView: View {
             Text("圆桌已经建好，还没有发言")
                 .font(.headline)
                 .accessibilityIdentifier("room.empty")
-            Text("点上方任意参与者，可以让 TA 用已配置的 Provider 真实发言；也可以先播放 Mock 事件。")
+            Text("配置 Provider 后开始第一轮，由系统依次邀请三位 Agent 发言；也可以播放 Mock 事件。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -248,18 +263,31 @@ struct RoundtableView: View {
     private var footer: some View {
         HStack(spacing: 12) {
             Button {
-                Task { await model.runMockRound() }
+                Task { await model.runFirstRound() }
             } label: {
                 HStack(spacing: 6) {
-                    if model.isMockRunning {
+                    if model.isFirstRoundRunning {
                         ProgressView()
                             .controlSize(.small)
                     }
-                    Label("播放 Mock 一轮", systemImage: "play.circle")
+                    Label("开始第一轮", systemImage: "play.fill")
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(model.isMockRunning)
+            .disabled(
+                model.isFirstRoundRunning
+                    || model.turnState.isBusy
+                    || !model.hasConfiguredProvider
+            )
+            .accessibilityIdentifier("room.round.start")
+
+            Button {
+                Task { await model.runMockRound() }
+            } label: {
+                Label("Mock", systemImage: "play.circle")
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isMockRunning || model.isFirstRoundRunning)
             .accessibilityIdentifier("room.mock")
 
             Spacer()
@@ -298,178 +326,5 @@ struct RoundtableView: View {
         case .closed: return ("已断开", .secondary)
         case .failed: return ("连接失败", .red)
         }
-    }
-}
-
-private struct StatusPill: View {
-    let text: String
-    let tint: Color
-
-    var body: some View {
-        Text(text)
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(tint.opacity(0.15)))
-            .foregroundStyle(tint)
-    }
-}
-
-private struct ParticipantChip: View {
-    let participant: Participant
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            stateIndicator
-            Text(participant.agent.name)
-                .font(.subheadline.weight(.medium))
-            Text(stateText)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
-        .overlay(
-            Capsule().strokeBorder(isActive ? Color.accentColor : .clear, lineWidth: 1.5)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(participant.agent.name)，\(stateText)")
-    }
-
-    @ViewBuilder
-    private var stateIndicator: some View {
-        switch participant.state {
-        case .thinking, .typing:
-            ProgressView()
-                .controlSize(.mini)
-        default:
-            Circle()
-                .fill(stateColor)
-                .frame(width: 7, height: 7)
-        }
-    }
-
-    private var stateColor: Color {
-        switch participant.state {
-        case .completed: .green
-        case .passed: .orange
-        case .failed: .red
-        default: .secondary
-        }
-    }
-
-    private var stateText: String {
-        switch participant.state {
-        case .waiting: "等待"
-        case .thinking: "思考中"
-        case .typing: "输入中"
-        case .passed: "沉默"
-        case .completed: "已发言"
-        case .failed: "失败"
-        case .unknown: "—"
-        }
-    }
-}
-
-private struct MessageRow: View {
-    let message: Message
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(message.author.name)
-                    .font(.subheadline.weight(.semibold))
-                StanceBadge(messageType: message.messageType, stance: message.stance)
-                Spacer()
-                Text(message.createdAt, format: .dateTime.hour().minute())
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(message.claim)
-                .font(.body.weight(.medium))
-
-            Text(message.body)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if !message.references.isEmpty {
-                Label("引用了 \(message.references.count) 条观点", systemImage: "arrowshape.turn.up.left")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(message.author.name)：\(message.claim)。\(message.body)")
-    }
-}
-
-private struct StanceBadge: View {
-    let messageType: MessageType
-    let stance: Stance?
-
-    var body: some View {
-        Text(badge.label)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(badge.tint.opacity(0.15)))
-            .foregroundStyle(badge.tint)
-    }
-
-    private var badge: (label: String, tint: Color) {
-        if let stance {
-            switch stance {
-            case .challenge: return ("质疑", .red)
-            case .support: return ("支持", .green)
-            case .supplement: return ("补充", .blue)
-            case .question: return ("追问", .orange)
-            case .unknown: return ("其他", .secondary)
-            }
-        }
-        switch messageType {
-        case .proposal: return ("提议", .secondary)
-        case .summary: return ("总结", .secondary)
-        case .pass: return ("沉默", .secondary)
-        case .question: return ("提问", .secondary)
-        default: return ("发言", .secondary)
-        }
-    }
-}
-
-private struct StreamingMessageRow: View {
-    let name: String
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(name)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(alignment: .bottom, spacing: 4) {
-                Text(text)
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 2, height: 16)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("room.turn.draft")
     }
 }
