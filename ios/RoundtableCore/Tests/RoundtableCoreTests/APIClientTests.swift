@@ -132,6 +132,57 @@ final class APIClientTests: XCTestCase {
         XCTAssertNil(json["provider"])
     }
 
+    func testSubmitsStructuredMessageAndDecodesEnvelope() async throws {
+        let envelope = Fixtures.envelope(
+            eventType: "message.completed",
+            sequence: 1,
+            payload: "{\"message\": \(Fixtures.messageJSON)}"
+        )
+        let transport = StubTransport(responses: [.init(data: envelope, statusCode: 201)])
+        let client = APIClient(
+            baseURL: baseURL,
+            transport: transport,
+            guestSessionId: guestSessionID
+        )
+        let submission = MessageSubmission(
+            roundtableAgentId: Fixtures.advocateID,
+            messageType: .proposal,
+            claim: "先做一个两周实验",
+            body: "写清假设、指标和停止条件。",
+            stance: nil,
+            references: [],
+            confidence: 0.6
+        )
+
+        let event = try await client.submitMessage(
+            roundtableID: Fixtures.roomID,
+            submission: submission
+        )
+
+        XCTAssertEqual(event.eventType, "message.completed")
+        XCTAssertEqual(event.sequence, 1)
+        guard case let .messageCompleted(message) = event.payload else {
+            return XCTFail("expected message.completed, got \(event.payload)")
+        }
+        XCTAssertEqual(message.id, Fixtures.messageID)
+
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(
+            request.url?.path,
+            "/api/v1/roundtables/\(Fixtures.roomID.uuidString)/messages"
+        )
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["message_type"] as? String, "proposal")
+        XCTAssertEqual(
+            json["roundtable_agent_id"] as? String,
+            Fixtures.advocateID.uuidString
+        )
+        XCTAssertNil(json["api_key"])
+    }
+
     func testFetchesAgentProfiles() async throws {
         let response = "[" + """
         {

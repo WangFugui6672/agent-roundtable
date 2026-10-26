@@ -151,6 +151,48 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 `last_sequence`：该圆桌已持久化的最大事件序号，客户端用它初始化游标。
 `provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
 
+### 2.7 提交结构化发言
+
+`POST /api/v1/roundtables/{id}/messages`，需要 `X-Guest-Session`，且必须是创建者：
+
+```json
+{
+  "roundtable_agent_id": "d00d...",
+  "message_type": "proposal",
+  "claim": "先用一个两周的验证性实验确认假设。",
+  "body": "我建议把议题拆成一个两周内可验证的最小实验……",
+  "stance": null,
+  "references": ["<message.id>"],
+  "confidence": 0.7
+}
+```
+
+- `roundtable_agent_id`：必须是该圆桌的参与者。
+- `message_type`：`proposal | support | challenge | supplement | question | pass | summary`。
+- `claim`：1-80 字符，去除首尾空白。
+- `body`：不能超过该 Agent 的 `max_reply_chars`（预设 Agent 为 180）；`pass` 允许空正文，其他类型必填。
+- `stance`：`support | challenge | supplement | question | null`。
+- `references`：最多 3 条，必须是**同一圆桌**已持久化的消息。
+- `confidence`：0-1，默认 `0.6`。
+- 请求体任意层级出现 `api_key` → `400 validation_error`（与 2.5 相同）。
+
+`201` 返回该消息对应的 `message.completed` 事件信封（与 WebSocket 广播的是同一条，客户端按 `event_id` 去重）：
+
+```json
+{
+  "event_id": "0f9a...",
+  "room_id": "c0de...",
+  "sequence": 7,
+  "created_at": "2026-10-26T01:02:03.456Z",
+  "event_type": "message.completed",
+  "payload": {"message": {"...": "..."}}
+}
+```
+
+服务端在同一事务里：写入消息、把该 Agent 的状态置为 `completed`、必要时把圆桌从 `ready` 推进到 `running`、`event_sequence` 加一、写入 `room_event`。提交成功后还会通过 channel layer 广播给该房间已连接的 WebSocket。
+
+**为什么由客户端提交**：模型请求由 iOS 直连 Provider（ADR 0001），Django 只负责校验与持久化，所以消息一定经过一次 HTTP 提交；`agent.thinking` / `agent.typing` 是客户端本地状态，本切片不落库。
+
 ## 3. WebSocket
 
 ### 3.1 连接
@@ -188,13 +230,13 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 1. 服务端接受连接后发送 `room.joined`。
 2. 若请求带 `cursor`，随后按 `sequence` 升序补发 `sequence > cursor` 的历史事件。
-3. 之后的实时事件沿用同一连接推送。
+3. 之后的实时事件沿用同一连接推送。REST 提交的发言也会以 `message.completed` 事件广播到该连接。
 
 ### 3.4 事件类型
 
 | event_type | payload | 说明 |
 | --- | --- | --- |
-| `room.joined` | `{"roundtable": <快照>, "messages": []}` | 进入圆桌；`messages` 在切片中恒为空数组，为后续消息回放预留 |
+| `room.joined` | `{"roundtable": <快照>, "messages": [<Message>]}` | 进入圆桌；`messages` 为该圆桌已持久化的发言，按创建时间升序，用于首次渲染 |
 | `round.started` | `{"round": 1, "max_rounds": 2, "topic": "..."}` | 一轮开始 |
 | `agent.thinking` | `{"agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | Agent 思考中 |
 | `agent.typing` | `{"agent_id": "<RoundtableAgent.id>"}` | Agent 输入中 |

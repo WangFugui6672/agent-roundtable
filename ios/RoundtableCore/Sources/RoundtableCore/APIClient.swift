@@ -97,6 +97,22 @@ public struct APIClient: Sendable {
         )
     }
 
+    /// Persists one structured utterance and returns the ``message.completed``
+    /// envelope, which the client applies locally and the server broadcasts.
+    public func submitMessage(
+        roundtableID: UUID,
+        submission: MessageSubmission
+    ) async throws -> EventEnvelope {
+        let body = try JSONEncoder.roundtable.encode(submission)
+        return try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(roundtableID.uuidString)/messages",
+                method: "POST",
+                body: body
+            )
+        )
+    }
+
     public func fetchRoundtable(id: UUID) async throws -> RoundtableSnapshot {
         try await send(makeRequest(path: "api/v1/roundtables/\(id.uuidString)", method: "GET"))
     }

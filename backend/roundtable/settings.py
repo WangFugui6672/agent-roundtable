@@ -61,6 +61,13 @@ ROOT_URLCONF = "roundtable.urls"
 TEMPLATES: list[dict[str, object]] = []
 
 ASGI_APPLICATION = "roundtable.asgi.application"
+
+# Redis/Celery arrive with the turn scheduler (Issue #5). Until then a single
+# dev process is the only writer, so the in-memory layer is enough and keeps
+# local setup to Postgres only.
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+}
 WSGI_APPLICATION = "roundtable.wsgi.application"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

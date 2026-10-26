@@ -15,7 +15,12 @@ from urllib.parse import parse_qs
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from apps.roundtables import protocol as p
-from apps.roundtables.services import events_after, join_snapshot, run_mock_round
+from apps.roundtables.services import (
+    events_after,
+    join_snapshot,
+    room_group_name,
+    run_mock_round,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +65,21 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
             return
 
         await self.accept()
+        await self.channel_layer.group_add(room_group_name(self.roundtable_id), self.channel_name)
         await self.send_json(snapshot)
 
         for envelope in await events_after(self.roundtable_id, self.guest_session_id, self.cursor):
             await self.send_json(envelope)
+
+    async def disconnect(self, code: int) -> None:
+        if hasattr(self, "roundtable_id"):
+            await self.channel_layer.group_discard(
+                room_group_name(self.roundtable_id), self.channel_name
+            )
+
+    async def room_event(self, event: dict[str, Any]) -> None:
+        """Fan-out from ``RoundtableMessageView`` (or the future scheduler)."""
+        await self.send_json(event["envelope"])
 
     async def receive(self, text_data=None, bytes_data=None, **kwargs) -> None:
         if text_data is None:
