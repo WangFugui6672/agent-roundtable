@@ -31,6 +31,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        NSPhotoLibraryAddUsageDescription: 用于将圆桌结论卡保存到你的相册。
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSExceptionDomains:

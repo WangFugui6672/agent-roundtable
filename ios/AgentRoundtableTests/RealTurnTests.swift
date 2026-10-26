@@ -8,8 +8,8 @@ import RoundtableCore
 @MainActor
 final class RealTurnTests: XCTestCase {
     private var suiteName = ""
-    private var defaults: UserDefaults!
-    private var secrets: TurnSecretStore!
+    var defaults: UserDefaults!
+    var secrets: TurnSecretStore!
     var lastStream: TurnLineStream?
 
     let roomID = UUID(uuidString: "C0DEC0DE-0000-4000-8000-000000000001")!
@@ -27,7 +27,7 @@ final class RealTurnTests: XCTestCase {
         key: "skeptic",
         name: "质疑派"
     )
-    private let experience = TurnFixture(
+    let experience = TurnFixture(
         id: UUID(uuidString: "A11CE000-0000-4000-8000-000000000013")!,
         agentID: UUID(uuidString: "F00F0000-0000-4000-8000-000000000006")!,
         position: 2,
@@ -223,7 +223,10 @@ extension RealTurnTests {
         ]
     }
 
-    func secondRoundResponses(skepticMessageID: UUID) -> [HTTPResponse] {
+    func secondRoundResponses(
+        skepticMessageID: UUID,
+        reviewMessageID: UUID = UUID()
+    ) -> [HTTPResponse] {
         let proposal = ReplyFixture(
             messageType: "proposal",
             stance: nil,
@@ -245,6 +248,7 @@ extension RealTurnTests {
             claim: "验证成本仍然被低估",
             body: "我质疑这个观点，因为团队注意力也是成本。",
             sequence: 11,
+            messageID: reviewMessageID,
             roundNumber: 2,
             references: [skepticMessageID],
             challengeTargetAgentID: skeptic.agentID
@@ -355,7 +359,7 @@ extension RealTurnTests {
     }
 
     private func passResponse(_ turn: TurnFixture, sequence: Int) -> HTTPResponse {
-        jsonResponse(
+        return jsonResponse(
             event(
                 "agent.passed",
                 sequence: sequence,
@@ -398,17 +402,27 @@ extension RealTurnTests {
     }
 
     private func roundCompletedResponse(sequence: Int, round: Int = 1) -> HTTPResponse {
-        jsonResponse(
+        var events = [event("round.completed", sequence: sequence, payload: ["round": round])]
+        if round >= 2 {
+            events.append(
+                event(
+                    "summary.started",
+                    sequence: sequence + 1,
+                    payload: ["round": round]
+                )
+            )
+        }
+        return jsonResponse(
             [
                 "round": round,
                 "turn": NSNull(),
-                "events": [event("round.completed", sequence: sequence, payload: ["round": round])]
+                "events": events
             ],
             statusCode: 200
         )
     }
 
-    private func event(_ type: String, sequence: Int, payload: [String: Any]) -> [String: Any] {
+    func event(_ type: String, sequence: Int, payload: [String: Any]) -> [String: Any] {
         [
             "event_id": UUID().uuidString,
             "room_id": roomID.uuidString,
@@ -419,7 +433,7 @@ extension RealTurnTests {
         ]
     }
 
-    private func jsonResponse(_ object: Any, statusCode: Int) -> HTTPResponse {
+    func jsonResponse(_ object: Any, statusCode: Int) -> HTTPResponse {
         let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
         return HTTPResponse(data: data, statusCode: statusCode)
     }

@@ -88,6 +88,64 @@ final class EventEnvelopeTests: XCTestCase {
         XCTAssertEqual(message.confidence ?? 0, 0.72, accuracy: 0.0001)
     }
 
+    func testDecodesSummaryStartedAndCompletedEvents() throws {
+        let started = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "summary.started",
+                sequence: 20,
+                payload: "{\"round\": 2}"
+            )
+        )
+        let completed = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "summary.completed",
+                sequence: 21,
+                payload: "{\"summary\": \(Fixtures.summaryJSON)}"
+            )
+        )
+
+        guard case let .summaryStarted(summaryStarted) = started.payload,
+              case let .summaryCompleted(summaryCompleted) = completed.payload
+        else {
+            return XCTFail("expected summary events")
+        }
+        XCTAssertEqual(summaryStarted.round, 2)
+        XCTAssertEqual(summaryCompleted.summary.id, Fixtures.summaryID)
+        XCTAssertEqual(summaryCompleted.summary.version, 1)
+        XCTAssertEqual(
+            summaryCompleted.summary.consensus[0].referenceMessageIds,
+            [Fixtures.messageID]
+        )
+    }
+
+    func testDecodesFollowUpParentAndSummaryContext() throws {
+        let raw = Fixtures.snapshotJSON.replacingOccurrences(
+            of: "\"mode\": \"decision\",",
+            with: """
+            "mode": "decision",
+              "parent_roundtable_id": "C0DEC0DE-0000-4000-8000-000000000099",
+              "source_summary_id": "5A0E0000-0000-4000-8000-000000000055",
+              "follow_up_context": {
+                "parent_topic": "上一场议题",
+                "summary": \(Fixtures.summaryJSON)
+              },
+            """
+        )
+
+        let snapshot = try JSONDecoder.roundtable.decode(
+            RoundtableSnapshot.self,
+            from: Data(raw.utf8)
+        )
+
+        XCTAssertEqual(
+            snapshot.parentRoundtableId,
+            UUID(uuidString: "C0DEC0DE-0000-4000-8000-000000000099")
+        )
+        XCTAssertEqual(snapshot.sourceSummaryId, Fixtures.summaryID)
+        XCTAssertEqual(snapshot.followUpContext?.parentTopic, "上一场议题")
+        XCTAssertEqual(snapshot.followUpContext?.summary.id, Fixtures.summaryID)
+    }
+
     func testDecodesRoundTwoReferencesAndChallengeTarget() throws {
         let targetID = UUID(uuidString: "E00E0000-0000-4000-8000-000000000005")!
         let referenceID = UUID(uuidString: "6F0E0000-0000-4000-8000-000000000004")!
