@@ -366,9 +366,8 @@ def test_duration_budget_ends_the_room_once_with_a_recoverable_event(api_client)
         "message": "讨论已达到 90 秒时间上限。",
         "round": 1,
     }
-    assert repeated.status_code == 200
-    assert repeated.json()["turn"] is None
-    assert repeated.json()["events"] == []
+    assert repeated.status_code == 400
+    assert "status" in repeated.json()["error"]["details"]
     room.refresh_from_db()
     assert room.status == Roundtable.Status.COMPLETED
     assert room.budget_exhausted_reason == "duration"
@@ -498,9 +497,12 @@ def test_final_round_completion_wins_over_duration_budget(api_client):
     response = request_next_turn(api_client, room)
 
     assert response.status_code == 200
-    assert [event["event_type"] for event in response.json()["events"]] == ["round.completed"]
+    assert [event["event_type"] for event in response.json()["events"]] == [
+        "round.completed",
+        "summary.started",
+    ]
     room.refresh_from_db()
-    assert room.status == Roundtable.Status.COMPLETED
+    assert room.status == Roundtable.Status.SUMMARIZING
     assert room.budget_exhausted_reason == ""
     assert room.events.filter(event_type="budget.exhausted").count() == 0
 
@@ -526,9 +528,10 @@ def test_final_round_expired_turn_returns_both_failure_and_completion(api_client
     assert [event["event_type"] for event in response.json()["events"]] == [
         "agent.failed",
         "round.completed",
+        "summary.started",
     ]
     room.refresh_from_db()
-    assert room.status == Roundtable.Status.COMPLETED
+    assert room.status == Roundtable.Status.SUMMARIZING
 
 
 def test_expired_turn_honors_pause_pending_before_scheduling_another_agent(api_client):

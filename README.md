@@ -2,7 +2,7 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #8「断线与进程恢复」—— 本地游标补发、乱序缓冲、SwiftData 恢复、离线只读和前后台连接管理已落地。
+**当前阶段：** Issue #9「结论与结论卡」—— 自动总结、结构化引用校验、降级摘要、只读完成态、继续追问和原生分享卡已落地。
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -51,9 +51,18 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - SwiftData 保存最近圆桌、消息、失败、游标、有界去重状态和最近可见消息；App 重启直接恢复缓存。
 - 断网时已有消息继续可读；App 进入后台会取消本地 Provider Task、暂停连接，回前台只恢复连接并要求用户显式继续。
 - `AppModel` 已通过 `RoundtableRepository` 收口 REST、WebSocket、SwiftData 和游标编排；API Key 不进入 Repository 持久化状态。
+- 第二轮或用户提前结束后进入 `summarizing`；服务端通过 `round.completed` / `room.ended` 与 `summary.started` 持久化该阶段，重连可恢复。
+- iOS 使用当前 Provider 生成共识、分歧、建议、未决问题四组严格 JSON；每项映射到真实消息 ID，格式失败最多重试一次。
+- Provider 不可用或连续两次结构非法时，客户端只从已有 claim/正文生成本地规则化摘要，并明确标记“降级总结”，不伪造引用。
+- 后端使用独立 `RoundSummary` 实体保存结论，强制当前圆桌有效观点引用、长度和数量上限、API Key 拒绝与 `expected_version` 版本控制。
+- 结论成功后圆桌进入只读 `completed`；Agent 消息、用户消息、turn 和暂停控制都会被服务端拒绝。
+- 已完成圆桌可通过 `POST /follow-ups` 创建新圆桌，显式保存父圆桌、原总结和原议题上下文。
+- 圆桌页按共识、分歧、建议、未决问题展示结论及引用原观点，并支持重新生成。
+- 结论卡由 SwiftUI 与 `ImageRenderer` 绘制，可保存相册并通过系统分享；卡片不含 API Key、内部 ID、Prompt、公开链接或二维码。
+- `room.joined` 和 SwiftData 均持久化结论；进程重启后可恢复已完成圆桌与结论卡入口。
 - 后端单元/集成测试、iOS 解码/状态机/Provider/流式客户端测试、Keychain 集成测试、最小 GitHub Actions。
 
-总结与结论卡见后续 Issue。
+内容安全、删除与发布材料见后续 Issue。
 
 ## 目录结构
 
@@ -103,7 +112,7 @@ open ios/AgentRoundtable.xcodeproj
 
 后端地址默认 `http://localhost:8000`，可在 scheme 的环境变量 `RT_API_BASE_URL` 覆盖（真机调试时填局域网地址）。Info.plist 只对 `localhost` / `127.0.0.1` 放开 HTTP（`NSExceptionDomains`），上线前必须移除；生产环境要求 HTTPS/WSS。
 
-进入 App 后：输入议题 → 确认三个参与者 → 开始讨论 → 配置 Provider 后启动自动讨论，或点击 Mock 查看确定性演示事件。圆桌页底部可以发送普通消息、点名 Agent、暂停、继续或提前结束。
+进入 App 后：输入议题 → 确认三个参与者 → 开始讨论 → 配置 Provider 后启动自动讨论，或点击 Mock 查看确定性演示事件。圆桌页底部可以发送普通消息、点名 Agent、暂停、继续或提前结束。二轮结束或提前结束后自动进入结论阶段；Mock 无 Key 演示使用规则化降级摘要。
 
 创建页的「模型 Provider」可以打开 Provider 设置：选 Qwen / DeepSeek / 自定义，填写 BaseURL、Model 与 API Key。API Key 只写入 Keychain，不会出现在 `UserDefaults`、日志或后端请求里；「验证连接」会调用该服务的 `GET /models` 判断 Key 与地址是否可用（不消耗 Token）。未配置 Provider 时仍可用 Mock 演示。
 
@@ -113,10 +122,10 @@ open ios/AgentRoundtable.xcodeproj
 
 ```bash
 make verify       # ruff + pytest + RoundtableCore 编译 + SwiftLint
-make backend-test # 后端测试（turn 调度、失败/预算/限流、用户控制、WebSocket、消息校验与广播）
+make backend-test # 后端测试（turn 调度、用户控制、WebSocket、结论校验/版本/follow-up）
 make ios-test     # RoundtableCore 测试（需要 Xcode 提供 XCTest）
 make ios-lint     # SwiftLint --strict（首次需 brew install swiftlint）
-make ios-app-test # App 单元测试（Keychain、Provider、三 Agent turn 编排，需模拟器签名）
+make ios-app-test # App 单元测试（Keychain、Provider、turn 编排、自动总结与降级，需模拟器签名）
 ```
 
 UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8000`。先启动后端，再运行：
@@ -145,6 +154,8 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - 用户消息、显式 mention、pause_pending、暂停/继续/结束和幂等语义。
 - `turns/fail`、稳定 failure code、usage、`agent.failed` 与 `budget.exhausted` 的恢复语义。
 - 两轮/消息数/时间/客户端上报 Token 预算，以及活跃圆桌和 Mock 每日限额。
+- `summary.started` / `summary.completed`、结论项 schema、有效观点引用和版本冲突。
+- `completed` 只读边界，以及带 parent/source 与 `follow_up_context` 的继续追问。
 - `mock.run` 确定性演示命令与一轮 Mock 的事件顺序。
 
 ## 设计要点
@@ -155,6 +166,8 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - **Provider 逻辑与 Keychain 分离**：`SecretStore` 协议让 Provider 生命周期可以在没有 Keychain 的 CI 机器上测试；真实 Keychain 行为由模拟器上的集成测试覆盖。
 - **流式在客户端、校验在服务端**：模型输出由 iOS 逐字渲染，协议信封（类型、立场、claim、conﬁdence）由 `MessageComposer` 组装；Django 只做校验与持久化，所以模型返回纯文本也不会破坏协议。
 - **预算诚实分层**：服务端强制可观察的轮数、消息数、Turn 截止时间和整场时间；由于 BYOK 直连，Token 上限只能基于 iOS 上报的 Provider usage，不能伪装成服务端计费。
+- **结论与普通消息分离**：`RoundSummary` 独立版本化保存，不向消息流写伪 summary 消息，避免污染引用与调度。
+- **降级不伪造依据**：规则化摘要只复制已有观点并引用原消息；Provider 失败时仍允许完成，但 UI 和协议都保留 `degraded` 标记。
 
 ## 已知边界
 
@@ -169,6 +182,8 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - SwiftLint 已接入（`ios/.swiftlint.yml`，`make verify` 与 CI 都执行 `--strict`）；UI 测试仍未在 CI 执行（需要本地后端），CI 只做 `build-for-testing`。
 - Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
 - `RoundtableRepository` 持有圆桌 API、WebSocket、本地存储和游标；`AppModel` 只负责会话、Provider turn 与 UI 状态编排。
+- 后端可以验证结构、引用归属和版本，但无法证明模型生成的自然语言绝对没有隐含新事实；MVP 通过候选范围、强制引用和降级规则降低风险。
+- 结论重新生成保留版本号和新 `summary.completed` 事件，不做公开分享链接、二维码或可导入房间。
 - 匿名会话 ID 目前存 `UserDefaults`，它只是能力凭据、不含模型密钥；会话轮换与安全存储随隐私 Issue（#11）处理。
 
 ## 故障排查

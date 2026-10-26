@@ -215,12 +215,17 @@ final class UserControlTests: XCTestCase {
             ]
         ] as [String: Any]
         let ended = commandResponse(
-            snapshot(status: .completed, currentRound: 1),
+            snapshot(status: .summarizing, currentRound: 1),
             events: [
                 event(
                     "room.ended",
                     sequence: 5,
-                    payload: ["status": "completed"]
+                    payload: ["status": "summarizing"]
+                ),
+                event(
+                    "summary.started",
+                    sequence: 6,
+                    payload: ["round": 1]
                 )
             ]
         )
@@ -239,12 +244,13 @@ final class UserControlTests: XCTestCase {
         await model.endDiscussion()
         await waitUntil { !model.isFirstRoundRunning }
 
-        XCTAssertEqual(model.room?.status, .completed)
+        XCTAssertEqual(model.room?.status, .summarizing)
         XCTAssertEqual(model.turnState, .ended)
         XCTAssertNil(model.scheduledTurn)
         let requests = await transport.recordedRequests()
         XCTAssertFalse(requests.contains { $0.url?.path.hasSuffix("/messages") == true })
         XCTAssertTrue(requests.last?.url?.path.hasSuffix("/end") == true)
+        model.leaveRoom()
     }
 }
 

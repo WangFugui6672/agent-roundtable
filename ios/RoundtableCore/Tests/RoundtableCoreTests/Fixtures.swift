@@ -6,6 +6,26 @@ enum Fixtures {
     static let turnID = UUID(uuidString: "A11CE000-0000-4000-8000-000000000010")!
     static let advocateID = UUID(uuidString: "D00D0000-0000-4000-8000-000000000003")!
     static let messageID = UUID(uuidString: "6F0E0000-0000-4000-8000-000000000004")!
+    static let summaryID = UUID(uuidString: "5A0E0000-0000-4000-8000-000000000055")!
+
+    static let summaryJSON = """
+    {
+      "id": "5A0E0000-0000-4000-8000-000000000055",
+      "version": 1,
+      "degraded": false,
+      "consensus": [
+        {
+          "text": "先完成可验证的小实验。",
+          "reference_message_ids": ["6F0E0000-0000-4000-8000-000000000004"]
+        }
+      ],
+      "dissent": [],
+      "recommendations": [],
+      "unresolved": [],
+      "created_at": "2026-10-26T01:05:03.456Z",
+      "updated_at": "2026-10-26T01:05:03.456Z"
+    }
+    """
 
     static let messageJSON = """
     {

@@ -40,6 +40,7 @@ MOCK_ROUND_TYPES = (
     + ["round.completed"]
 )
 MOCK_ROUND_LENGTH = len(MOCK_ROUND_TYPES)
+MOCK_SUMMARY_ROUND_LENGTH = MOCK_ROUND_LENGTH + 1
 
 
 def _seed_room() -> tuple[str, str]:
@@ -137,9 +138,9 @@ async def test_mock_budget_stops_after_two_rounds():
     communicator, _ = await _connect(session_id, room_id)
     await communicator.receive_json_from(timeout=1)
 
-    for round_number in (1, 2):
+    for round_number, length in ((1, MOCK_ROUND_LENGTH), (2, MOCK_SUMMARY_ROUND_LENGTH)):
         await communicator.send_json_to({"event_type": "mock.run"})
-        events = [await communicator.receive_json_from(timeout=2) for _ in range(MOCK_ROUND_LENGTH)]
+        events = [await communicator.receive_json_from(timeout=2) for _ in range(length)]
         assert events[-1]["payload"]["round"] == round_number
 
     await communicator.send_json_to({"event_type": "mock.run"})
@@ -147,7 +148,7 @@ async def test_mock_budget_stops_after_two_rounds():
 
     room = await sync_to_async(Roundtable.objects.get)(id=room_id)
     assert room.current_round == 2
-    assert room.status == Roundtable.Status.COMPLETED
+    assert room.status == Roundtable.Status.SUMMARIZING
     await communicator.disconnect()
 
 

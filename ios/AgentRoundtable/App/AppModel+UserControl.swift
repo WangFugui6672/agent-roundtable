@@ -62,6 +62,9 @@ extension AppModel {
             try repository.apply(result)
             scheduledTurn = nil
             turnState = .ended
+            if room.status == .summarizing {
+                startSummaryGenerationIfNeeded()
+            }
         } catch {
             controlError = Self.userMessage(for: error)
         }

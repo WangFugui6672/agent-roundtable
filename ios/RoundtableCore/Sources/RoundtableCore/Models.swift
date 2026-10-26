@@ -162,43 +162,6 @@ public struct ProviderUsageReport: Codable, Equatable, Sendable {
     }
 }
 
-public struct BudgetSnapshot: Codable, Equatable, Sendable {
-    public let maxRounds: Int
-    public let maxAgentMessages: Int
-    public let agentMessagesUsed: Int
-    public let maxReportedTokens: Int
-    public let reportedTokens: Int
-    public let maxDurationSeconds: Int
-    public let startedAt: Date?
-    public let elapsedSeconds: Int
-    public let exhaustedReason: String?
-    public let tokenSource: String
-
-    public init(
-        maxRounds: Int,
-        maxAgentMessages: Int,
-        agentMessagesUsed: Int,
-        maxReportedTokens: Int,
-        reportedTokens: Int,
-        maxDurationSeconds: Int,
-        startedAt: Date? = nil,
-        elapsedSeconds: Int = 0,
-        exhaustedReason: String? = nil,
-        tokenSource: String = "client_reported"
-    ) {
-        self.maxRounds = maxRounds
-        self.maxAgentMessages = maxAgentMessages
-        self.agentMessagesUsed = agentMessagesUsed
-        self.maxReportedTokens = maxReportedTokens
-        self.reportedTokens = reportedTokens
-        self.maxDurationSeconds = maxDurationSeconds
-        self.startedAt = startedAt
-        self.elapsedSeconds = elapsedSeconds
-        self.exhaustedReason = exhaustedReason
-        self.tokenSource = tokenSource
-    }
-}
-
 public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let topic: String
@@ -210,6 +173,9 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let pausePending: Bool?
     public let activeTurn: ScheduledTurn?
     public let provider: ProviderMetadata?
+    public let parentRoundtableId: UUID?
+    public let sourceSummaryId: UUID?
+    public let followUpContext: FollowUpContext?
     public let budget: BudgetSnapshot?
     public let createdAt: Date
     public let updatedAt: Date
@@ -226,6 +192,9 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         pausePending: Bool? = nil,
         activeTurn: ScheduledTurn? = nil,
         provider: ProviderMetadata? = nil,
+        parentRoundtableId: UUID? = nil,
+        sourceSummaryId: UUID? = nil,
+        followUpContext: FollowUpContext? = nil,
         budget: BudgetSnapshot? = nil,
         createdAt: Date,
         updatedAt: Date,
@@ -241,6 +210,9 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         self.pausePending = pausePending
         self.activeTurn = activeTurn
         self.provider = provider
+        self.parentRoundtableId = parentRoundtableId
+        self.sourceSummaryId = sourceSummaryId
+        self.followUpContext = followUpContext
         self.budget = budget
         self.createdAt = createdAt
         self.updatedAt = updatedAt

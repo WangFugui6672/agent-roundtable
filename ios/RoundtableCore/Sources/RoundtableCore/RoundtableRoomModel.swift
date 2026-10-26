@@ -18,6 +18,7 @@ public final class RoundtableRoomModel {
     public private(set) var pausePending = false
     public private(set) var failures: [TurnFailure] = []
     public private(set) var budgetExhaustion: BudgetExhaustion?
+    public private(set) var summary: RoundSummary?
     public private(set) var lastVisibleMessageID: UUID?
 
     /// Last persisted sequence the client has applied. ``room.joined`` never
@@ -66,6 +67,7 @@ public final class RoundtableRoomModel {
             appendFailure(failure)
         }
         budgetExhaustion = state.budgetExhaustion
+        summary = state.summary
         lastSequence = state.lastSequence
         seenEventIds = []
         seenEventIDOrder = []
@@ -94,6 +96,7 @@ public final class RoundtableRoomModel {
             messages: messages,
             failures: failures,
             budgetExhaustion: budgetExhaustion,
+            summary: summary,
             lastSequence: lastSequence,
             seenEventIDs: seenEventIDOrder,
             lastVisibleMessageID: lastVisibleMessageID,
@@ -162,6 +165,18 @@ public final class RoundtableRoomModel {
             applyFailure(failure)
         case let .budgetExhausted(exhaustion):
             applyBudgetExhaustion(exhaustion)
+        case let .summaryStarted(started):
+            status = .summarizing
+            snapshot?.status = .summarizing
+            currentRound = started.round
+            activeTurn = nil
+            activeParticipantId = nil
+        case let .summaryCompleted(completed):
+            summary = completed.summary
+            status = .completed
+            snapshot?.status = .completed
+            activeTurn = nil
+            activeParticipantId = nil
         case .pausePending, .paused, .resumed, .ended:
             applyRoomControl(payload)
         case .unknown:
@@ -263,6 +278,9 @@ public final class RoundtableRoomModel {
         for failure in joined.failures {
             appendFailure(failure)
         }
+        if let joinedSummary = joined.summary {
+            summary = joinedSummary
+        }
         if !hadLocalSnapshot {
             lastSequence = joined.roundtable.lastSequence
         }
@@ -274,6 +292,7 @@ public final class RoundtableRoomModel {
         seenMessageIds = []
         bufferedEvents = [:]
         budgetExhaustion = nil
+        summary = nil
         applyJoin(joined)
         lastSequence = joined.roundtable.lastSequence
         if let selected = lastVisibleMessageID,

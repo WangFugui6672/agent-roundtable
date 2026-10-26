@@ -55,6 +55,31 @@ final class RoundtableRepositoryTests: XCTestCase {
         XCTAssertEqual(restarted.room?.lastSequence, 1)
     }
 
+    func testRestoresCompletedSummaryAfterRestart() throws {
+        let store = InMemoryRoomStore()
+        let first = makeRepository(store: store)
+        let joined = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+        guard case let .joined(room) = joined.payload else {
+            return XCTFail("expected a joined payload")
+        }
+        try first.present(room.roundtable, cursor: 0)
+        try first.apply(
+            try EventEnvelope.decode(
+                from: Fixtures.envelope(
+                    eventType: "summary.completed",
+                    sequence: 1,
+                    payload: "{\"summary\": \(Fixtures.summaryJSON)}"
+                )
+            )
+        )
+
+        let restarted = makeRepository(store: store)
+        XCTAssertTrue(try restarted.restoreRecent())
+        XCTAssertEqual(restarted.room?.status, .completed)
+        XCTAssertEqual(restarted.room?.summary?.id, Fixtures.summaryID)
+        XCTAssertEqual(restarted.room?.summary?.degraded, false)
+    }
+
     private func makeRepository(store: InMemoryRoomStore) -> RoundtableRepository {
         RoundtableRepository(
             api: APIClient(baseURL: URL(string: "http://127.0.0.1:8000")!),

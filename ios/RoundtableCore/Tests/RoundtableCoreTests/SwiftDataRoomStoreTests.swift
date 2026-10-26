@@ -40,6 +40,7 @@ final class SwiftDataRoomStoreTests: XCTestCase {
         let loaded = try reopened.load(roomID: state.snapshot.id)
         XCTAssertEqual(loaded?.snapshot.id, state.snapshot.id)
         XCTAssertEqual(loaded?.messages, state.messages)
+        XCTAssertEqual(loaded?.summary, state.summary)
         XCTAssertEqual(loaded?.lastSequence, state.lastSequence)
         XCTAssertEqual(loaded?.lastVisibleMessageID, state.lastVisibleMessageID)
         XCTAssertEqual(try reopened.loadMostRecent()?.snapshot.id, state.snapshot.id)
@@ -79,8 +80,19 @@ final class SwiftDataRoomStoreTests: XCTestCase {
                 )
             )
         )
+        model.apply(
+            try EventEnvelope.decode(
+                from: Fixtures.envelope(
+                    eventType: "summary.completed",
+                    sequence: 2,
+                    payload: "{\"summary\": \(Fixtures.summaryJSON)}",
+                    eventID: UUID()
+                )
+            )
+        )
         model.setLastVisibleMessage(Fixtures.messageID)
         XCTAssertEqual(model.messages.map(\.id), [Fixtures.messageID])
+        XCTAssertEqual(model.summary?.id, Fixtures.summaryID)
         XCTAssertEqual(model.lastVisibleMessageID, Fixtures.messageID)
         let state = model.storedState(savedAt: Date(timeIntervalSince1970: 1_800_000_000))
         XCTAssertEqual(state.lastVisibleMessageID, Fixtures.messageID)

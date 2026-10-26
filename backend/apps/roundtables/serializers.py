@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import uuid
 from urllib.parse import urlsplit
 
 from django.utils import timezone
 from rest_framework import serializers
 
 from apps.roundtables.message_validation import validate_agent_message
-from apps.roundtables.models import AgentProfile, Message, Roundtable, RoundtableAgent, Turn
+from apps.roundtables.models import (
+    AgentProfile,
+    Message,
+    RoundSummary,
+    Roundtable,
+    RoundtableAgent,
+    Turn,
+)
 from apps.roundtables.protocol import (
     BODY_HARD_MAX_CHARS,
     CLAIM_MAX_CHARS,
     DEFAULT_CONFIDENCE,
     FAILURE_CODES,
     MAX_REFERENCES,
+    SUMMARY_MAX_ITEMS_PER_SECTION,
+    SUMMARY_MAX_REFERENCES_PER_ITEM,
+    SUMMARY_TEXT_MAX_CHARS,
     iso8601_millis,
 )
 
@@ -149,6 +160,7 @@ class RoundtableSerializer(serializers.ModelSerializer):
     provider = serializers.SerializerMethodField()
     budget = serializers.SerializerMethodField()
     active_turn = serializers.SerializerMethodField()
+    follow_up_context = serializers.SerializerMethodField()
     created_at = serializers.SerializerMethodField()
     updated_at = serializers.SerializerMethodField()
 
@@ -165,6 +177,9 @@ class RoundtableSerializer(serializers.ModelSerializer):
             "pause_pending",
             "active_turn",
             "provider",
+            "parent_roundtable_id",
+            "source_summary_id",
+            "follow_up_context",
             "budget",
             "created_at",
             "updated_at",
@@ -193,6 +208,18 @@ class RoundtableSerializer(serializers.ModelSerializer):
         if turn is None:
             return None
         return TurnSerializer(turn).data
+
+    def get_follow_up_context(self, obj: Roundtable) -> dict | None:
+        if obj.parent_roundtable_id is None or obj.source_summary_id is None:
+            return None
+        parent = obj.parent_roundtable
+        summary = obj.source_summary
+        if parent is None or summary is None:
+            return None
+        return {
+            "parent_topic": parent.topic,
+            "summary": RoundSummarySerializer(summary).data,
+        }
 
     def get_created_at(self, obj: Roundtable) -> str:
         return iso8601_millis(obj.created_at)
@@ -227,6 +254,90 @@ class RoundtableCreateSerializer(serializers.Serializer):
         if found != MVP_AGENT_COUNT:
             raise serializers.ValidationError("Agent 不存在。")
         return value
+
+
+class FollowUpCreateSerializer(serializers.Serializer):
+    topic = serializers.CharField(max_length=500, trim_whitespace=True)
+
+    def validate(self, attrs: dict) -> dict:
+        if contains_secret(self.initial_data):
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
+        return attrs
+
+
+class SummaryItemSerializer(serializers.Serializer):
+    text = serializers.CharField(
+        max_length=SUMMARY_TEXT_MAX_CHARS,
+        trim_whitespace=True,
+        allow_blank=False,
+    )
+    reference_message_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        min_length=1,
+        max_length=SUMMARY_MAX_REFERENCES_PER_ITEM,
+        allow_empty=False,
+    )
+
+    def validate_reference_message_ids(self, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(set(value)) != len(value):
+            raise serializers.ValidationError("同一结论项不能重复引用同一条观点。")
+        return value
+
+
+class RoundSummaryCreateSerializer(serializers.Serializer):
+    expected_version = serializers.IntegerField(min_value=0)
+    degraded = serializers.BooleanField()
+    consensus = SummaryItemSerializer(
+        many=True,
+        max_length=SUMMARY_MAX_ITEMS_PER_SECTION,
+        required=True,
+    )
+    dissent = SummaryItemSerializer(
+        many=True,
+        max_length=SUMMARY_MAX_ITEMS_PER_SECTION,
+        required=True,
+    )
+    recommendations = SummaryItemSerializer(
+        many=True,
+        max_length=SUMMARY_MAX_ITEMS_PER_SECTION,
+        required=True,
+    )
+    unresolved = SummaryItemSerializer(
+        many=True,
+        max_length=SUMMARY_MAX_ITEMS_PER_SECTION,
+        required=True,
+    )
+
+    def validate(self, attrs: dict) -> dict:
+        if contains_secret(self.initial_data):
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
+        return attrs
+
+
+class RoundSummarySerializer(serializers.ModelSerializer):
+    created_at = serializers.SerializerMethodField()
+    updated_at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RoundSummary
+        fields = [
+            "id",
+            "version",
+            "degraded",
+            "consensus",
+            "dissent",
+            "recommendations",
+            "unresolved",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_created_at(self, obj: RoundSummary) -> str:
+        return iso8601_millis(obj.created_at)
+
+    def get_updated_at(self, obj: RoundSummary) -> str:
+        return iso8601_millis(obj.updated_at)
 
 
 class MessageSerializer(serializers.ModelSerializer):

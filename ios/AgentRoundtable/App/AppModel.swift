@@ -30,7 +30,7 @@ final class AppModel {
     private(set) var streamState: StreamState = .idle
     private(set) var isCreating = false
     private(set) var isMockRunning = false
-    private(set) var isSceneActive = true
+    var isSceneActive = true
     var isFirstRoundRunning = false
     private(set) var createError: String?
     var controlError: String?
@@ -65,6 +65,9 @@ final class AppModel {
     }
 
     var turnState: TurnState = .idle
+    var summaryState: SummaryGenerationState = .idle
+    var summaryError: String?
+    var isCreatingFollowUp = false
 
     // Provider state (Issue #3). Secrets never enter these properties: only the
     // non-secret configuration is exposed to the UI. They are internal so the
@@ -75,10 +78,12 @@ final class AppModel {
     var isSavingProvider = false
     var isCheckingProvider = false
 
-    private var guestSessionID: UUID?
+    var guestSessionID: UUID?
     let repository: RoundtableRepository
     var generationTask: Task<Void, Never>?
     var generationID: UUID?
+    var summaryTask: Task<Void, Never>?
+    var summaryGenerationID: UUID?
     var reportedFailureTurnIDs: Set<UUID> = []
     var isEnding = false
     let defaults: UserDefaults
@@ -258,8 +263,18 @@ final class AppModel {
         guard !isMockRunning else { return }
         isMockRunning = true
         defer { isMockRunning = false }
+        let initialStatus = room?.status
         do {
             try await repository.runMockRound()
+            for _ in 0 ..< 100 {
+                guard room?.status == initialStatus else {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            if room?.status == .summarizing {
+                await generateSummary()
+            }
         } catch {
             streamState = .failed(Self.userMessage(for: error))
         }
@@ -269,56 +284,27 @@ final class AppModel {
         generationTask?.cancel()
         generationTask = nil
         generationID = nil
+        summaryTask?.cancel()
+        summaryTask = nil
+        summaryGenerationID = nil
         isEnding = false
         repository.leaveRoom()
         streamState = .idle
         turnState = .idle
+        summaryState = .idle
+        summaryError = nil
         scheduledTurn = nil
         failureCode = nil
         failureRetryable = false
         reportedFailureTurnIDs.removeAll()
         isFirstRoundRunning = false
+        isCreatingFollowUp = false
         controlError = nil
     }
 
     func markVisibleMessage(_ messageID: UUID) {
         guard room?.lastVisibleMessageID != messageID else { return }
         try? repository.markVisibleMessage(messageID)
-    }
-
-    func enterBackground() {
-        isSceneActive = false
-        let shouldPause = generationTask != nil
-            || isFirstRoundRunning
-            || turnState.isBusy
-            || room?.activeTurn != nil
-            || room?.status == .running
-        generationTask?.cancel()
-        generationTask = nil
-        generationID = nil
-        isFirstRoundRunning = false
-        scheduledTurn = nil
-        if shouldPause {
-            switch turnState {
-            case .failed, .completed, .passed, .roundCompleted, .ended:
-                break
-            default:
-                turnState = .paused
-            }
-        }
-        repository.disconnect(reason: "App 已进入后台，连接已暂停。")
-        guard shouldPause else { return }
-        Task { [weak self] in
-            await self?.pauseDiscussion()
-        }
-    }
-
-    func enterForeground() {
-        isSceneActive = true
-        guard phase == .ready,
-              let guestSessionID,
-              repository.room != nil else { return }
-        repository.connect(guestSessionID: guestSessionID)
     }
 
     // MARK: - Helpers

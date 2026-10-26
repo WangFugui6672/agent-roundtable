@@ -90,6 +90,20 @@ class Roundtable(models.Model):
     )
     provider_base_url = models.CharField(max_length=300, blank=True, default="")
     provider_model = models.CharField(max_length=120, blank=True, default="")
+    parent_roundtable = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="follow_ups",
+        null=True,
+        blank=True,
+    )
+    source_summary = models.ForeignKey(
+        "RoundSummary",
+        on_delete=models.SET_NULL,
+        related_name="follow_ups",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -276,6 +290,31 @@ class UsageRecord(models.Model):
 
     def __str__(self) -> str:
         return f"{self.roundtable_agent}@{self.created_at.isoformat()}"
+
+
+class RoundSummary(models.Model):
+    """Structured final result; deliberately separate from ordinary messages."""
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.OneToOneField(
+        Roundtable,
+        on_delete=models.CASCADE,
+        related_name="summary",
+    )
+    consensus = models.JSONField(default=list)
+    dissent = models.JSONField(default=list)
+    recommendations = models.JSONField(default=list)
+    unresolved = models.JSONField(default=list)
+    degraded = models.BooleanField(default=False)
+    version = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "round_summary"
+
+    def __str__(self) -> str:
+        return f"summary:{self.roundtable_id}:v{self.version}"
 
 
 class RoomEvent(models.Model):

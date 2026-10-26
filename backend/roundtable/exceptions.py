@@ -53,6 +53,12 @@ class MockDailyLimit(APIError):
     default_detail = "Mock 模式每个匿名会话每天最多创建 10 个圆桌。"
 
 
+class SummaryVersionConflict(APIError):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "summary_version_conflict"
+    default_detail = "结论已被其他生成结果更新，请刷新后重试。"
+
+
 def _flatten(detail: Any) -> Any:
     if isinstance(detail, dict):
         return {key: _flatten(value) for key, value in detail.items()}
