@@ -256,7 +256,7 @@ public final class RoundtableRepository {
     }
 
     public func apply(_ response: RoundSummaryResponse) throws {
-        guard let room else { return }
+        guard let room, room.snapshot?.id == response.roundtable.id else { return }
         for event in response.events {
             room.apply(event)
         }

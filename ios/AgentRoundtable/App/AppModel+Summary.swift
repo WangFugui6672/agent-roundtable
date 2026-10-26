@@ -108,6 +108,11 @@ extension AppModel {
                     expectedVersion: room.summary?.version ?? 0
                 )
             )
+            guard !Task.isCancelled,
+                  self.room?.snapshot?.id == roundtableID
+            else {
+                return
+            }
             try repository.apply(response)
             summaryState = .completed(version: response.summary.version)
         } catch {
