@@ -7,15 +7,12 @@ public enum ProviderCheckOutcome: Equatable, Sendable {
     case ok(modelCount: Int?)
     /// 401/403: the key is wrong, revoked, or lacks access to the endpoint.
     case invalidKey
+    /// 2xx, but the configured model is not in the provider's model list.
+    case modelMissing(String)
     /// Transport-level failure (no network, DNS, TLS, timeout).
     case unreachable(String)
     /// Any other non-2xx answer: keep the status code visible.
     case failed(String)
-
-    public var isSuccess: Bool {
-        if case .ok = self { return true }
-        return false
-    }
 
     public var message: String {
         switch self {
@@ -24,6 +21,8 @@ public enum ProviderCheckOutcome: Equatable, Sendable {
             return "连接成功，可用模型 \(modelCount) 个。"
         case .invalidKey:
             return "API Key 无效或没有访问权限（HTTP 401/403）。"
+        case let .modelMissing(model):
+            return "连接成功，但模型 \(model) 不在该 Provider 的模型列表中。"
         case let .unreachable(reason):
             return "网络请求失败：\(reason)"
         case let .failed(reason):
@@ -32,7 +31,7 @@ public enum ProviderCheckOutcome: Equatable, Sendable {
     }
 }
 
-/// Minimal, provider-agnostic check that the base URL and key actually work.
+/// Minimal, provider-agnostic check that the base URL, key and model are usable.
 ///
 /// It calls the OpenAI-compatible `GET /models` endpoint. This is deliberately
 /// not a chat completion: Issue #3 only needs to tell the user whether the
@@ -44,8 +43,11 @@ public struct ProviderProbe: Sendable {
         self.transport = transport
     }
 
-    public func check(configuration: ProviderConfiguration, apiKey: String) async -> ProviderCheckOutcome {
-        guard let url = Self.modelsURL(baseURL: configuration.baseURL) else {
+    public func check(
+        configuration: ProviderConfiguration,
+        apiKey: String
+    ) async -> ProviderCheckOutcome {
+        guard let url = ProviderURL.modelsEndpoint(baseURL: configuration.baseURL) else {
             return .failed("BaseURL 无法解析。")
         }
 
@@ -59,11 +61,19 @@ public struct ProviderProbe: Sendable {
             let response = try await transport.send(request)
             switch response.statusCode {
             case 200 ..< 300:
-                return .ok(modelCount: Self.modelCount(from: response.data))
+                let models = Self.modelIDs(from: response.data)
+                if let models, !models.isEmpty, !models.contains(configuration.model) {
+                    return .modelMissing(configuration.model)
+                }
+                return .ok(modelCount: models?.count)
             case 401, 403:
                 return .invalidKey
+            case 402:
+                return .failed("Provider 返回 HTTP 402：余额不足或计费方式未开通。")
             case 404:
                 return .failed("BaseURL 路径可能不正确（HTTP 404）。请确认地址以 /v1 结尾。")
+            case 429:
+                return .failed("Provider 返回 HTTP 429：请求过于频繁，请稍后重试。")
             default:
                 return .failed("Provider 返回 HTTP \(response.statusCode)。")
             }
@@ -76,20 +86,15 @@ public struct ProviderProbe: Sendable {
         }
     }
 
-    static func modelsURL(baseURL: String) -> URL? {
-        var trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        while trimmed.hasSuffix("/") {
-            trimmed.removeLast()
-        }
-        guard !trimmed.isEmpty else { return nil }
-        return URL(string: trimmed + "/models")
-    }
-
-    private static func modelCount(from data: Data) -> Int? {
+    /// Model IDs from an OpenAI-style `{"data": [{"id": "..."}]}` body, or nil
+    /// when the provider returns something else (some proxies answer `{}`).
+    private static func modelIDs(from data: Data) -> [String]? {
         struct ModelList: Decodable {
-            struct Entry: Decodable {}
+            struct Entry: Decodable {
+                let id: String?
+            }
             let data: [Entry]?
         }
-        return (try? JSONDecoder().decode(ModelList.self, from: data))?.data?.count
+        return (try? JSONDecoder().decode(ModelList.self, from: data))?.data?.compactMap(\.id)
     }
 }

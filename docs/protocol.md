@@ -102,7 +102,13 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 **API Key 不上传。** 请求体任何层级出现 `api_key` / `apiKey` / `provider_api_key` 字段都会被拒绝：
 
 ```json
-{"error": {"code": "validation_error", "message": "不得向后端提交 API Key。", "details": {}}}
+{
+  "error": {
+    "code": "validation_error",
+    "message": "不得向后端提交 API Key。",
+    "details": {"provider": ["不得向后端提交 API Key。"]}
+  }
+}
 ```
 
 这样客户端一旦误传密钥会立刻失败，而不是被静默忽略后写进日志或数据库。Provider 元数据只用于展示与可观测性，后端不会用它发起模型请求。

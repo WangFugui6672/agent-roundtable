@@ -124,7 +124,9 @@ final class AppModel {
 
     var canStart: Bool {
         guard !isCreating, selectedProfileIDs.count == 3, phase == .ready else { return false }
-        return true
+        // A selected-but-unusable provider must be fixed instead of silently
+        // starting a Mock roundtable (PRD 7.13).
+        return providerIncompleteMessage == nil
     }
 
     func isSelected(_ profile: AgentProfile) -> Bool {
@@ -143,6 +145,11 @@ final class AppModel {
         let trimmed = topic.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, selectedProfileIDs.count == 3, !isCreating else { return }
 
+        if let incomplete = providerIncompleteMessage {
+            createError = "Provider 配置不完整：\(incomplete)"
+            return
+        }
+
         isCreating = true
         createError = nil
         defer { isCreating = false }
@@ -151,7 +158,7 @@ final class AppModel {
             let snapshot = try await api.createRoundtable(
                 topic: trimmed,
                 agentProfileIds: selectedProfileIDs,
-                provider: providerMetadata()
+                provider: providerMetadata
             )
             open(snapshot)
         } catch {
@@ -161,14 +168,39 @@ final class AppModel {
 
     // MARK: - Provider
 
-    /// Non-secret snapshot submitted with a new roundtable, or nil when the user
-    /// has not configured a provider yet (Mock demo still works).
-    func providerMetadata() -> ProviderMetadata? {
-        guard let kind = activeProvider,
-              let configuration = providerStore.configuration(for: kind),
-              providerStore.isConfigured(kind)
-        else { return nil }
-        return configuration.metadata
+    /// Whether the selected provider can be used, including the reason when it
+    /// cannot (missing Keychain item, unreadable Keychain).
+    var providerAvailability: ProviderAvailability {
+        providerStore.availability(for: activeProvider)
+    }
+
+    /// Non-secret snapshot submitted with a new roundtable, or nil when no
+    /// provider is configured (Mock demo still works).
+    var providerMetadata: ProviderMetadata? {
+        guard case let .ready(metadata) = providerAvailability else { return nil }
+        return metadata
+    }
+
+    /// Non-nil when a provider is selected but unusable. Creating a roundtable
+    /// must surface this instead of silently falling back to Mock.
+    var providerIncompleteMessage: String? {
+        guard case let .incomplete(message) = providerAvailability else { return nil }
+        return message
+    }
+
+    var providerSummary: String {
+        switch providerAvailability {
+        case .none:
+            return "未配置 Provider，将使用 Mock 演示"
+        case let .ready(metadata):
+            return "\(metadata.kind.displayName) · \(metadata.model)"
+        case .incomplete:
+            return "Provider 配置不完整，请重新输入 API Key"
+        }
+    }
+
+    var hasConfiguredProvider: Bool {
+        providerMetadata != nil
     }
 
     func providerConfiguration(for kind: ProviderKind) -> ProviderConfiguration? {
@@ -179,46 +211,63 @@ final class AppModel {
         providerStore.isConfigured(kind)
     }
 
-    var providerSummary: String {
-        guard let metadata = providerMetadata() else {
-            return "未配置 Provider，将使用 Mock 演示"
-        }
-        return "\(metadata.kind.displayName) · \(metadata.model)"
-    }
-
-    var hasConfiguredProvider: Bool {
-        providerMetadata() != nil
-    }
-
     /// Saves the provider. An empty key field keeps the Keychain item that is
-    /// already stored, so users can change BaseURL/Model without re-entering it.
+    /// already stored, so users can change BaseURL/Model without re-entering it —
+    /// unless the BaseURL host changed, in which case the old key must not be
+    /// reused (it may belong to a different service).
     @discardableResult
-    func saveProvider(
-        kind: ProviderKind,
-        baseURL: String,
-        model: String,
-        apiKey: String
-    ) -> Bool {
+    func saveProvider(_ draft: ProviderDraft) -> Bool {
         isSavingProvider = true
         defer { isSavingProvider = false }
         providerError = nil
         providerCheckMessage = nil
 
-        var draft = ProviderDraft(kind: kind, baseURL: baseURL, model: model, apiKey: apiKey)
-        if draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let stored = (try? providerStore.secret(for: kind)) ?? nil,
-           !stored.isEmpty {
-            draft.apiKey = stored
-        }
-
         do {
-            try providerStore.save(draft)
-            setActiveProvider(kind)
+            try providerStore.save(resolved(draft))
+            setActiveProvider(draft.kind)
             return true
         } catch {
             providerError = Self.providerMessage(for: error)
             return false
         }
+    }
+
+    /// Verifies BaseURL, key and model against the provider's `GET /models`
+    /// endpoint. Failures produce a readable message instead of silently
+    /// swapping models (PRD 7.13).
+    func checkProvider(_ draft: ProviderDraft) async {
+        isCheckingProvider = true
+        providerError = nil
+        providerCheckMessage = nil
+        defer { isCheckingProvider = false }
+
+        do {
+            let (configuration, key) = try resolved(draft).validated()
+            let outcome = await probe.check(configuration: configuration, apiKey: key)
+            providerCheckMessage = outcome.message
+        } catch {
+            providerError = Self.providerMessage(for: error)
+        }
+    }
+
+    /// Fills an empty key field from the Keychain, but only while the BaseURL is
+    /// unchanged: editing the address must not forward the old key to a new host.
+    private func resolved(_ draft: ProviderDraft) -> ProviderDraft {
+        guard draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return draft
+        }
+        let storedConfiguration = providerStore.configuration(for: draft.kind)
+        let sameBaseURL = storedConfiguration.map {
+            $0.baseURL == ProviderURL.normalized(baseURL: draft.baseURL)
+        } ?? false
+        guard sameBaseURL,
+              let stored = (try? providerStore.secret(for: draft.kind)) ?? nil,
+              !stored.isEmpty
+        else { return draft }
+
+        var resolved = draft
+        resolved.apiKey = stored
+        return resolved
     }
 
     @discardableResult
@@ -241,31 +290,6 @@ final class AppModel {
     func clearProviderFeedback() {
         providerError = nil
         providerCheckMessage = nil
-    }
-
-    /// Verifies BaseURL + key against the provider's `GET /models` endpoint.
-    /// Network failures and invalid keys produce a readable message instead of
-    /// silently swapping models (PRD 7.13).
-    func checkProvider(kind: ProviderKind, baseURL: String, model: String, apiKey: String) async {
-        isCheckingProvider = true
-        providerError = nil
-        providerCheckMessage = nil
-        defer { isCheckingProvider = false }
-
-        var draft = ProviderDraft(kind: kind, baseURL: baseURL, model: model, apiKey: apiKey)
-        if draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let stored = (try? providerStore.secret(for: kind)) ?? nil,
-           !stored.isEmpty {
-            draft.apiKey = stored
-        }
-
-        do {
-            let (configuration, key) = try draft.validated()
-            let outcome = await probe.check(configuration: configuration, apiKey: key)
-            providerCheckMessage = outcome.message
-        } catch {
-            providerError = Self.providerMessage(for: error)
-        }
     }
 
     func setActiveProvider(_ kind: ProviderKind?) {
