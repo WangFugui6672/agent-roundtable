@@ -83,12 +83,29 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 ```json
 {
   "topic": "该不该把验证周期压缩到两周？",
-  "agent_profile_ids": ["1111...", "2222...", "3333..."]
+  "agent_profile_ids": ["1111...", "2222...", "3333..."],
+  "provider": {
+    "kind": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat"
+  }
 }
 ```
 
 - `topic`：必填，去除首尾空白后 1-500 字符。
 - `agent_profile_ids`：恰好 3 个、互不重复、必须存在。数组顺序即 `position` 顺序。
+- `provider`：可选，省略或 `null` 表示尚未配置 Provider（Mock 演示）。提交时是**非秘密**元数据快照：
+  - `kind`：`qwen | deepseek | custom`。
+  - `base_url`：必须是 `http`/`https` 地址，不能带查询参数或片段；服务端会去掉末尾 `/` 再保存。
+  - `model`：1-120 字符，去除首尾空白后不能为空。
+
+**API Key 不上传。** 请求体任何层级出现 `api_key` / `apiKey` / `provider_api_key` 字段都会被拒绝：
+
+```json
+{"error": {"code": "validation_error", "message": "不得向后端提交 API Key。", "details": {}}}
+```
+
+这样客户端一旦误传密钥会立刻失败，而不是被静默忽略后写进日志或数据库。Provider 元数据只用于展示与可观测性，后端不会用它发起模型请求。
 
 `201` 返回圆桌快照（见 2.6）。
 
@@ -105,6 +122,11 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
   "max_rounds": 2,
   "current_round": 0,
   "last_sequence": 0,
+  "provider": {
+    "kind": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat"
+  },
   "created_at": "2026-10-26T01:02:03.456Z",
   "updated_at": "2026-10-26T01:02:03.456Z",
   "participants": [
@@ -121,6 +143,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 `status`：`draft | ready | running | paused | summarizing | completed | failed | archived`
 `state`：`waiting | thinking | typing | passed | completed | failed`
 `last_sequence`：该圆桌已持久化的最大事件序号，客户端用它初始化游标。
+`provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
 
 ## 3. WebSocket
 
