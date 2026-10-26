@@ -127,6 +127,44 @@ class RoundtableAgent(models.Model):
         return f"{self.agent_profile.name}@{self.position}"
 
 
+class Turn(models.Model):
+    """One server-issued speaking assignment executed by the iOS Provider."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "待完成"
+        COMPLETED = "completed", "已完成"
+        PASSED = "passed", "已沉默"
+        FAILED = "failed", "失败"
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="turns")
+    roundtable_agent = models.ForeignKey(
+        RoundtableAgent, on_delete=models.PROTECT, related_name="turns"
+    )
+    round_number = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "turn"
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["roundtable_agent", "round_number"],
+                name="unique_turn_per_agent_round",
+            ),
+            models.UniqueConstraint(
+                fields=["roundtable"],
+                condition=models.Q(status="pending"),
+                name="unique_pending_turn_per_roundtable",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.roundtable_agent}@{self.round_number}:{self.status}"
+
+
 class Message(models.Model):
     """One structured agent utterance (GLOSSARY: 结构化发言)."""
 
@@ -150,6 +188,10 @@ class Message(models.Model):
     roundtable_agent = models.ForeignKey(
         RoundtableAgent, on_delete=models.PROTECT, related_name="messages"
     )
+    turn = models.ForeignKey(
+        Turn, on_delete=models.PROTECT, related_name="messages", null=True, blank=True
+    )
+    round_number = models.PositiveSmallIntegerField(default=0)
     message_type = models.CharField(max_length=16, choices=Type.choices)
     claim = models.CharField(max_length=80)
     body = models.TextField(blank=True, default="")

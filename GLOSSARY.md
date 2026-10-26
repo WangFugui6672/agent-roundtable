@@ -30,6 +30,10 @@
 
 AgentProfile 在某个圆桌中的实例。它保存该圆桌内的当前目标和状态。
 
+## Turn（回合）
+
+服务端签发给单个 RoundtableAgent 的一次发言任务，包含稳定 `turn_id`、轮次和 Agent。iOS 执行 Provider 后必须用同一个 `turn_id` 提交发言或 pass；同一圆桌同一时间最多存在一个待完成 turn。
+
 ## 参与者（Participant）
 
 圆桌快照与界面中对 RoundtableAgent 的称呼。`participants` 数组就是该圆桌的 RoundtableAgent 列表，顺序由 `position` 决定。
@@ -69,7 +73,7 @@ Agent 对其他观点的关系。合法值包括：
 
 ## 沉默（Pass）
 
-Agent 评估当前消息后决定不发言的状态。Pass 是正常行为，不是错误，也不产生普通消息。
+Agent 评估当前消息后决定不发言的状态。Pass 是正常行为，不是错误，也不产生普通消息；它以 `agent.passed` 事件关闭当前 turn。
 
 ## 轮次调度器（Turn Scheduler）
 

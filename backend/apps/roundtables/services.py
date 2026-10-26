@@ -5,13 +5,18 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
+from channels.layers import get_channel_layer
 from django.db import transaction
+from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from apps.roundtables import mock
 from apps.roundtables import protocol as p
-from apps.roundtables.models import Message, RoomEvent, Roundtable, RoundtableAgent
-from apps.roundtables.serializers import MessageSerializer, RoundtableSerializer
+from apps.roundtables.models import Message, RoomEvent, Roundtable, RoundtableAgent, Turn
+from apps.roundtables.scheduler import select_next_speaker
+from apps.roundtables.serializers import MessageSerializer, RoundtableSerializer, TurnSerializer
 
 
 def _event_envelope(event: RoomEvent) -> dict[str, Any]:
@@ -22,6 +27,22 @@ def _event_envelope(event: RoomEvent) -> dict[str, Any]:
         event_type=event.event_type,
         payload=event.payload,
         created_at=p.iso8601_millis(event.created_at),
+    )
+
+
+def _append_room_event(
+    room: Roundtable,
+    event_type: str,
+    payload: dict[str, Any],
+) -> RoomEvent:
+    """Allocate the next room sequence and append one persisted event."""
+    room.event_sequence += 1
+    return RoomEvent.objects.create(
+        id=uuid.uuid4(),
+        roundtable=room,
+        sequence=room.event_sequence,
+        event_type=event_type,
+        payload=payload,
     )
 
 
@@ -55,6 +76,24 @@ def build_join_envelope(room: Roundtable) -> dict[str, Any]:
 def room_group_name(roundtable_id: object) -> str:
     """Channel-layer group for one room; REST writes fan out through it."""
     return f"room.{roundtable_id}"
+
+
+def _broadcast_room_events(roundtable_id: object, envelopes: list[dict[str, Any]]) -> None:
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return
+    group = room_group_name(roundtable_id)
+    for envelope in envelopes:
+        async_to_sync(channel_layer.group_send)(
+            group,
+            {"type": "room.event", "envelope": envelope},
+        )
+
+
+def _broadcast_after_commit(roundtable_id: object, envelopes: list[dict[str, Any]]) -> None:
+    if not envelopes:
+        return
+    transaction.on_commit(lambda: _broadcast_room_events(roundtable_id, envelopes))
 
 
 def _join_snapshot(roundtable_id: str, guest_session_id: str) -> dict[str, Any] | None:
@@ -102,16 +141,7 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
                 author_id = payload["message"]["author"]["roundtable_agent_id"]
                 agents_by_id[author_id].state = RoundtableAgent.State.COMPLETED
 
-            room.event_sequence += 1
-            created.append(
-                RoomEvent.objects.create(
-                    id=uuid.uuid4(),
-                    roundtable=room,
-                    sequence=room.event_sequence,
-                    event_type=event_type,
-                    payload=payload,
-                )
-            )
+            created.append(_append_room_event(room, event_type, payload))
 
         RoundtableAgent.objects.bulk_update(agents, ["state"])
 
@@ -143,13 +173,26 @@ def create_message(
         if room is None:
             return None
 
-        agent = RoundtableAgent.objects.select_related("agent_profile").get(
-            id=validated["roundtable_agent_id"]
+        agent = (
+            RoundtableAgent.objects.select_for_update()
+            .select_related("agent_profile")
+            .get(id=validated["roundtable_agent_id"])
         )
+        turn = (
+            Turn.objects.select_for_update()
+            .filter(roundtable=room, status=Turn.Status.PENDING)
+            .first()
+        )
+        if turn is None or turn.id != validated.get("turn_id"):
+            raise ValidationError({"turn_id": "turn 已过期、重复或不属于当前圆桌。"})
+        if turn.roundtable_agent_id != agent.id:
+            raise ValidationError({"roundtable_agent_id": "提交者不是当前 turn 的发言人。"})
         message = Message.objects.create(
             id=uuid.uuid4(),
             roundtable=room,
             roundtable_agent=agent,
+            turn=turn,
+            round_number=turn.round_number,
             message_type=validated["message_type"],
             claim=validated["claim"],
             body=validated.get("body", ""),
@@ -158,22 +201,184 @@ def create_message(
         )
         message.references.set(validated.get("references") or [])
 
+        turn.status = Turn.Status.COMPLETED
+        turn.completed_at = timezone.now()
+        turn.save(update_fields=["status", "completed_at"])
         agent.state = RoundtableAgent.State.COMPLETED
         agent.save(update_fields=["state"])
 
         if room.status in {Roundtable.Status.READY, Roundtable.Status.PAUSED}:
             room.status = Roundtable.Status.RUNNING
-        room.event_sequence += 1
-        room.save(update_fields=["status", "event_sequence", "updated_at"])
-
-        event = RoomEvent.objects.create(
-            id=uuid.uuid4(),
-            roundtable=room,
-            sequence=room.event_sequence,
-            event_type=p.MESSAGE_COMPLETED,
-            payload={"message": MessageSerializer(message).data},
+        event = _append_room_event(
+            room,
+            p.MESSAGE_COMPLETED,
+            {"message": MessageSerializer(message).data},
         )
-        return _event_envelope(event)
+        room.save(update_fields=["status", "event_sequence", "updated_at"])
+        envelope = _event_envelope(event)
+        _broadcast_after_commit(room.id, [envelope])
+        return envelope
+
+
+def next_turn(
+    roundtable_id: str, guest_session_id: str
+) -> tuple[int, dict[str, Any] | None, list[dict[str, Any]]] | None:
+    """Begin the first round and reserve exactly one Agent to speak."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+
+        agents = list(
+            RoundtableAgent.objects.select_for_update()
+            .filter(roundtable=room)
+            .select_related("agent_profile")
+            .order_by("position")
+        )
+        if room.current_round == 0:
+            room.current_round = 1
+            room.status = Roundtable.Status.RUNNING
+            for agent in agents:
+                agent.state = RoundtableAgent.State.WAITING
+            speaker = select_next_speaker(agents)
+            if speaker is None:
+                raise RuntimeError("A roundtable must have a participant.")
+            speaker.state = RoundtableAgent.State.THINKING
+            RoundtableAgent.objects.bulk_update(agents, ["state"])
+            turn = Turn.objects.create(
+                id=uuid.uuid4(),
+                roundtable=room,
+                roundtable_agent=speaker,
+                round_number=1,
+            )
+
+            events = [
+                (
+                    p.ROUND_STARTED,
+                    {"round": 1, "max_rounds": room.max_rounds, "topic": room.topic},
+                ),
+                (
+                    p.AGENT_THINKING,
+                    {
+                        "turn_id": str(turn.id),
+                        "round": 1,
+                        "agent_id": str(speaker.id),
+                        "agent_name": speaker.agent_profile.name,
+                    },
+                ),
+            ]
+            created: list[RoomEvent] = []
+            for event_type, payload in events:
+                created.append(_append_room_event(room, event_type, payload))
+            room.save(update_fields=["current_round", "status", "event_sequence", "updated_at"])
+            envelopes = [_event_envelope(event) for event in created]
+            _broadcast_after_commit(room.id, envelopes)
+            return 1, TurnSerializer(turn).data, envelopes
+
+        active_turn = (
+            Turn.objects.select_for_update()
+            .filter(roundtable=room, status=Turn.Status.PENDING)
+            .select_related("roundtable_agent__agent_profile")
+            .first()
+        )
+        if active_turn is not None:
+            return room.current_round, TurnSerializer(active_turn).data, []
+
+        speaker = select_next_speaker(agents)
+        if speaker is not None:
+            speaker.state = RoundtableAgent.State.THINKING
+            speaker.save(update_fields=["state"])
+            turn = Turn.objects.create(
+                id=uuid.uuid4(),
+                roundtable=room,
+                roundtable_agent=speaker,
+                round_number=room.current_round,
+            )
+            event = _append_room_event(
+                room,
+                p.AGENT_THINKING,
+                {
+                    "turn_id": str(turn.id),
+                    "round": room.current_round,
+                    "agent_id": str(speaker.id),
+                    "agent_name": speaker.agent_profile.name,
+                },
+            )
+            room.save(update_fields=["event_sequence", "updated_at"])
+            envelope = _event_envelope(event)
+            _broadcast_after_commit(room.id, [envelope])
+            return room.current_round, TurnSerializer(turn).data, [envelope]
+
+        if not RoomEvent.objects.filter(
+            roundtable=room,
+            event_type=p.ROUND_COMPLETED,
+            payload__round=room.current_round,
+        ).exists():
+            if room.current_round >= room.max_rounds:
+                room.status = Roundtable.Status.COMPLETED
+            event = _append_room_event(
+                room,
+                p.ROUND_COMPLETED,
+                {"round": room.current_round},
+            )
+            room.save(update_fields=["status", "event_sequence", "updated_at"])
+            envelope = _event_envelope(event)
+            _broadcast_after_commit(room.id, [envelope])
+            return room.current_round, None, [envelope]
+
+        return room.current_round, None, []
+
+
+def pass_turn(
+    roundtable_id: str,
+    guest_session_id: str,
+    turn_id: str,
+    roundtable_agent_id: str,
+) -> dict[str, Any] | None:
+    """Mark the scheduled Agent as having reviewed the discussion and passed."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+        turn = (
+            Turn.objects.select_for_update()
+            .select_related("roundtable_agent__agent_profile")
+            .filter(id=turn_id, roundtable=room, status=Turn.Status.PENDING)
+            .first()
+        )
+        if turn is None:
+            raise ValidationError({"turn_id": "turn 已过期、重复或不属于当前圆桌。"})
+        agent = turn.roundtable_agent
+        if str(agent.id) != roundtable_agent_id:
+            raise ValidationError({"roundtable_agent_id": "提交者不是当前 turn 的发言人。"})
+
+        turn.status = Turn.Status.PASSED
+        turn.completed_at = timezone.now()
+        turn.save(update_fields=["status", "completed_at"])
+        agent.state = RoundtableAgent.State.PASSED
+        agent.save(update_fields=["state"])
+        event = _append_room_event(
+            room,
+            p.AGENT_PASSED,
+            {
+                "turn_id": str(turn.id),
+                "round": turn.round_number,
+                "agent_id": str(agent.id),
+                "agent_name": agent.agent_profile.name,
+            },
+        )
+        room.save(update_fields=["event_sequence", "updated_at"])
+        envelope = _event_envelope(event)
+        _broadcast_after_commit(room.id, [envelope])
+        return envelope
 
 
 join_snapshot = database_sync_to_async(_join_snapshot)

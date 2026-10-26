@@ -28,7 +28,9 @@ final class AppModel {
     private(set) var streamState: StreamState = .idle
     private(set) var isCreating = false
     private(set) var isMockRunning = false
+    var isFirstRoundRunning = false
     private(set) var createError: String?
+    var scheduledTurn: ScheduledTurn?
 
     /// One real-provider turn at a time (Issue #4). Scheduling three agents in
     /// order is Issue #5's job.
@@ -38,6 +40,8 @@ final class AppModel {
         case typing(agentID: UUID, text: String)
         case submitting(agentID: UUID)
         case completed(agentID: UUID)
+        case passed(agentID: UUID)
+        case roundCompleted(round: Int)
         /// `partial` keeps the streamed text so a failed turn is retryable
         /// without losing what the model already produced (PRD 7.12).
         case failed(agentID: UUID, message: String, partial: String?)
@@ -45,7 +49,7 @@ final class AppModel {
         var isBusy: Bool {
             switch self {
             case .thinking, .typing, .submitting: return true
-            case .idle, .completed, .failed: return false
+            case .idle, .completed, .passed, .roundCompleted, .failed: return false
             }
         }
     }
@@ -264,6 +268,8 @@ final class AppModel {
         room = nil
         streamState = .idle
         turnState = .idle
+        scheduledTurn = nil
+        isFirstRoundRunning = false
     }
 
     // MARK: - Helpers

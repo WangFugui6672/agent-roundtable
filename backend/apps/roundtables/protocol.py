@@ -15,6 +15,7 @@ ROOM_JOINED = "room.joined"
 ROUND_STARTED = "round.started"
 AGENT_THINKING = "agent.thinking"
 AGENT_TYPING = "agent.typing"
+AGENT_PASSED = "agent.passed"
 MESSAGE_COMPLETED = "message.completed"
 ROUND_COMPLETED = "round.completed"
 
