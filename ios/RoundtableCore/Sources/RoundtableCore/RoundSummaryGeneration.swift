@@ -66,6 +66,14 @@ public enum StructuredSummaryParser {
 
     public static func parse(_ raw: String, transcript: [Message]) throws -> SummaryDraft {
         guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == Set(["consensus", "dissent", "recommendations", "unresolved"]),
+              object.values.allSatisfy({ value in
+                  guard let section = value as? [[String: Any]] else { return false }
+                  return section.allSatisfy {
+                      Set($0.keys) == Set(["text", "reference_indexes"])
+                  }
+              }),
               let output = try? JSONDecoder.roundtable.decode(SummaryModelOutput.self, from: data)
         else {
             throw StructuredSummaryError.invalidJSON

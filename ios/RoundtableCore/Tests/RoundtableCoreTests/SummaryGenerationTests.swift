@@ -48,6 +48,29 @@ final class SummaryGenerationTests: XCTestCase {
         }
     }
 
+    func testStructuredSummaryRejectsUnknownFields() throws {
+        let output = """
+        {
+          "consensus": [
+            {
+              "text": "先完成可验证的小实验。",
+              "reference_indexes": [0],
+              "source_url": "https://example.com"
+            }
+          ],
+          "dissent": [],
+          "recommendations": [],
+          "unresolved": []
+        }
+        """
+
+        XCTAssertThrowsError(
+            try StructuredSummaryParser.parse(output, transcript: transcriptMessages())
+        ) { error in
+            XCTAssertEqual(error as? StructuredSummaryError, .invalidJSON)
+        }
+    }
+
     func testRuleBasedFallbackIsMarkedDegradedAndOnlyCitesExistingClaims() throws {
         let transcript = try transcriptMessages()
 

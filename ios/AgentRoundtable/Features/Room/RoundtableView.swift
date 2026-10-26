@@ -17,7 +17,7 @@ struct RoundtableView: View {
             Divider()
             if room.status == .completed {
                 CompletedRoomBar(room: room)
-            } else {
+            } else if room.status != .summarizing {
                 UserControlBar(room: room)
             }
         }
@@ -264,7 +264,11 @@ struct RoundtableView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if room.messages.isEmpty && room.failures.isEmpty && turn.draft == nil {
+                    if room.messages.isEmpty,
+                       room.failures.isEmpty,
+                       turn.draft == nil,
+                       room.summary == nil,
+                       room.status != .summarizing {
                         emptyState
                     } else {
                         ForEach(room.messages) { message in
