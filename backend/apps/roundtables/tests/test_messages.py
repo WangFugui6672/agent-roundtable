@@ -35,9 +35,20 @@ def make_room() -> Roundtable:
     return room
 
 
-def payload(room: Roundtable, **overrides) -> dict:
-    agent = room.agents.order_by("position").first()
+def start_next_turn(api_client, room: Roundtable) -> dict:
+    response = api_client.post(
+        f"/api/v1/roundtables/{room.id}/turns/next",
+        format="json",
+        HTTP_X_GUEST_SESSION=str(room.guest_session_id),
+    )
+    assert response.status_code == 200
+    return response.json()["turn"]
+
+
+def payload(room: Roundtable, turn: dict, **overrides) -> dict:
+    agent = RoundtableAgent.objects.get(id=turn["roundtable_agent_id"])
     body = {
+        "turn_id": turn["turn_id"],
         "roundtable_agent_id": str(agent.id),
         "message_type": "proposal",
         "claim": "先用一个两周的验证性实验确认假设。",
@@ -48,11 +59,13 @@ def payload(room: Roundtable, **overrides) -> dict:
     return body
 
 
-def post(api_client, room: Roundtable, **overrides):
+def post(api_client, room: Roundtable, turn: dict | None = None, **overrides):
+    if turn is None:
+        turn = start_next_turn(api_client, room)
     headers = {"HTTP_X_GUEST_SESSION": str(room.guest_session_id)}
     return api_client.post(
         f"/api/v1/roundtables/{room.id}/messages",
-        payload(room, **overrides),
+        payload(room, turn, **overrides),
         format="json",
         **headers,
     )
@@ -61,16 +74,19 @@ def post(api_client, room: Roundtable, **overrides):
 def test_returns_message_completed_envelope(api_client):
     room = make_room()
     agent = room.agents.order_by("position").first()
+    turn = start_next_turn(api_client, room)
 
-    response = post(api_client, room)
+    response = post(api_client, room, turn)
 
     assert response.status_code == 201
     envelope = response.json()
     assert envelope["event_type"] == "message.completed"
     assert envelope["room_id"] == str(room.id)
-    assert envelope["sequence"] == 1
+    assert envelope["sequence"] == 3
 
     message = envelope["payload"]["message"]
+    assert message["turn_id"] == turn["turn_id"]
+    assert message["round_number"] == 1
     assert message["author"]["roundtable_agent_id"] == str(agent.id)
     assert message["author"]["agent_key"] == "advocate"
     assert message["author"]["name"] == "方案派"
@@ -91,14 +107,16 @@ def test_persists_message_row_and_advances_room(api_client):
     stored = Message.objects.get(id=message_id)
     assert stored.roundtable == room
     assert stored.roundtable_agent == agent
+    assert stored.turn_id is not None
+    assert stored.round_number == 1
     assert RoomEvent.objects.filter(
-        roundtable=room, sequence=1, event_type="message.completed"
+        roundtable=room, sequence=3, event_type="message.completed"
     ).exists()
 
     agent.refresh_from_db()
     assert agent.state == RoundtableAgent.State.COMPLETED
     room.refresh_from_db()
-    assert room.event_sequence == 1
+    assert room.event_sequence == 3
     assert room.status == Roundtable.Status.RUNNING
 
 
@@ -108,9 +126,9 @@ def test_sequence_increments_per_message(api_client):
     first = post(api_client, room)
     second = post(api_client, room, message_type="challenge", claim="我不同意。")
 
-    assert first.json()["sequence"] == 1
-    assert second.json()["sequence"] == 2
-    assert RoomEvent.objects.filter(roundtable=room).count() == 2
+    assert first.json()["sequence"] == 3
+    assert second.json()["sequence"] == 5
+    assert RoomEvent.objects.filter(roundtable=room).count() == 5
 
 
 def test_accepts_reference_to_a_message_in_the_same_room(api_client):
@@ -135,8 +153,9 @@ def test_rejects_agent_from_another_roundtable(api_client):
     room = make_room()
     other_room = make_room()
     foreign_agent = other_room.agents.order_by("position").first()
+    turn = start_next_turn(api_client, room)
 
-    response = post(api_client, room, roundtable_agent_id=str(foreign_agent.id))
+    response = post(api_client, room, turn, roundtable_agent_id=str(foreign_agent.id))
 
     assert response.status_code == 400
     assert "roundtable_agent_id" in response.json()["error"]["details"]
@@ -169,11 +188,18 @@ def test_rejects_empty_body_unless_pass(api_client):
     room = make_room()
 
     empty = post(api_client, room, body="   ")
-    silent = post(api_client, room, message_type="pass", body="", claim="这一轮选择沉默。")
+    silent = post(
+        api_client,
+        room,
+        message_type="pass",
+        body="",
+        claim="这一轮选择沉默。",
+    )
 
     assert empty.status_code == 400
     assert "body" in empty.json()["error"]["details"]
-    assert silent.status_code == 201
+    assert silent.status_code == 400
+    assert "message_type" in silent.json()["error"]["details"]
 
 
 def test_rejects_claim_over_limit(api_client):
@@ -221,10 +247,11 @@ def test_rejects_api_key_in_message_payload(api_client):
 def test_requires_guest_session_ownership(api_client):
     room = make_room()
     stranger = GuestSession.objects.create(id=uuid.uuid4())
+    turn = start_next_turn(api_client, room)
 
     response = api_client.post(
         f"/api/v1/roundtables/{room.id}/messages",
-        payload(room),
+        payload(room, turn),
         format="json",
         HTTP_X_GUEST_SESSION=str(stranger.id),
     )
@@ -244,7 +271,7 @@ def test_join_payload_includes_persisted_messages():
     async def scenario():
         communicator = WebsocketCommunicator(
             application,
-            f"/ws/v1/roundtables/{room.id}/?guest_session={room.guest_session_id}",
+            (f"/ws/v1/roundtables/{room.id}/?guest_session={room.guest_session_id}&cursor=2"),
         )
         connected, _ = await communicator.connect()
         assert connected
@@ -262,13 +289,14 @@ def test_join_payload_includes_persisted_messages():
 @pytest.mark.django_db(transaction=True)
 def test_message_is_broadcast_to_connected_socket(api_client):
     room = make_room()
+    turn = start_next_turn(api_client, room)
 
     import asyncio
 
     async def scenario():
         communicator = WebsocketCommunicator(
             application,
-            f"/ws/v1/roundtables/{room.id}/?guest_session={room.guest_session_id}",
+            (f"/ws/v1/roundtables/{room.id}/?guest_session={room.guest_session_id}&cursor=2"),
         )
         connected, _ = await communicator.connect()
         assert connected
@@ -277,7 +305,7 @@ def test_message_is_broadcast_to_connected_socket(api_client):
         response = await sync_to_async(
             lambda: api_client.post(
                 f"/api/v1/roundtables/{room.id}/messages",
-                payload(room),
+                payload(room, turn),
                 format="json",
                 HTTP_X_GUEST_SESSION=str(room.guest_session_id),
             )
@@ -290,7 +318,8 @@ def test_message_is_broadcast_to_connected_socket(api_client):
 
     assert response.status_code == 201
     assert received["event_type"] == "message.completed"
-    assert received["sequence"] == 1
+    assert received["sequence"] == 3
+    assert received["payload"]["message"]["turn_id"] == turn["turn_id"]
     assert received["payload"]["message"]["claim"] == "先用一个两周的验证性实验确认假设。"
 
 
@@ -298,17 +327,18 @@ def test_api_keys_never_reach_logs_or_storage(api_client, caplog):
     room = make_room()
     caplog.set_level(logging.INFO)
     headers = {"HTTP_X_GUEST_SESSION": str(room.guest_session_id)}
+    turn = start_next_turn(api_client, room)
 
     accepted = api_client.post(
         f"/api/v1/roundtables/{room.id}/messages",
-        payload(room),
+        payload(room, turn),
         format="json",
         HTTP_AUTHORIZATION="Bearer sk-log-should-not-appear",
         **headers,
     )
     rejected = api_client.post(
         f"/api/v1/roundtables/{room.id}/messages",
-        payload(room, api_key="sk-log-should-not-appear"),
+        payload(room, turn, api_key="sk-log-should-not-appear"),
         format="json",
         **headers,
     )
@@ -322,13 +352,18 @@ def test_api_keys_never_reach_logs_or_storage(api_client, caplog):
 
 def post_via_orm(room: Roundtable, claim: str) -> None:
     """Create a message through the service layer, skipping HTTP."""
-    from apps.roundtables.services import create_message
+    from apps.roundtables.services import create_message, next_turn
 
-    agent = room.agents.order_by("position").first()
+    result = next_turn(str(room.id), str(room.guest_session_id))
+    assert result is not None
+    _, turn, _ = result
+    assert turn is not None
+    agent = RoundtableAgent.objects.get(id=turn["roundtable_agent_id"])
     create_message(
         str(room.id),
         str(room.guest_session_id),
         {
+            "turn_id": uuid.UUID(turn["turn_id"]),
             "roundtable_agent_id": agent.id,
             "message_type": Message.Type.PROPOSAL,
             "claim": claim,

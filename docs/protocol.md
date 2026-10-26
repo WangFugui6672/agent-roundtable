@@ -1,6 +1,6 @@
-# Agent Roundtable 协议 v1（Mock 纵向切片）
+# Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #2）
+**状态：** 实现中（Issue #5）
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -128,6 +128,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
   "max_rounds": 2,
   "current_round": 0,
   "last_sequence": 0,
+  "active_turn": null,
   "provider": {
     "kind": "deepseek",
     "base_url": "https://api.deepseek.com/v1",
@@ -149,6 +150,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 `status`：`draft | ready | running | paused | summarizing | completed | failed | archived`
 `state`：`waiting | thinking | typing | passed | completed | failed`
 `last_sequence`：该圆桌已持久化的最大事件序号，客户端用它初始化游标。
+`active_turn`：当前待执行的 turn；没有在途 turn 时为 `null`。字段形状见 2.8，重连客户端用 `turn_id` 继续或拒绝过期回报。
 `provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
 
 ### 2.7 提交结构化发言
@@ -157,6 +159,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 
 ```json
 {
+  "turn_id": "<turn.id>",
   "roundtable_agent_id": "d00d...",
   "message_type": "proposal",
   "claim": "先用一个两周的验证性实验确认假设。",
@@ -167,10 +170,11 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 }
 ```
 
-- `roundtable_agent_id`：必须是该圆桌的参与者。
-- `message_type`：`proposal | support | challenge | supplement | question | pass | summary`。
+- `turn_id`：必填，必须是服务端签发给该圆桌且仍为 `pending` 的 turn。
+- `roundtable_agent_id`：必须同时是该圆桌的参与者和该 turn 的 Agent。
+- `message_type`：`proposal | support | challenge | supplement | question | summary`。`pass` 不能作为普通发言提交，必须使用 2.9。
 - `claim`：1-80 字符，去除首尾空白。
-- `body`：不能超过该 Agent 的 `max_reply_chars`（预设 Agent 为 180），同时受 2000 字符的硬上限保护；`pass` 允许空正文，其他类型必填。
+- `body`：不能超过该 Agent 的 `max_reply_chars`（预设 Agent 为 180），同时受 2000 字符的硬上限保护；必填。
 - `stance`：`support | challenge | supplement | question | null`；空字符串视同 `null`。
 - `references`：最多 3 条，必须是**同一圆桌**已持久化的消息。
 - `confidence`：0-1，默认 `0.6`。
@@ -193,9 +197,89 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 
 服务端在同一事务里：写入消息、把该 Agent 的状态置为 `completed`、必要时把圆桌从 `ready` 或 `paused` 推进到 `running`、`event_sequence` 加一、写入 `room_event`。提交成功后还会通过 channel layer 广播给该房间已连接的 WebSocket。
 
-> 当前 channel layer 是 Django Channels 的 `InMemoryChannelLayer`，只在单进程内广播；Issue #5 引入 Redis 后改为跨进程。
+turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使用过期 `turn_id` 都会返回 `400 validation_error`，不会写入第二条消息或事件。
 
-**为什么由客户端提交**：模型请求由 iOS 直连 Provider（ADR 0001），Django 只负责校验与持久化，所以消息一定经过一次 HTTP 提交；`agent.thinking` / `agent.typing` 是客户端本地状态，本切片不落库。
+> 当前 channel layer 是 Django Channels 的 `InMemoryChannelLayer`，只在单进程内广播；跨进程广播仍需接入 Redis。
+
+**为什么由客户端提交**：模型请求由 iOS 直连 Provider（ADR 0001），Django 只负责签发 turn、校验与持久化，所以消息一定经过一次 HTTP 提交。调度事件由服务端持久化和广播；实际逐字流仍只存在于发起请求的客户端。
+
+### 2.8 获取下一位发言人
+
+`POST /api/v1/roundtables/{id}/turns/next`，需要 `X-Guest-Session`，且必须是创建者。请求体为空。
+
+```json
+{
+  "round": 1,
+  "turn": {
+    "turn_id": "a11c...",
+    "round": 1,
+    "roundtable_agent_id": "d00d...",
+    "position": 0,
+    "agent_key": "advocate",
+    "agent_name": "方案派"
+  },
+  "events": [
+    {
+      "event_id": "0f9a...",
+      "room_id": "c0de...",
+      "sequence": 1,
+      "created_at": "2026-10-26T01:02:03.456Z",
+      "event_type": "round.started",
+      "payload": {"round": 1, "max_rounds": 2, "topic": "..."}
+    },
+    {
+      "event_id": "0f9b...",
+      "room_id": "c0de...",
+      "sequence": 2,
+      "created_at": "2026-10-26T01:02:03.456Z",
+      "event_type": "agent.thinking",
+      "payload": {
+        "turn_id": "a11c...",
+        "round": 1,
+        "agent_id": "d00d...",
+        "agent_name": "方案派"
+      }
+    }
+  ]
+}
+```
+
+- 服务端在一个事务内锁定圆桌、选择下一位 Agent、写入 `Turn` 和持久化事件，再通过统一服务入口广播。
+- 同一圆桌最多存在一个 `pending` turn。iOS 重复请求时返回同一个 `turn_id` 和空 `events`，不会重复签发。
+- 当前所有 Agent 已 `completed` 或 `passed` 时，`turn` 为 `null`，`events` 中包含唯一的 `round.completed`；重复请求不再追加事件。
+- `turn_id` 是后续消息完成、失败或 pass 的唯一回合身份。iOS 不得自行生成或替换。
+- `agent.thinking` 表示服务端已把该 turn 签发给客户端；`agent.typing` 和逐字 delta 仍是本地临时状态。
+
+### 2.9 Agent 选择沉默
+
+`POST /api/v1/roundtables/{id}/turns/pass`，需要 `X-Guest-Session`，且必须是创建者：
+
+```json
+{
+  "turn_id": "a11c...",
+  "roundtable_agent_id": "d00d..."
+}
+```
+
+两个字段必须属于当前 `pending` turn。成功时 `201` 返回该 turn 对应的 `agent.passed` 事件：
+
+```json
+{
+  "event_id": "0f9c...",
+  "room_id": "c0de...",
+  "sequence": 3,
+  "created_at": "2026-10-26T01:02:03.456Z",
+  "event_type": "agent.passed",
+  "payload": {
+    "turn_id": "a11c...",
+    "round": 1,
+    "agent_id": "d00d...",
+    "agent_name": "方案派"
+  }
+}
+```
+
+`pass` 只关闭 turn 并改变参与者状态，**不会创建普通 `Message`**，也不会被当作有效观点参与引用或后续调度。重复 pass 返回 `400 validation_error`，不会重复产生事件。
 
 ## 3. WebSocket
 
@@ -234,7 +318,7 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 1. 服务端接受连接后发送 `room.joined`。
 2. 若请求带 `cursor`，随后按 `sequence` 升序补发 `sequence > cursor` 的历史事件。
-3. 之后的实时事件沿用同一连接推送。REST 提交的发言也会以 `message.completed` 事件广播到该连接。
+3. 之后的实时事件沿用同一连接推送。REST 签发 turn、提交发言和 pass 产生的事件都经统一服务入口广播到该连接。
 
 ### 3.4 事件类型
 
@@ -242,9 +326,9 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 | --- | --- | --- |
 | `room.joined` | `{"roundtable": <快照>, "messages": [<Message>]}` | 进入圆桌；`messages` 为该圆桌已持久化的发言，按创建时间升序，用于首次渲染 |
 | `round.started` | `{"round": 1, "max_rounds": 2, "topic": "..."}` | 一轮开始 |
-| `agent.thinking` | `{"agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | Agent 思考中 |
+| `agent.thinking` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | 服务端已签发本轮 turn |
 | `agent.typing` | `{"agent_id": "<RoundtableAgent.id>"}` | Agent 输入中 |
-| `agent.passed` | `{"agent_id": "<RoundtableAgent.id>"}` | Agent 选择沉默（Mock 切片暂不产生） |
+| `agent.passed` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | Agent 明确选择沉默，不产生普通消息 |
 | `message.delta` | `{"message_id": "...", "delta": "..."}` | 流式片段（Mock 切片暂不产生） |
 | `message.completed` | `{"message": <Message>}` | 一条结构化发言完成 |
 | `round.completed` | `{"round": 1}` | 一轮结束 |
@@ -256,6 +340,8 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 ```json
 {
   "id": "6f0e...",
+  "turn_id": "a11c...",
+  "round_number": 1,
   "author": {"roundtable_agent_id": "d00d...", "agent_key": "skeptic", "name": "质疑派"},
   "message_type": "challenge",
   "claim": "一句话主张",
@@ -267,20 +353,31 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 }
 ```
 
-`message_type`：`proposal | support | challenge | supplement | question | pass | summary`
+`message_type`：`proposal | support | challenge | supplement | question | summary`
 `stance`：`support | challenge | supplement | question | null`
 
-### 3.5 客户端命令
+真实 Agent 的普通消息必须带服务端签发的 `turn_id`；Mock 消息的 `turn_id` 为 `null`，但仍带 `round_number`。
 
-Mock 切片只需要一条命令：
+### 3.5 客户端命令与第一轮流程
+
+真实第一轮由 REST 握手驱动：
+
+1. iOS 调用 `POST /turns/next` 取得唯一 `turn_id`。
+2. iOS 直连 Provider，仅由当前被调度的 Agent 生成内容。
+3. 有有效观点时调用 `POST /messages`；无独立观点时调用 `POST /turns/pass`。
+4. iOS 再次调用 `POST /turns/next`，直到返回 `turn: null` 和 `round.completed`。
+
+客户端在任一时刻只执行一个 turn。Provider 失败时保留待处理 turn，用户重试后重新请求 `turns/next`，服务端返回同一个 `turn_id`。
+
+Mock 演示仍支持一条 WebSocket 命令：
 
 ```json
 {"event_type": "mock.run"}
 ```
 
-服务端执行一轮脚本化 Mock 讨论（11 个事件），每个事件都已持久化。达到 `max_rounds` 后再发送不会产生任何事件。
+服务端执行一轮脚本化 Mock 讨论（11 个事件），每个事件都已持久化并经同一服务入口广播。达到 `max_rounds` 后再发送不会产生任何事件。
 
-> Mock 命令是 Issue #2 的临时桥梁：轮次调度器（Issue #5）落地后，事件改由服务端自动驱动，客户端不再发送 `mock.run`。未知命令一律忽略，便于客户端向前兼容地探测能力。
+> `mock.run` 仅用于确定性演示和 UI 测试，不参与真实 Provider 的 turn 调度。未知命令一律忽略，便于客户端向前兼容地探测能力。
 
 ### 3.6 Mock 一轮的事件序列
 
@@ -307,3 +404,4 @@ round.completed
 - 即使事件类型未知、payload 未被渲染，游标也要前进到该 `sequence`，否则重连会反复补发同一条事件。
 - 未知 `event_type` 必须被忽略而不是报错，以支持服务端向前演进。
 - `room.joined` 用于渲染参与者与空圆桌状态；`sequence == 0` 不参与游标计算。
+- 重连后优先使用快照中的 `active_turn.turn_id` 恢复在途回合，不得自行创建替代 turn。

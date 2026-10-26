@@ -224,6 +224,17 @@ final class MessageComposerTests: XCTestCase {
         )
     }
 
+    private func turn(for participant: Participant) -> ScheduledTurn {
+        ScheduledTurn(
+            turnId: Fixtures.turnID,
+            round: 1,
+            roundtableAgentId: participant.id,
+            position: participant.position,
+            agentKey: participant.agent.key,
+            agentName: participant.agent.name
+        )
+    }
+
     func testMapsPresetRolesToMessageTypes() {
         XCTAssertEqual(MessageComposer.mapping(for: "advocate").0, .proposal)
         XCTAssertNil(MessageComposer.mapping(for: "advocate").1)
@@ -233,10 +244,17 @@ final class MessageComposerTests: XCTestCase {
         XCTAssertEqual(MessageComposer.mapping(for: "experience").1, .supplement)
     }
 
+    func testRecognizesAnExplicitPassWithoutCreatingAnOpinion() {
+        XCTAssertTrue(MessageComposer.isPass(" PASS \n"))
+        XCTAssertFalse(MessageComposer.isPass("PASS 之后仍然有一个新观点。"))
+    }
+
     func testClaimIsFirstSentenceAndBodyIsTruncated() {
+        let participant = participant(key: "skeptic")
         let submission = MessageComposer.compose(
-            participant: participant(key: "skeptic"),
-            text: "这个方案的风险在于指标自选。后面还有很多解释，但主张只需要第一句。"
+            participant: participant,
+            text: "这个方案的风险在于指标自选。后面还有很多解释，但主张只需要第一句。",
+            turn: turn(for: participant)
         )
 
         XCTAssertEqual(submission.claim, "这个方案的风险在于指标自选")
@@ -248,18 +266,22 @@ final class MessageComposerTests: XCTestCase {
     }
 
     func testClaimIsCappedAt80Characters() {
+        let participant = participant(key: "advocate")
         let submission = MessageComposer.compose(
-            participant: participant(key: "advocate"),
-            text: String(repeating: "长", count: 200)
+            participant: participant,
+            text: String(repeating: "长", count: 200),
+            turn: turn(for: participant)
         )
 
         XCTAssertEqual(submission.claim.count, 80)
     }
 
     func testSubmissionEncodesWithoutSecrets() throws {
+        let participant = participant(key: "advocate")
         let submission = MessageComposer.compose(
-            participant: participant(key: "advocate"),
-            text: "先做一个两周实验。"
+            participant: participant,
+            text: "先做一个两周实验。",
+            turn: turn(for: participant)
         )
 
         let data = try JSONEncoder.roundtable.encode(submission)
@@ -269,6 +291,7 @@ final class MessageComposerTests: XCTestCase {
         XCTAssertEqual(json["claim"] as? String, "先做一个两周实验")
         XCTAssertEqual(json["confidence"] as? Double, 0.6)
         XCTAssertNotNil(json["roundtable_agent_id"])
+        XCTAssertEqual(json["turn_id"] as? String, Fixtures.turnID.uuidString)
         for key in json.keys {
             XCTAssertFalse(key.lowercased().contains("key"), "unexpected secret field: \(key)")
         }
@@ -298,6 +321,7 @@ final class AgentPromptTests: XCTestCase {
         XCTAssertTrue(prompt.contains("180"))
         XCTAssertTrue(prompt.contains(topic))
         XCTAssertTrue(prompt.contains("空泛表态"))
+        XCTAssertTrue(prompt.contains("只输出 PASS"))
     }
 
     func testUserPromptIncludesTranscript() {

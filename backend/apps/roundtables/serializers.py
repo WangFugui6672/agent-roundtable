@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 
 from rest_framework import serializers
 
-from apps.roundtables.models import AgentProfile, Message, Roundtable, RoundtableAgent
+from apps.roundtables.models import AgentProfile, Message, Roundtable, RoundtableAgent, Turn
 from apps.roundtables.protocol import (
     BODY_HARD_MAX_CHARS,
     CLAIM_MAX_CHARS,
@@ -59,6 +59,27 @@ class ParticipantSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class TurnSerializer(serializers.ModelSerializer):
+    turn_id = serializers.UUIDField(source="id", read_only=True)
+    round = serializers.IntegerField(source="round_number", read_only=True)
+    roundtable_agent_id = serializers.UUIDField(source="roundtable_agent.id", read_only=True)
+    position = serializers.IntegerField(source="roundtable_agent.position", read_only=True)
+    agent_key = serializers.CharField(source="roundtable_agent.agent_profile.key", read_only=True)
+    agent_name = serializers.CharField(source="roundtable_agent.agent_profile.name", read_only=True)
+
+    class Meta:
+        model = Turn
+        fields = [
+            "turn_id",
+            "round",
+            "roundtable_agent_id",
+            "position",
+            "agent_key",
+            "agent_name",
+        ]
+        read_only_fields = fields
+
+
 class ProviderMetadataSerializer(serializers.Serializer):
     """Non-secret provider snapshot (GLOSSARY: Provider 配置).
 
@@ -83,6 +104,7 @@ class RoundtableSerializer(serializers.ModelSerializer):
     participants = ParticipantSerializer(source="agents", many=True, read_only=True)
     last_sequence = serializers.IntegerField(source="event_sequence", read_only=True)
     provider = serializers.SerializerMethodField()
+    active_turn = serializers.SerializerMethodField()
     created_at = serializers.SerializerMethodField()
     updated_at = serializers.SerializerMethodField()
 
@@ -96,6 +118,7 @@ class RoundtableSerializer(serializers.ModelSerializer):
             "max_rounds",
             "current_round",
             "last_sequence",
+            "active_turn",
             "provider",
             "created_at",
             "updated_at",
@@ -111,6 +134,16 @@ class RoundtableSerializer(serializers.ModelSerializer):
             "base_url": obj.provider_base_url,
             "model": obj.provider_model,
         }
+
+    def get_active_turn(self, obj: Roundtable) -> dict | None:
+        turn = (
+            Turn.objects.filter(roundtable=obj, status=Turn.Status.PENDING)
+            .select_related("roundtable_agent__agent_profile")
+            .first()
+        )
+        if turn is None:
+            return None
+        return TurnSerializer(turn).data
 
     def get_created_at(self, obj: Roundtable) -> str:
         return iso8601_millis(obj.created_at)
@@ -154,11 +187,14 @@ class MessageSerializer(serializers.ModelSerializer):
     references = serializers.SerializerMethodField()
     created_at = serializers.SerializerMethodField()
     stance = serializers.SerializerMethodField()
+    turn_id = serializers.UUIDField(source="turn.id", allow_null=True, read_only=True)
 
     class Meta:
         model = Message
         fields = [
             "id",
+            "turn_id",
+            "round_number",
             "author",
             "message_type",
             "claim",
@@ -196,6 +232,7 @@ class MessageCreateSerializer(serializers.Serializer):
     client and the server agree on the cap.
     """
 
+    turn_id = serializers.UUIDField()
     roundtable_agent_id = serializers.UUIDField()
     message_type = serializers.ChoiceField(choices=Message.Type.choices)
     claim = serializers.CharField(max_length=CLAIM_MAX_CHARS, trim_whitespace=True)
@@ -232,11 +269,16 @@ class MessageCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({"roundtable_agent_id": "该 Agent 不属于此圆桌。"})
         attrs["agent"] = agent
 
+        if attrs["message_type"] == Message.Type.PASS:
+            raise serializers.ValidationError(
+                {"message_type": "沉默必须通过 turns/pass 提交，不能作为普通发言。"}
+            )
+
         body = attrs.get("body", "")
         limit = agent.agent_profile.max_reply_chars
         if len(body) > limit:
             raise serializers.ValidationError({"body": f"正文超过 {limit} 字上限。"})
-        if attrs["message_type"] != Message.Type.PASS and not body:
+        if not body:
             raise serializers.ValidationError({"body": "正文不能为空。"})
 
         references = attrs.get("references") or []
@@ -249,3 +291,8 @@ class MessageCreateSerializer(serializers.Serializer):
                     {"references": "引用的消息不存在或不属于此圆桌。"}
                 )
         return attrs
+
+
+class TurnPassSerializer(serializers.Serializer):
+    turn_id = serializers.UUIDField()
+    roundtable_agent_id = serializers.UUIDField()

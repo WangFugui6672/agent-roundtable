@@ -44,9 +44,9 @@ final class RealTurnUITests: XCTestCase {
             "没有进入空圆桌：\(app.debugDescription)"
         )
 
-        let speak = app.buttons["room.speak.0"]
-        XCTAssertTrue(speak.waitForExistence(timeout: 5))
-        speak.tap()
+        let startRound = app.buttons["room.round.start"]
+        XCTAssertTrue(startRound.waitForExistence(timeout: 5))
+        startRound.tap()
 
         let error = app.descendants(matching: .any).matching(identifier: "room.turn.error").firstMatch
         XCTAssertTrue(
