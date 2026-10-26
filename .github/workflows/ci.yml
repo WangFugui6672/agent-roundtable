@@ -63,8 +63,10 @@ jobs:
         working-directory: ios
     steps:
       - uses: actions/checkout@v4
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen and SwiftLint
+        run: brew install xcodegen swiftlint
+      - name: Lint Swift
+        run: swiftlint lint --strict
       - name: Test RoundtableCore
         working-directory: ios/RoundtableCore
         run: swift test

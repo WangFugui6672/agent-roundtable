@@ -89,12 +89,14 @@ public struct ProviderProbe: Sendable {
     /// Model IDs from an OpenAI-style `{"data": [{"id": "..."}]}` body, or nil
     /// when the provider returns something else (some proxies answer `{}`).
     private static func modelIDs(from data: Data) -> [String]? {
-        struct ModelList: Decodable {
-            struct Entry: Decodable {
-                let id: String?
-            }
-            let data: [Entry]?
-        }
-        return (try? JSONDecoder().decode(ModelList.self, from: data))?.data?.compactMap(\.id)
+        (try? JSONDecoder().decode(ModelList.self, from: data))?.data?.compactMap(\.id)
     }
+}
+
+private struct ModelList: Decodable {
+    struct Entry: Decodable {
+        let id: String?
+    }
+
+    let data: [Entry]?
 }

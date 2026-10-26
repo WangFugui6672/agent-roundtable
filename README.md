@@ -41,6 +41,7 @@ docs/
   PRD.md                  产品需求
   protocol.md             REST + WebSocket 协议（唯一接口契约）
   adr/                    架构决策记录
+  agents/coding-standards.md  编码与评审判例
 docker-compose.yml        本地 PostgreSQL
 ```
 
@@ -79,9 +80,10 @@ open ios/AgentRoundtable.xcodeproj
 ## 测试与检查
 
 ```bash
-make verify       # ruff + pytest + RoundtableCore 编译
+make verify       # ruff + pytest + RoundtableCore 编译 + SwiftLint
 make backend-test # 44 个后端测试（含 WebSocket 集成测试与 Provider 快照校验）
 make ios-test     # 47 个 RoundtableCore 测试（需要 Xcode 提供 XCTest）
+make ios-lint     # SwiftLint --strict（首次需 brew install swiftlint）
 make ios-app-test # 16 个 App 单元测试（Keychain 与 Provider 状态，需模拟器签名）
 ```
 
@@ -93,7 +95,7 @@ cd ios && xcodebuild test -project AgentRoundtable.xcodeproj -scheme AgentRoundt
   -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
 
-iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Command Line Tools 不包含 XCTest）。Keychain 测试需要模拟器的 ad-hoc 签名（`CODE_SIGNING_ALLOWED=NO` 会让 Keychain 返回 `errSecMissingEntitlement`），所以用 `make ios-app-test` 或去掉该参数的 `xcodebuild test`。CI 的 `iOS` job 在 `macos-15` 上执行 `swift test` 与模拟器编译（`build-for-testing`）。
+iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Command Line Tools 不包含 XCTest）。Keychain 测试需要模拟器的 ad-hoc 签名（`CODE_SIGNING_ALLOWED=NO` 会让 Keychain 返回 `errSecMissingEntitlement`），所以用 `make ios-app-test` 或去掉该参数的 `xcodebuild test`。CI 的 `iOS` job 在 `macos-15` 上执行 SwiftLint、`swift test` 与模拟器编译（`build-for-testing`）。
 
 ## 协议
 
@@ -118,7 +120,7 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - Redis 与 Celery 尚未接入：当前切片没有跨进程广播与异步任务的需要，等调度器/总结阶段再引入。
 - iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
 - Provider 目前只保存配置与连通性校验，真实补全/流式调用由 Issue #4 实现；同一圆桌的所有 Agent 共用一套 Provider 配置。
-- PRD 18.5 要求的 SwiftLint/SwiftFormat 尚未接入：CI 目前覆盖后端检查、RoundtableCore 测试、iOS 编译与测试编译（`build-for-testing`），不执行 UI 测试（需要本地后端）。
+- SwiftLint 已接入（`ios/.swiftlint.yml`，`make verify` 与 CI 都执行 `--strict`）；UI 测试仍未在 CI 执行（需要本地后端），CI 只做 `build-for-testing`。
 - Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
 - AppModel 暂时直接持有 `APIClient`、`ProviderStore` 与 `ProviderProbe`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。
 - 匿名会话 ID 目前存 `UserDefaults`，它只是能力凭据、不含模型密钥；会话轮换与安全存储随隐私 Issue（#11）处理。

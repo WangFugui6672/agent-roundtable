@@ -261,7 +261,7 @@ final class AppModel {
             $0.baseURL == ProviderURL.normalized(baseURL: draft.baseURL)
         } ?? false
         guard sameBaseURL,
-              let stored = (try? providerStore.secret(for: draft.kind)) ?? nil,
+              let stored = try? providerStore.secret(for: draft.kind),
               !stored.isEmpty
         else { return draft }
 
