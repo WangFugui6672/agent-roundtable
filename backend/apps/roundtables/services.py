@@ -10,6 +10,7 @@ from typing import Any
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
@@ -173,7 +174,10 @@ def _expire_pending_turn(room: Roundtable, turn: Turn) -> RoomEvent:
     return _append_room_event(room, p.AGENT_FAILED, _turn_failure_payload(turn))
 
 
-def build_join_envelope(room: Roundtable) -> dict[str, Any]:
+def build_join_envelope(
+    room: Roundtable,
+    replay: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """``room.joined`` is an ephemeral snapshot, so its sequence stays 0."""
     messages = (
         room.messages.select_related("roundtable_agent__agent_profile")
@@ -183,16 +187,19 @@ def build_join_envelope(room: Roundtable) -> dict[str, Any]:
     failures = room.turns.filter(status=Turn.Status.FAILED).select_related(
         "roundtable_agent__agent_profile"
     )
+    payload: dict[str, Any] = {
+        "roundtable": RoundtableSerializer(room).data,
+        "messages": MessageSerializer(messages, many=True).data,
+        "failures": [_turn_failure_payload(turn) for turn in failures],
+    }
+    if replay is not None:
+        payload["replay"] = replay
     return p.make_envelope(
         event_id=p.new_event_id(),
         room_id=str(room.id),
         sequence=p.EPHEMERAL_SEQUENCE,
         event_type=p.ROOM_JOINED,
-        payload={
-            "roundtable": RoundtableSerializer(room).data,
-            "messages": MessageSerializer(messages, many=True).data,
-            "failures": [_turn_failure_payload(turn) for turn in failures],
-        },
+        payload=payload,
     )
 
 
@@ -219,19 +226,47 @@ def _broadcast_after_commit(roundtable_id: object, envelopes: list[dict[str, Any
     transaction.on_commit(lambda: _broadcast_room_events(roundtable_id, envelopes))
 
 
-def _join_snapshot(roundtable_id: str, guest_session_id: str) -> dict[str, Any] | None:
+def _replay_metadata(room: Roundtable, cursor: int) -> dict[str, Any]:
+    cutoff = timezone.now() - timedelta(days=settings.ROOM_EVENT_REPLAY_WINDOW_DAYS)
+    oldest_sequence = (
+        room.events.filter(created_at__gte=cutoff)
+        .order_by("sequence")
+        .values_list("sequence", flat=True)
+        .first()
+    )
+    latest_sequence = room.event_sequence
+    missing_from_window = cursor < latest_sequence and (
+        oldest_sequence is None or oldest_sequence > cursor + 1
+    )
+    return {
+        "requested_cursor": cursor,
+        "oldest_sequence": oldest_sequence,
+        "latest_sequence": latest_sequence,
+        "window_days": settings.ROOM_EVENT_REPLAY_WINDOW_DAYS,
+        "cursor_expired": cursor > latest_sequence or missing_from_window,
+    }
+
+
+def _join_snapshot(
+    roundtable_id: str,
+    guest_session_id: str,
+    cursor: int = 0,
+) -> dict[str, Any] | None:
     room = _room_for_session(roundtable_id, guest_session_id)
     if room is None:
         return None
-    return build_join_envelope(room)
+    return build_join_envelope(room, replay=_replay_metadata(room, cursor))
 
 
 def _events_after(roundtable_id: str, guest_session_id: str, cursor: int) -> list[dict[str, Any]]:
     if _room_for_session(roundtable_id, guest_session_id) is None:
         return []
-    events = RoomEvent.objects.filter(roundtable_id=roundtable_id, sequence__gt=cursor).order_by(
-        "sequence"
-    )
+    cutoff = timezone.now() - timedelta(days=settings.ROOM_EVENT_REPLAY_WINDOW_DAYS)
+    events = RoomEvent.objects.filter(
+        roundtable_id=roundtable_id,
+        sequence__gt=cursor,
+        created_at__gte=cutoff,
+    ).order_by("sequence")
     return [_event_envelope(event) for event in events]
 
 
@@ -297,6 +332,7 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
 
         agents_by_id = {str(agent.id): agent for agent in agents}
         created: list[RoomEvent] = []
+        persisted_messages: dict[str, Message] = {}
         for event_type, payload in script:
             if event_type == p.ROUND_STARTED:
                 for agent in agents:
@@ -306,10 +342,36 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
             elif event_type == p.AGENT_TYPING:
                 agents_by_id[payload["agent_id"]].state = RoundtableAgent.State.TYPING
             elif event_type == p.MESSAGE_COMPLETED:
-                author_id = payload["message"]["author"]["roundtable_agent_id"]
+                message_data = payload["message"]
+                author_id = message_data["author"]["roundtable_agent_id"]
                 agents_by_id[author_id].state = RoundtableAgent.State.COMPLETED
+                message = Message.objects.create(
+                    id=message_data["id"],
+                    roundtable=room,
+                    author_type=Message.AuthorType.AGENT,
+                    roundtable_agent=agents_by_id[author_id],
+                    turn=None,
+                    round_number=message_data["round_number"],
+                    message_type=message_data["message_type"],
+                    claim=message_data["claim"],
+                    body=message_data["body"],
+                    stance=message_data["stance"] or "",
+                    challenge_target_id=message_data["challenge_target_agent_id"],
+                    confidence=message_data["confidence"],
+                )
+                persisted_messages[str(message.id)] = message
 
             created.append(_append_room_event(room, event_type, payload))
+
+        for event_type, payload in script:
+            if event_type != p.MESSAGE_COMPLETED:
+                continue
+            message_data = payload["message"]
+            reference_ids = message_data["references"]
+            if reference_ids:
+                persisted_messages[message_data["id"]].references.set(
+                    [persisted_messages[reference_id] for reference_id in reference_ids]
+                )
 
         RoundtableAgent.objects.bulk_update(agents, ["state"])
 

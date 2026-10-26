@@ -12,12 +12,12 @@ extension AppModel {
         defer { isSendingUserMessage = false }
 
         do {
-            let result = try await api.sendUserMessage(
+            let result = try await repository.sendUserMessage(
                 roundtableID: roundtableID,
                 body: trimmed,
                 mentionedAgentIDs: Array(mentionedAgentIDs.prefix(3))
             )
-            apply(result, to: room)
+            try repository.apply(result)
             if room.status == .paused {
                 turnState = .paused
             }
@@ -28,13 +28,13 @@ extension AppModel {
 
     func pauseDiscussion() async {
         _ = await runControl { roundtableID in
-            try await self.api.pauseRoundtable(roundtableID: roundtableID)
+            try await self.repository.pauseRoundtable(roundtableID: roundtableID)
         }
     }
 
     func resumeDiscussion() async {
         let resumed = await runControl { roundtableID in
-            try await self.api.resumeRoundtable(roundtableID: roundtableID)
+            try await self.repository.resumeRoundtable(roundtableID: roundtableID)
         }
         if resumed, room?.status == .running {
             turnState = .idle
@@ -58,8 +58,8 @@ extension AppModel {
         }
 
         do {
-            let result = try await api.endRoundtable(roundtableID: roundtableID)
-            apply(result, to: room)
+            let result = try await repository.endRoundtable(roundtableID: roundtableID)
+            try repository.apply(result)
             scheduledTurn = nil
             turnState = .ended
         } catch {
@@ -78,7 +78,7 @@ extension AppModel {
 
         do {
             let result = try await operation(roundtableID)
-            apply(result, to: room)
+            try repository.apply(result)
             if room.status == .paused {
                 turnState = .paused
             }
@@ -89,10 +89,4 @@ extension AppModel {
         }
     }
 
-    private func apply(_ result: RoomCommandResponse, to room: RoundtableRoomModel) {
-        for event in result.events {
-            room.apply(event)
-        }
-        room.update(from: result.roundtable)
-    }
 }

@@ -2,25 +2,51 @@ import Foundation
 
 // MARK: - Payloads
 
+public struct ReplayMetadata: Codable, Equatable, Sendable {
+    public let requestedCursor: Int
+    public let oldestSequence: Int?
+    public let latestSequence: Int
+    public let windowDays: Int
+    public let cursorExpired: Bool
+
+    public init(
+        requestedCursor: Int,
+        oldestSequence: Int?,
+        latestSequence: Int,
+        windowDays: Int,
+        cursorExpired: Bool
+    ) {
+        self.requestedCursor = requestedCursor
+        self.oldestSequence = oldestSequence
+        self.latestSequence = latestSequence
+        self.windowDays = windowDays
+        self.cursorExpired = cursorExpired
+    }
+}
+
 public struct JoinedRoom: Codable, Equatable, Sendable {
     public let roundtable: RoundtableSnapshot
     public let messages: [Message]
     public let failures: [TurnFailure]
+    public let replay: ReplayMetadata?
 
     public init(
         roundtable: RoundtableSnapshot,
         messages: [Message],
-        failures: [TurnFailure] = []
+        failures: [TurnFailure] = [],
+        replay: ReplayMetadata? = nil
     ) {
         self.roundtable = roundtable
         self.messages = messages
         self.failures = failures
+        self.replay = replay
     }
 
     private enum CodingKeys: String, CodingKey {
         case roundtable
         case messages
         case failures
+        case replay
     }
 
     public init(from decoder: Decoder) throws {
@@ -28,6 +54,7 @@ public struct JoinedRoom: Codable, Equatable, Sendable {
         roundtable = try container.decode(RoundtableSnapshot.self, forKey: .roundtable)
         messages = try container.decode([Message].self, forKey: .messages)
         failures = try container.decodeIfPresent([TurnFailure].self, forKey: .failures) ?? []
+        replay = try container.decodeIfPresent(ReplayMetadata.self, forKey: .replay)
     }
 }
 

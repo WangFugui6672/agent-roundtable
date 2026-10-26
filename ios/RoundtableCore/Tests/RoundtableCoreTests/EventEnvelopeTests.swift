@@ -28,6 +28,42 @@ final class EventEnvelopeTests: XCTestCase {
         XCTAssertEqual(joined.roundtable.lastSequence, 0)
     }
 
+    func testDecodesReplayWindowMetadata() throws {
+        let data = Fixtures.envelope(
+            eventType: "room.joined",
+            sequence: 0,
+            payload: """
+            {
+              "roundtable": \(Fixtures.snapshotJSON),
+              "messages": [],
+              "replay": {
+                "requested_cursor": 2,
+                "oldest_sequence": 5,
+                "latest_sequence": 9,
+                "window_days": 90,
+                "cursor_expired": true
+              }
+            }
+            """
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .joined(joined) = envelope.payload else {
+            return XCTFail("expected a joined payload, got \(envelope.payload)")
+        }
+        XCTAssertEqual(
+            joined.replay,
+            ReplayMetadata(
+                requestedCursor: 2,
+                oldestSequence: 5,
+                latestSequence: 9,
+                windowDays: 90,
+                cursorExpired: true
+            )
+        )
+    }
+
     func testDecodesCompletedMessage() throws {
         let data = Fixtures.envelope(
             eventType: "message.completed",

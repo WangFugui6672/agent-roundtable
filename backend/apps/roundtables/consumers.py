@@ -41,6 +41,9 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
         self.roundtable_id: str = self.scope["url_route"]["kwargs"]["roundtable_id"]
         params = parse_qs(self.scope["query_string"].decode())
         self.guest_session_id = (params.get("guest_session") or [""])[0]
+        self.replaying = False
+        self.buffered_live_events: list[dict[str, Any]] = []
+        self.sent_event_ids: set[str] = set()
 
         try:
             self.cursor = int((params.get("cursor") or ["0"])[0])
@@ -59,7 +62,7 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=CLOSE_UNAUTHORIZED)
             return
 
-        snapshot = await join_snapshot(self.roundtable_id, self.guest_session_id)
+        snapshot = await join_snapshot(self.roundtable_id, self.guest_session_id, self.cursor)
         if snapshot is None:
             await self.close(code=CLOSE_UNAUTHORIZED)
             return
@@ -68,11 +71,21 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
         # Subscribe before replaying: anything submitted from now on either
         # arrives as a broadcast or as a replayed event, and the client
         # dedupes by event_id.
+        self.replaying = True
         await self.channel_layer.group_add(room_group_name(self.roundtable_id), self.channel_name)
-        await self.send_json(snapshot)
+        await self._send_event(snapshot)
 
-        for envelope in await events_after(self.roundtable_id, self.guest_session_id, self.cursor):
-            await self.send_json(envelope)
+        replay = snapshot["payload"]["replay"]
+        if not replay["cursor_expired"]:
+            for envelope in await events_after(
+                self.roundtable_id,
+                self.guest_session_id,
+                self.cursor,
+            ):
+                await self._send_event(envelope)
+
+        await self._flush_buffered_events()
+        self.replaying = False
 
     async def disconnect(self, code: int) -> None:
         if hasattr(self, "roundtable_id"):
@@ -82,7 +95,27 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
 
     async def room_event(self, event: dict[str, Any]) -> None:
         """Fan-out from the roundtable command service."""
-        await self.send_json(event["envelope"])
+        if self.replaying:
+            self.buffered_live_events.append(event["envelope"])
+            return
+        await self._send_event(event["envelope"])
+
+    async def _flush_buffered_events(self) -> None:
+        while self.buffered_live_events:
+            buffered = sorted(
+                self.buffered_live_events,
+                key=lambda envelope: envelope["sequence"],
+            )
+            self.buffered_live_events.clear()
+            for envelope in buffered:
+                await self._send_event(envelope)
+
+    async def _send_event(self, envelope: dict[str, Any]) -> None:
+        event_id = envelope["event_id"]
+        if event_id in self.sent_event_ids:
+            return
+        self.sent_event_ids.add(event_id)
+        await self.send_json(envelope)
 
     async def receive(self, text_data=None, bytes_data=None, **kwargs) -> None:
         if text_data is None:
