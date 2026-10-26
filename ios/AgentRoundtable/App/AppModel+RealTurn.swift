@@ -57,8 +57,14 @@ extension AppModel {
                 return
             }
 
-            for event in response.events {
-                room.apply(event)
+            do {
+                try repository.apply(response.events)
+            } catch {
+                failBeforeTurn(
+                    room: room,
+                    message: "本地恢复状态保存失败：\(Self.userMessage(for: error))"
+                )
+                return
             }
 
             guard let turn = response.turn else {
@@ -126,7 +132,7 @@ extension AppModel {
 
     private func requestNextTurn(context: GenerationContext) async -> NextTurnResponse? {
         do {
-            return try await api.nextTurn(roundtableID: context.roundtableID)
+            return try await repository.nextTurn(roundtableID: context.roundtableID)
         } catch {
             guard !Task.isCancelled, !isEnding else { return nil }
             failBeforeTurn(room: context.room, error: error)
@@ -366,13 +372,13 @@ extension AppModel {
         usage: ProviderUsageReport
     ) async throws -> Bool? {
         if MessageComposer.isPass(text) {
-            let envelope = try await api.passTurn(
+            let envelope = try await repository.passTurn(
                 roundtableID: context.roundtableID,
                 agentID: context.participant.id,
                 turnID: turn.turnId,
                 usage: usage
             )
-            context.room.apply(envelope)
+            try repository.apply(envelope)
             turnState = .passed(agentID: context.participant.id)
             return true
         }
@@ -410,11 +416,11 @@ extension AppModel {
         turnState = .submitting(agentID: context.participant.id)
         var submissionWithUsage = submission
         submissionWithUsage.usage = usage
-        let envelope = try await api.submitMessage(
+        let envelope = try await repository.submitMessage(
             roundtableID: context.roundtableID,
             submission: submissionWithUsage
         )
-        context.room.apply(envelope)
+        try repository.apply(envelope)
         turnState = .completed(agentID: context.participant.id)
         failureCode = nil
         failureRetryable = false
@@ -449,13 +455,13 @@ extension AppModel {
         usage: ProviderUsageReport
     ) async throws -> TurnState {
         if MessageComposer.isPass(trimmed) {
-            let envelope = try await api.passTurn(
+            let envelope = try await repository.passTurn(
                 roundtableID: context.roundtableID,
                 agentID: context.participant.id,
                 turnID: context.turn.turnId,
                 usage: usage
             )
-            context.room.apply(envelope)
+            try repository.apply(envelope)
             return .passed(agentID: context.participant.id)
         }
 
@@ -465,11 +471,11 @@ extension AppModel {
             turn: context.turn
         )
         submission.usage = usage
-        let envelope = try await api.submitMessage(
+        let envelope = try await repository.submitMessage(
             roundtableID: context.roundtableID,
             submission: submission
         )
-        context.room.apply(envelope)
+        try repository.apply(envelope)
         return .completed(agentID: context.participant.id)
     }
 }

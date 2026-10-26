@@ -18,22 +18,27 @@ public final class RoundtableRoomModel {
     public private(set) var pausePending = false
     public private(set) var failures: [TurnFailure] = []
     public private(set) var budgetExhaustion: BudgetExhaustion?
+    public private(set) var lastVisibleMessageID: UUID?
 
     /// Last persisted sequence the client has applied. ``room.joined`` never
     /// moves it (see docs/adr/0002).
     public private(set) var lastSequence = 0
 
     private var seenEventIds: Set<UUID> = []
+    private var seenEventIDOrder: [UUID] = []
     private var seenMessageIds: Set<UUID> = []
+    private var bufferedEvents: [Int: EventEnvelope] = [:]
+
+    private let maxSeenEventIDs = 512
 
     public init() {}
 
     /// Seeds the projection from a REST snapshot before the socket connects.
     /// The cursor starts at the snapshot's last sequence so replay is scoped to
     /// events the client has not seen.
-    public func seed(_ snapshot: RoundtableSnapshot) {
+    public func seed(_ snapshot: RoundtableSnapshot, cursor: Int? = nil) {
         update(from: snapshot)
-        lastSequence = snapshot.lastSequence
+        lastSequence = cursor ?? snapshot.lastSequence
     }
 
     /// Applies an authoritative command response without discarding rendered
@@ -49,15 +54,97 @@ public final class RoundtableRoomModel {
         activeParticipantId = snapshot.activeTurn?.roundtableAgentId
     }
 
+    public func restore(_ state: StoredRoomState) {
+        update(from: state.snapshot)
+        messages = []
+        seenMessageIds = []
+        for message in state.messages {
+            appendMessage(message)
+        }
+        failures = []
+        for failure in state.failures {
+            appendFailure(failure)
+        }
+        budgetExhaustion = state.budgetExhaustion
+        lastSequence = state.lastSequence
+        seenEventIds = []
+        seenEventIDOrder = []
+        for eventID in state.seenEventIDs {
+            recordSeenEventID(eventID)
+        }
+        lastVisibleMessageID = state.lastVisibleMessageID
+        bufferedEvents = [:]
+    }
+
+    public func setLastVisibleMessage(_ messageID: UUID?) {
+        guard let messageID else {
+            lastVisibleMessageID = nil
+            return
+        }
+        guard seenMessageIds.contains(messageID) else { return }
+        lastVisibleMessageID = messageID
+    }
+
+    public func storedState(savedAt: Date) -> StoredRoomState {
+        guard let snapshot else {
+            preconditionFailure("A room must be seeded before it can be stored.")
+        }
+        return StoredRoomState(
+            snapshot: snapshot,
+            messages: messages,
+            failures: failures,
+            budgetExhaustion: budgetExhaustion,
+            lastSequence: lastSequence,
+            seenEventIDs: seenEventIDOrder,
+            lastVisibleMessageID: lastVisibleMessageID,
+            savedAt: savedAt
+        )
+    }
+
     public func apply(_ envelope: EventEnvelope) {
         guard !seenEventIds.contains(envelope.eventId) else { return }
         guard envelope.sequence == 0 || envelope.sequence > lastSequence else { return }
-        seenEventIds.insert(envelope.eventId)
+
+        if case let .joined(joined) = envelope.payload,
+           joined.replay?.cursorExpired == true {
+            resetToJoinSnapshot(joined)
+            return
+        }
+
+        if envelope.sequence > 0, envelope.sequence > lastSequence + 1 {
+            bufferedEvents[envelope.sequence] = envelope
+            return
+        }
+
+        applyContiguousEvent(envelope)
+        applyBufferedEvents()
+    }
+
+    private func applyContiguousEvent(_ envelope: EventEnvelope) {
+        recordSeenEventID(envelope.eventId)
 
         handle(envelope.payload)
 
         if envelope.sequence > 0 {
             lastSequence = envelope.sequence
+        }
+    }
+
+    private func applyBufferedEvents() {
+        while let event = bufferedEvents.removeValue(forKey: lastSequence + 1) {
+            guard !seenEventIds.contains(event.eventId), event.sequence > lastSequence else {
+                continue
+            }
+            applyContiguousEvent(event)
+        }
+    }
+
+    private func recordSeenEventID(_ eventID: UUID) {
+        guard seenEventIds.insert(eventID).inserted else { return }
+        seenEventIDOrder.append(eventID)
+        if seenEventIDOrder.count > maxSeenEventIDs {
+            let expired = seenEventIDOrder.removeFirst()
+            seenEventIds.remove(expired)
         }
     }
 
@@ -162,6 +249,7 @@ public final class RoundtableRoomModel {
     }
 
     private func applyJoin(_ joined: JoinedRoom) {
+        let hadLocalSnapshot = snapshot != nil
         snapshot = joined.roundtable
         participants = joined.roundtable.participants
         status = joined.roundtable.status
@@ -174,6 +262,23 @@ public final class RoundtableRoomModel {
         }
         for failure in joined.failures {
             appendFailure(failure)
+        }
+        if !hadLocalSnapshot {
+            lastSequence = joined.roundtable.lastSequence
+        }
+    }
+
+    private func resetToJoinSnapshot(_ joined: JoinedRoom) {
+        messages = []
+        failures = []
+        seenMessageIds = []
+        bufferedEvents = [:]
+        budgetExhaustion = nil
+        applyJoin(joined)
+        lastSequence = joined.roundtable.lastSequence
+        if let selected = lastVisibleMessageID,
+           !seenMessageIds.contains(selected) {
+            lastVisibleMessageID = nil
         }
     }
 

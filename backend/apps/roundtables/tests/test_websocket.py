@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import timedelta
 
 import pytest
 from asgiref.sync import sync_to_async
+from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
+from django.test import override_settings
 from django.utils import timezone
 
+from apps.roundtables import consumers as consumer_module
+from apps.roundtables import protocol as p
 from apps.roundtables.models import (
     GuestSession,
+    Message,
     RoomEvent,
     Roundtable,
     RoundtableAgent,
@@ -182,10 +188,111 @@ async def test_reconnect_replays_events_after_cursor():
     second, _ = await _connect(session_id, room_id, cursor=5)
     joined = await second.receive_json_from(timeout=1)
     assert joined["event_type"] == "room.joined"
+    assert len(joined["payload"]["messages"]) == 3
+    assert joined["payload"]["replay"] == {
+        "requested_cursor": 5,
+        "oldest_sequence": 1,
+        "latest_sequence": MOCK_ROUND_LENGTH,
+        "window_days": 90,
+        "cursor_expired": False,
+    }
     replayed = [await second.receive_json_from(timeout=2) for _ in range(MOCK_ROUND_LENGTH - 5)]
     assert [event["sequence"] for event in replayed] == list(range(6, MOCK_ROUND_LENGTH + 1))
     assert await second.receive_nothing(timeout=0.3)
     await second.disconnect()
+
+
+@override_settings(ROOM_EVENT_REPLAY_WINDOW_DAYS=1)
+async def test_expired_cursor_returns_snapshot_reset_without_partial_replay():
+    session_id, room_id = await sync_to_async(_seed_room)()
+    message_id = uuid.uuid4()
+    await sync_to_async(Message.objects.create)(
+        id=message_id,
+        roundtable_id=room_id,
+        author_type=Message.AuthorType.USER,
+        round_number=0,
+        message_type=Message.Type.USER_MESSAGE,
+        body="窗口外仍应出现在完整快照里。",
+    )
+
+    first, _ = await _connect(session_id, room_id)
+    await first.receive_json_from(timeout=1)
+    await first.send_json_to({"event_type": "mock.run"})
+    for _ in range(MOCK_ROUND_LENGTH):
+        await first.receive_json_from(timeout=2)
+    await first.disconnect()
+
+    cutoff = timezone.now() - timedelta(days=2)
+    await sync_to_async(RoomEvent.objects.filter(roundtable_id=room_id, sequence__lte=5).update)(
+        created_at=cutoff
+    )
+
+    second, _ = await _connect(session_id, room_id, cursor=0)
+    joined = await second.receive_json_from(timeout=1)
+
+    assert joined["payload"]["replay"] == {
+        "requested_cursor": 0,
+        "oldest_sequence": 6,
+        "latest_sequence": MOCK_ROUND_LENGTH,
+        "window_days": 1,
+        "cursor_expired": True,
+    }
+    restored_message_ids = [message["id"] for message in joined["payload"]["messages"]]
+    assert str(message_id) in restored_message_ids
+    assert len(restored_message_ids) == 4
+    assert await second.receive_nothing(timeout=0.3)
+    await second.disconnect()
+
+
+async def test_live_events_wait_for_replay_to_finish(monkeypatch):
+    session_id, room_id = await sync_to_async(_seed_room)()
+    replayed = [
+        p.make_envelope(
+            event_id=str(uuid.uuid4()),
+            room_id=room_id,
+            sequence=sequence,
+            event_type="future.replayed",
+            payload={"sequence": sequence},
+        )
+        for sequence in (1, 2)
+    ]
+    live = p.make_envelope(
+        event_id=str(uuid.uuid4()),
+        room_id=room_id,
+        sequence=3,
+        event_type="future.live",
+        payload={"sequence": 3},
+    )
+    entered_replay = asyncio.Event()
+    release_replay = asyncio.Event()
+
+    async def blocked_replay(*_args):
+        entered_replay.set()
+        await release_replay.wait()
+        return replayed
+
+    monkeypatch.setattr(consumer_module, "events_after", blocked_replay)
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/v1/roundtables/{room_id}/?guest_session={session_id}&cursor=0",
+    )
+    connect_task = asyncio.create_task(communicator.connect())
+
+    await asyncio.wait_for(entered_replay.wait(), timeout=1)
+    await get_channel_layer().group_send(
+        f"room.{room_id}",
+        {"type": "room.event", "envelope": live},
+    )
+    await asyncio.sleep(0.05)
+    release_replay.set()
+    connected, _ = await asyncio.wait_for(connect_task, timeout=1)
+
+    assert connected
+    first = await communicator.receive_json_from(timeout=1)
+    remaining = [await communicator.receive_json_from(timeout=1) for _ in range(3)]
+    assert first["event_type"] == "room.joined"
+    assert [event["sequence"] for event in remaining] == [1, 2, 3]
+    await communicator.disconnect()
 
 
 async def test_connection_without_guest_session_is_rejected():
