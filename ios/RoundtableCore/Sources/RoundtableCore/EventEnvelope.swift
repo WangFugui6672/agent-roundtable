@@ -5,10 +5,29 @@ import Foundation
 public struct JoinedRoom: Codable, Equatable, Sendable {
     public let roundtable: RoundtableSnapshot
     public let messages: [Message]
+    public let failures: [TurnFailure]
 
-    public init(roundtable: RoundtableSnapshot, messages: [Message]) {
+    public init(
+        roundtable: RoundtableSnapshot,
+        messages: [Message],
+        failures: [TurnFailure] = []
+    ) {
         self.roundtable = roundtable
         self.messages = messages
+        self.failures = failures
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case roundtable
+        case messages
+        case failures
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roundtable = try container.decode(RoundtableSnapshot.self, forKey: .roundtable)
+        messages = try container.decode([Message].self, forKey: .messages)
+        failures = try container.decodeIfPresent([TurnFailure].self, forKey: .failures) ?? []
     }
 }
 
@@ -85,8 +104,10 @@ public enum EventPayload: Equatable, Sendable {
     case agentThinking(AgentActivity)
     case agentTyping(AgentActivity)
     case agentPassed(AgentActivity)
+    case agentFailed(TurnFailure)
     case messageCompleted(Message)
     case roundCompleted(RoundCompleted)
+    case budgetExhausted(BudgetExhaustion)
     case pausePending(RoomPausePending)
     case paused(RoomStateChanged)
     case resumed(RoomStateChanged)
@@ -156,11 +177,17 @@ extension EventEnvelope: Decodable {
             return try decodeRoundPayload(eventType: eventType, container: container)
         case "agent.thinking", "agent.typing", "agent.passed":
             return try decodeAgentPayload(eventType: eventType, container: container)
+        case "agent.failed":
+            return .agentFailed(try container.decode(TurnFailure.self, forKey: .payload))
         case "message.completed":
             let completed = try container.decode(MessageCompletedPayload.self, forKey: .payload)
             return .messageCompleted(completed.message)
         case "room.pause_pending", "room.paused", "room.resumed", "room.ended":
             return try decodeRoomControlPayload(eventType: eventType, container: container)
+        case "budget.exhausted":
+            return .budgetExhausted(
+                try container.decode(BudgetExhaustion.self, forKey: .payload)
+            )
         default:
             // Unknown events must not break the stream: the server may ship
             // new event types before the client is updated.

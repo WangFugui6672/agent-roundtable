@@ -31,6 +31,8 @@ final class AppModel {
     var isFirstRoundRunning = false
     private(set) var createError: String?
     var controlError: String?
+    var failureCode: String?
+    var failureRetryable = false
     var scheduledTurn: ScheduledTurn?
     var isSendingUserMessage = false
     var isChangingDiscussion = false
@@ -77,6 +79,7 @@ final class AppModel {
     private var streamTask: Task<Void, Never>?
     var generationTask: Task<Void, Never>?
     var generationID: UUID?
+    var reportedFailureTurnIDs: Set<UUID> = []
     var isEnding = false
     let defaults: UserDefaults
     let providerStore: ProviderStore
@@ -103,6 +106,9 @@ final class AppModel {
         if ProcessInfo.processInfo.environment["RT_RESET_PROVIDER_STATE"] == "1" {
             self.providerStore.reset()
             defaults.removeObject(forKey: Self.activeProviderKey)
+        }
+        if ProcessInfo.processInfo.environment["RT_RESET_GUEST_SESSION"] == "1" {
+            defaults.removeObject(forKey: Self.sessionKey)
         }
         #endif
 
@@ -282,6 +288,9 @@ final class AppModel {
         streamState = .idle
         turnState = .idle
         scheduledTurn = nil
+        failureCode = nil
+        failureRetryable = false
+        reportedFailureTurnIDs.removeAll()
         isFirstRoundRunning = false
         controlError = nil
     }

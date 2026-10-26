@@ -16,8 +16,10 @@ ROUND_STARTED = "round.started"
 AGENT_THINKING = "agent.thinking"
 AGENT_TYPING = "agent.typing"
 AGENT_PASSED = "agent.passed"
+AGENT_FAILED = "agent.failed"
 MESSAGE_COMPLETED = "message.completed"
 ROUND_COMPLETED = "round.completed"
+ROOM_BUDGET_EXHAUSTED = "budget.exhausted"
 ROOM_PAUSE_PENDING = "room.pause_pending"
 ROOM_PAUSED = "room.paused"
 ROOM_RESUMED = "room.resumed"
@@ -32,6 +34,24 @@ CLAIM_MAX_CHARS = 80
 DEFAULT_CONFIDENCE = 0.6
 MAX_REFERENCES = 3
 BODY_HARD_MAX_CHARS = 2000
+
+FAILURE_CODES = frozenset(
+    {
+        "provider_unauthorized",
+        "provider_insufficient_balance",
+        "provider_model_not_found",
+        "provider_rate_limited",
+        "provider_timeout",
+        "provider_network",
+        "provider_empty_reply",
+        "provider_invalid_response",
+        "provider_server_error",
+        "provider_error",
+        "provider_not_configured",
+        "client_request_failed",
+        "scheduler_invalid_agent",
+    }
+)
 
 #: Client -> server command that plays one scripted mock round.
 #: TODO(#5): the turn scheduler replaces this bridge; clients stop sending it.

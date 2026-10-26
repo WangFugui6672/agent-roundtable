@@ -127,18 +127,34 @@ public struct APIClient: Sendable {
     public func passTurn(
         roundtableID: UUID,
         agentID: UUID,
-        turnID: UUID
+        turnID: UUID,
+        usage: ProviderUsageReport? = nil
     ) async throws -> EventEnvelope {
         struct Body: Encodable {
             let turnId: UUID
             let roundtableAgentId: UUID
+            let usage: ProviderUsageReport?
         }
         let body = try JSONEncoder.roundtable.encode(
-            Body(turnId: turnID, roundtableAgentId: agentID)
+            Body(turnId: turnID, roundtableAgentId: agentID, usage: usage)
         )
         return try await send(
             makeRequest(
                 path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/turns/pass",
+                method: "POST",
+                body: body
+            )
+        )
+    }
+
+    public func reportTurnFailure(
+        roundtableID: UUID,
+        submission: TurnFailureSubmission
+    ) async throws -> EventEnvelope {
+        let body = try JSONEncoder.roundtable.encode(submission)
+        return try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/turns/fail",
                 method: "POST",
                 body: body
             )

@@ -16,6 +16,13 @@ private struct SecondRoundContext {
     let room: RoundtableRoomModel
 }
 
+private struct TurnSubmissionContext {
+    let participant: Participant
+    let turn: ScheduledTurn
+    let roundtableID: UUID
+    let room: RoundtableRoomModel
+}
+
 /// Executes server-scheduled Provider turns for the first round.
 extension AppModel {
     // MARK: - First round (Issue #5)
@@ -90,6 +97,8 @@ extension AppModel {
         }
         isFirstRoundRunning = true
         turnState = .idle
+        failureCode = nil
+        failureRetryable = false
         return GenerationContext(
             room: room,
             roundtableID: roundtableID,
@@ -118,7 +127,7 @@ extension AppModel {
             return try await api.nextTurn(roundtableID: context.roundtableID)
         } catch {
             guard !Task.isCancelled, !isEnding else { return nil }
-            failBeforeTurn(room: context.room, message: Self.userMessage(for: error))
+            failBeforeTurn(room: context.room, error: error)
             return nil
         }
     }
@@ -127,11 +136,13 @@ extension AppModel {
         room.pausePending || room.status == .paused
     }
 
-    /// Re-runs the failed turn identity. The next-turn request is idempotent,
-    /// so a Provider failure does not create a replacement server turn.
+    /// Continues after a retryable failure. The server either returns the still
+    /// pending turn (if failure sync failed) or schedules the next eligible Agent.
     func retryTurn() async {
-        guard case .failed = turnState else { return }
+        guard case .failed = turnState, failureRetryable else { return }
         turnState = .idle
+        failureCode = nil
+        failureRetryable = false
         await launchGeneration()?.value
     }
 
@@ -139,6 +150,8 @@ extension AppModel {
         switch turnState {
         case .failed, .completed, .passed, .roundCompleted, .paused, .ended:
             turnState = .idle
+            failureCode = nil
+            failureRetryable = false
         default:
             break
         }
@@ -150,14 +163,23 @@ extension AppModel {
         roundtableID: UUID,
         room: RoundtableRoomModel
     ) async -> Bool {
+        let failureContext = TurnFailureContext(
+            turn: turn,
+            roundtableID: roundtableID,
+            room: room
+        )
         guard let participant = room.participants.first(where: {
             $0.id == turn.roundtableAgentId
         }) else {
-            failTurn(agentID: turn.roundtableAgentId, message: "调度器返回了未知参与者。")
+            await failUnknownParticipant(context: failureContext)
             return false
         }
 
-        guard let apiKey = loadAPIKey(for: configuration, participantID: participant.id) else {
+        guard let apiKey = await loadAPIKey(
+            for: configuration,
+            participantID: participant.id,
+            context: failureContext
+        ) else {
             return false
         }
 
@@ -179,18 +201,20 @@ extension AppModel {
             participant: participant,
             transcript: room.messages
         )
-        turnState = .thinking(agentID: participant.id)
-        var text = ""
+        let metrics = ProviderRunMetrics()
+        let collector = ProviderTextCollector()
 
         do {
-            for try await delta in chatClient.stream(
-                configuration: configuration,
-                apiKey: apiKey,
-                messages: prompt
-            ) {
-                text += delta
-                turnState = .typing(agentID: participant.id, text: text)
-            }
+            let text = try await collectFirstRoundText(
+                participantID: participant.id,
+                stream: ProviderStreamContext(
+                    configuration: configuration,
+                    apiKey: apiKey,
+                    prompt: prompt,
+                    collector: collector,
+                    metrics: metrics
+                )
+            )
 
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
@@ -198,24 +222,51 @@ extension AppModel {
             turnState = .submitting(agentID: participant.id)
             turnState = try await submit(
                 trimmed,
-                participant: participant,
-                turn: turn,
-                roundtableID: roundtableID,
-                room: room
+                context: TurnSubmissionContext(
+                    participant: participant,
+                    turn: turn,
+                    roundtableID: roundtableID,
+                    room: room
+                ),
+                usage: metrics.report(retryCount: 0)
             )
+            failureCode = nil
+            failureRetryable = false
             return true
         } catch {
             if Task.isCancelled || isEnding {
                 return false
             }
-            let partial = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            failTurn(
-                agentID: participant.id,
-                message: Self.userMessage(for: error),
-                partial: partial.isEmpty ? nil : partial
+            let partial = collector.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            await failTurn(
+                context: failureContext,
+                report: TurnFailureReport(
+                    error: error,
+                    partial: partial.isEmpty ? nil : partial,
+                    usage: metrics.report(retryCount: 0)
+                )
             )
             return false
         }
+    }
+
+    private func collectFirstRoundText(
+        participantID: UUID,
+        stream: ProviderStreamContext
+    ) async throws -> String {
+        turnState = .thinking(agentID: participantID)
+        for try await event in chatClient.streamEvents(
+            configuration: stream.configuration,
+            apiKey: stream.apiKey,
+            messages: stream.prompt
+        ) {
+            stream.metrics.consume(event)
+            if case let .delta(delta) = event {
+                stream.collector.text += delta
+                turnState = .typing(agentID: participantID, text: stream.collector.text)
+            }
+        }
+        return stream.collector.text
     }
 
     private func runSecondRoundTurn(
@@ -228,13 +279,15 @@ extension AppModel {
             transcript: context.room.messages,
             roundNumber: turn.round
         )
+        let metrics = ProviderRunMetrics()
 
         for attempt in 0 ..< 2 {
             if let result = await runSecondRoundAttempt(
                 turn,
                 context: context,
                 attempt: attempt,
-                basePrompt: basePrompt
+                basePrompt: basePrompt,
+                metrics: metrics
             ) {
                 return result
             }
@@ -246,7 +299,8 @@ extension AppModel {
         _ turn: ScheduledTurn,
         context: SecondRoundContext,
         attempt: Int,
-        basePrompt: [ChatMessage]
+        basePrompt: [ChatMessage],
+        metrics: ProviderRunMetrics
     ) async -> Bool? {
         let prompt = attempt == 0
             ? basePrompt
@@ -258,224 +312,162 @@ extension AppModel {
                     """
                 )
             ]
-        var text = ""
+        let collector = ProviderTextCollector()
         do {
-            turnState = .thinking(agentID: context.participant.id)
-            for try await delta in chatClient.stream(
-                configuration: context.configuration,
-                apiKey: context.apiKey,
-                messages: prompt
-            ) {
-                text += delta
+            let text = try await collectSecondRoundText(
+                context: context,
+                stream: ProviderStreamContext(
+                    configuration: context.configuration,
+                    apiKey: context.apiKey,
+                    prompt: prompt,
+                    collector: collector,
+                    metrics: metrics
+                )
+            )
+
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
+            let usage = metrics.report(retryCount: attempt)
+            return try await handleSecondRoundText(
+                trimmed,
+                turn: turn,
+                context: context,
+                attempt: attempt,
+                usage: usage
+            )
+        } catch {
+            if Task.isCancelled || isEnding {
+                return false
+            }
+            let partial = collector.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            await failTurn(
+                context: TurnFailureContext(
+                    turn: turn,
+                    roundtableID: context.roundtableID,
+                    room: context.room
+                ),
+                report: TurnFailureReport(
+                    error: error,
+                    partial: partial.isEmpty ? nil : partial,
+                    usage: metrics.report(retryCount: attempt)
+                )
+            )
+            return false
+        }
+    }
+
+    private func handleSecondRoundText(
+        _ text: String,
+        turn: ScheduledTurn,
+        context: SecondRoundContext,
+        attempt: Int,
+        usage: ProviderUsageReport
+    ) async throws -> Bool? {
+        if MessageComposer.isPass(text) {
+            let envelope = try await api.passTurn(
+                roundtableID: context.roundtableID,
+                agentID: context.participant.id,
+                turnID: turn.turnId,
+                usage: usage
+            )
+            context.room.apply(envelope)
+            turnState = .passed(agentID: context.participant.id)
+            return true
+        }
+
+        let submission: MessageSubmission
+        do {
+            submission = try StructuredReplyParser.parse(
+                text,
+                participant: context.participant,
+                turn: turn,
+                transcript: context.room.messages
+            )
+        } catch let structuredError as StructuredReplyError {
+            if attempt == 0 {
+                return nil
+            }
+            await failTurn(
+                context: TurnFailureContext(
+                    turn: turn,
+                    roundtableID: context.roundtableID,
+                    room: context.room
+                ),
+                report: TurnFailureReport(
+                    code: "provider_invalid_response",
+                    message:
+                        "模型结构化输出无效，已重试一次。"
+                        + structuredError.localizedDescription,
+                    retryable: true,
+                    usage: usage
+                )
+            )
+            return false
+        }
+
+        turnState = .submitting(agentID: context.participant.id)
+        var submissionWithUsage = submission
+        submissionWithUsage.usage = usage
+        let envelope = try await api.submitMessage(
+            roundtableID: context.roundtableID,
+            submission: submissionWithUsage
+        )
+        context.room.apply(envelope)
+        turnState = .completed(agentID: context.participant.id)
+        failureCode = nil
+        failureRetryable = false
+        return true
+    }
+
+    private func collectSecondRoundText(
+        context: SecondRoundContext,
+        stream: ProviderStreamContext
+    ) async throws -> String {
+        turnState = .thinking(agentID: context.participant.id)
+        for try await event in chatClient.streamEvents(
+            configuration: stream.configuration,
+            apiKey: stream.apiKey,
+            messages: stream.prompt
+        ) {
+            stream.metrics.consume(event)
+            if case let .delta(delta) = event {
+                stream.collector.text += delta
                 turnState = .typing(
                     agentID: context.participant.id,
                     text: "正在组织引用与立场…"
                 )
             }
-
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
-            if MessageComposer.isPass(trimmed) {
-                let envelope = try await api.passTurn(
-                    roundtableID: context.roundtableID,
-                    agentID: context.participant.id,
-                    turnID: turn.turnId
-                )
-                context.room.apply(envelope)
-                turnState = .passed(agentID: context.participant.id)
-                return true
-            }
-
-            let submission: MessageSubmission
-            do {
-                submission = try StructuredReplyParser.parse(
-                    trimmed,
-                    participant: context.participant,
-                    turn: turn,
-                    transcript: context.room.messages
-                )
-            } catch let structuredError as StructuredReplyError {
-                if attempt == 0 {
-                    return nil
-                }
-                failTurn(
-                    agentID: context.participant.id,
-                    message: "模型结构化输出无效，已重试一次。\(structuredError.localizedDescription)"
-                )
-                return false
-            }
-
-            turnState = .submitting(agentID: context.participant.id)
-            let envelope = try await api.submitMessage(
-                roundtableID: context.roundtableID,
-                submission: submission
-            )
-            context.room.apply(envelope)
-            turnState = .completed(agentID: context.participant.id)
-            return true
-        } catch {
-            if Task.isCancelled || isEnding {
-                return false
-            }
-            let partial = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            failTurn(
-                agentID: context.participant.id,
-                message: Self.userMessage(for: error),
-                partial: partial.isEmpty ? nil : partial
-            )
-            return false
         }
-    }
-
-    private func loadAPIKey(
-        for configuration: ProviderConfiguration,
-        participantID: UUID
-    ) -> String? {
-        do {
-            let apiKey = try providerStore.secret(for: configuration.kind) ?? ""
-            guard !apiKey.isEmpty else {
-                failTurn(agentID: participantID, message: "API Key 为空，请重新输入。")
-                return nil
-            }
-            return apiKey
-        } catch {
-            failTurn(agentID: participantID, message: Self.userMessage(for: error))
-            return nil
-        }
+        return stream.collector.text
     }
 
     private func submit(
         _ trimmed: String,
-        participant: Participant,
-        turn: ScheduledTurn,
-        roundtableID: UUID,
-        room: RoundtableRoomModel
+        context: TurnSubmissionContext,
+        usage: ProviderUsageReport
     ) async throws -> TurnState {
         if MessageComposer.isPass(trimmed) {
             let envelope = try await api.passTurn(
-                roundtableID: roundtableID,
-                agentID: participant.id,
-                turnID: turn.turnId
+                roundtableID: context.roundtableID,
+                agentID: context.participant.id,
+                turnID: context.turn.turnId,
+                usage: usage
             )
-            room.apply(envelope)
-            return .passed(agentID: participant.id)
+            context.room.apply(envelope)
+            return .passed(agentID: context.participant.id)
         }
 
-        let submission = MessageComposer.compose(
-            participant: participant,
+        var submission = MessageComposer.compose(
+            participant: context.participant,
             text: trimmed,
-            turn: turn
+            turn: context.turn
         )
+        submission.usage = usage
         let envelope = try await api.submitMessage(
-            roundtableID: roundtableID,
+            roundtableID: context.roundtableID,
             submission: submission
         )
-        room.apply(envelope)
-        return .completed(agentID: participant.id)
-    }
-
-    private func failTurn(agentID: UUID, message: String, partial: String? = nil) {
-        turnState = .failed(agentID: agentID, message: message, partial: partial)
-    }
-
-    private func failBeforeTurn(room: RoundtableRoomModel, message: String) {
-        guard let participant = room.participants.first else { return }
-        turnState = .failed(agentID: participant.id, message: message, partial: nil)
-    }
-
-    // MARK: - User control (Issue #6)
-
-    func sendUserMessage(_ body: String, mentionedAgentIDs: [UUID]) async {
-        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isSendingUserMessage, !isEnding, let room else { return }
-        guard let roundtableID = room.snapshot?.id else { return }
-
-        isSendingUserMessage = true
-        controlError = nil
-        defer { isSendingUserMessage = false }
-
-        do {
-            let result = try await api.sendUserMessage(
-                roundtableID: roundtableID,
-                body: trimmed,
-                mentionedAgentIDs: Array(mentionedAgentIDs.prefix(3))
-            )
-            apply(result, to: room)
-            if room.status == .paused {
-                turnState = .paused
-            }
-        } catch {
-            controlError = Self.userMessage(for: error)
-        }
-    }
-
-    func pauseDiscussion() async {
-        _ = await runControl { roundtableID in
-            try await self.api.pauseRoundtable(roundtableID: roundtableID)
-        }
-    }
-
-    func resumeDiscussion() async {
-        let resumed = await runControl { roundtableID in
-            try await self.api.resumeRoundtable(roundtableID: roundtableID)
-        }
-        if resumed, room?.status == .running {
-            turnState = .idle
-            startGeneration()
-        }
-    }
-
-    func endDiscussion() async {
-        guard !isChangingDiscussion, let room, let roundtableID = room.snapshot?.id else {
-            return
-        }
-        isChangingDiscussion = true
-        isEnding = true
-        controlError = nil
-        generationTask?.cancel()
-        generationTask = nil
-        generationID = nil
-        defer {
-            isChangingDiscussion = false
-            isEnding = false
-        }
-
-        do {
-            let result = try await api.endRoundtable(roundtableID: roundtableID)
-            apply(result, to: room)
-            scheduledTurn = nil
-            turnState = .ended
-        } catch {
-            controlError = Self.userMessage(for: error)
-        }
-    }
-
-    private func runControl(
-        _ operation: @escaping (UUID) async throws -> RoomCommandResponse
-    ) async -> Bool {
-        guard !isChangingDiscussion, !isEnding, let room else { return false }
-        guard let roundtableID = room.snapshot?.id else { return false }
-        isChangingDiscussion = true
-        controlError = nil
-        defer { isChangingDiscussion = false }
-
-        do {
-            let result = try await operation(roundtableID)
-            apply(result, to: room)
-            if room.status == .paused {
-                turnState = .paused
-            }
-            return true
-        } catch {
-            controlError = Self.userMessage(for: error)
-            return false
-        }
-    }
-
-    private func apply(_ result: RoomCommandResponse, to room: RoundtableRoomModel) {
-        for event in result.events {
-            room.apply(event)
-        }
-        room.update(from: result.roundtable)
+        context.room.apply(envelope)
+        return .completed(agentID: context.participant.id)
     }
 }
