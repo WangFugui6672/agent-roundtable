@@ -2,7 +2,7 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #7「第二轮引用式互评」—— 第一轮结束后自动进入第二轮，Agent 以结构化引用、立场和挑战关系互评。
+**当前阶段：** Issue #10「失败、预算与限流」—— 局部 Agent 失败可恢复，Provider usage、两轮/时间/消息/Token 预算及创建限额已落地。
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -25,7 +25,12 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - turn 握手：`POST /turns/next` 返回稳定 `turn_id`；消息与 `pass` 必须回报当前 turn，重复或过期回报会被拒绝。
 - `pass` 只产生可观察的 `agent.passed` 事件，不创建普通观点消息。
 - 圆桌快照与 `room.joined` 携带 `active_turn`，重连后可识别在途 turn。
-- 流式状态：思考 → 输入（逐字渲染）→ 提交 → 完成；失败时显示 Provider 原因，不自动换模型。
+- 流式状态：思考 → 输入（逐字渲染）→ 提交 → 完成；Provider 401/403、402、404、429、超时、网络和空回复会映射为稳定失败码。
+- Provider 失败会调用 `POST /turns/fail` 回报一次，保留 partial 和已完成消息；服务端关闭当前 turn 后可继续调度其他 Agent，客户端不会静默换 Provider、Model 或 Mock。
+- SSE `usage` 与 `finish_reason` 会被解析；成功 message/pass 和失败回报都会携带可取得的 Token、延迟与重试数据。
+- 服务端强制执行最多两轮、6 条 Agent 消息、单 turn 60 秒和整场 90 秒；客户端上报 Token 上限为 2400。
+- `room.joined` 可恢复 `failures`，`agent.failed` 与 `budget.exhausted` 只产生一次；圆桌页展示简化预算、失败卡和结束原因。
+- 同一匿名会话最多 3 个进行中圆桌；Mock 每 UTC 日最多 10 个，创建事务使用会话行锁防止并发穿透。
 - 结构化消息提交：`POST /roundtables/{id}/messages`，后端校验类型、长度、引用归属后落库并广播 `message.completed`。
 - 重新进入圆桌时，`room.joined` 会带回已持久化的发言。
 - 用户消息使用独立 `user` 作者持久化，不再伪装成 Agent；`room.joined` 会恢复完整消息流。
@@ -96,13 +101,13 @@ open ios/AgentRoundtable.xcodeproj
 
 创建页的「模型 Provider」可以打开 Provider 设置：选 Qwen / DeepSeek / 自定义，填写 BaseURL、Model 与 API Key。API Key 只写入 Keychain，不会出现在 `UserDefaults`、日志或后端请求里；「验证连接」会调用该服务的 `GET /models` 判断 Key 与地址是否可用（不消耗 Token）。未配置 Provider 时仍可用 Mock 演示。
 
-进入圆桌后，iOS 会向服务端获取下一位发言人并用已配置的 Provider 发起真实流式发言：思考 → 逐字输入 → 提交 turn → 获取下一位。用户插话或暂停不会中断正在生成的这一条消息，但完成后会停在暂停边界；继续只重新启动一条自动流程。模型不可达、Key 失效、限流等情况会直接显示原因并停止自动推进，不会自动切换到 Mock 或其他模型。
+进入圆桌后，iOS 会向服务端获取下一位发言人并用已配置的 Provider 发起真实流式发言：思考 → 逐字输入 → 提交 turn → 获取下一位。用户插话或暂停不会中断正在生成的这一条消息，但完成后会停在暂停边界；继续只重新启动一条自动流程。模型不可达、Key 失效、限流等情况会直接显示稳定错误码、可重试范围和 partial，并回报一次失败；不会自动切换到 Mock 或其他模型。Provider Token 由 iOS 从 SSE usage 中读取并上报，后端只把它当作客户端观测值，不作为精确计费依据。
 
 ## 测试与检查
 
 ```bash
 make verify       # ruff + pytest + RoundtableCore 编译 + SwiftLint
-make backend-test # 后端测试（turn 调度、用户控制、WebSocket、Provider 快照、消息校验与广播）
+make backend-test # 后端测试（turn 调度、失败/预算/限流、用户控制、WebSocket、消息校验与广播）
 make ios-test     # RoundtableCore 测试（需要 Xcode 提供 XCTest）
 make ios-lint     # SwiftLint --strict（首次需 brew install swiftlint）
 make ios-app-test # App 单元测试（Keychain、Provider、三 Agent turn 编排，需模拟器签名）
@@ -132,6 +137,8 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - turn 握手、`active_turn` 恢复、消息/pass 的 turn 校验。
 - 第二轮自动推进、四种立场、有效观点引用和 challenge target 校验。
 - 用户消息、显式 mention、pause_pending、暂停/继续/结束和幂等语义。
+- `turns/fail`、稳定 failure code、usage、`agent.failed` 与 `budget.exhausted` 的恢复语义。
+- 两轮/消息数/时间/客户端上报 Token 预算，以及活跃圆桌和 Mock 每日限额。
 - `mock.run` 确定性演示命令与一轮 Mock 的事件顺序。
 
 ## 设计要点
@@ -141,11 +148,13 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - **密钥不进后端**：BYOK 的 API Key 只存 iOS Keychain、请求由 iOS 直连 Provider（[ADR 0001](docs/adr/0001-byok-keychain-direct-provider.md)）。后端收到任何 `api_key` 字段会直接返回 400，避免误上传被静默忽略。
 - **Provider 逻辑与 Keychain 分离**：`SecretStore` 协议让 Provider 生命周期可以在没有 Keychain 的 CI 机器上测试；真实 Keychain 行为由模拟器上的集成测试覆盖。
 - **流式在客户端、校验在服务端**：模型输出由 iOS 逐字渲染，协议信封（类型、立场、claim、conﬁdence）由 `MessageComposer` 组装；Django 只做校验与持久化，所以模型返回纯文本也不会破坏协议。
+- **预算诚实分层**：服务端强制可观察的轮数、消息数、Turn 截止时间和整场时间；由于 BYOK 直连，Token 上限只能基于 iOS 上报的 Provider usage，不能伪装成服务端计费。
 
 ## 已知边界
 
 - `mock.run` 保留为确定性演示与 UI 测试入口；真实两轮讨论由 turn REST 握手驱动。
 - Redis 与 Celery 尚未接入：事件广播暂时使用 Channels 的 `InMemoryChannelLayer`，只在单进程内有效。
+- Provider Token 仍以客户端上报为权威观测值；Provider 未返回 usage 时只记录延迟与重试，不伪造 Token。
 - iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
 - 两轮讨论都由服务端顺序签发 turn；第一轮结束时同一响应自动签发第二轮。
 - `agent.thinking` 由服务端持久化；`agent.typing` 与逐字文本仍是客户端本地临时状态。

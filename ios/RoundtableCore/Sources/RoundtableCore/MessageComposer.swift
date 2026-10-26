@@ -12,6 +12,7 @@ public struct MessageSubmission: Codable, Equatable, Sendable {
     public let references: [UUID]
     public let challengeTargetAgentId: UUID?
     public let confidence: Double
+    public var usage: ProviderUsageReport?
 
     public init(
         turnId: UUID,
@@ -22,7 +23,8 @@ public struct MessageSubmission: Codable, Equatable, Sendable {
         stance: Stance?,
         references: [UUID],
         challengeTargetAgentId: UUID? = nil,
-        confidence: Double
+        confidence: Double,
+        usage: ProviderUsageReport? = nil
     ) {
         self.turnId = turnId
         self.roundtableAgentId = roundtableAgentId
@@ -33,6 +35,7 @@ public struct MessageSubmission: Codable, Equatable, Sendable {
         self.references = references
         self.challengeTargetAgentId = challengeTargetAgentId
         self.confidence = confidence
+        self.usage = usage
     }
 }
 

@@ -74,9 +74,15 @@ class Roundtable(models.Model):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.READY)
     mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.DECISION)
     max_rounds = models.PositiveSmallIntegerField(default=2)
+    max_agent_messages = models.PositiveSmallIntegerField(default=6)
+    max_reported_tokens = models.PositiveIntegerField(default=2400)
+    reported_tokens = models.PositiveIntegerField(default=0)
+    max_duration_seconds = models.PositiveSmallIntegerField(default=90)
     current_round = models.PositiveSmallIntegerField(default=0)
     event_sequence = models.BigIntegerField(default=0)
     pause_pending = models.BooleanField(default=False)
+    started_at = models.DateTimeField(null=True, blank=True)
+    budget_exhausted_reason = models.CharField(max_length=32, blank=True, default="")
     # Provider metadata snapshot (Issue #3). Only non-secret fields are stored:
     # the API key lives in the iOS Keychain and must never reach Django.
     provider_kind = models.CharField(
@@ -90,6 +96,12 @@ class Roundtable(models.Model):
     class Meta:
         db_table = "roundtable"
         ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(max_rounds__gt=0, max_rounds__lte=2),
+                name="roundtable_max_two_rounds",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"{self.topic[:20]} ({self.status})"
@@ -145,6 +157,11 @@ class Turn(models.Model):
     )
     round_number = models.PositiveSmallIntegerField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    failure_code = models.CharField(max_length=64, blank=True, default="")
+    failure_message = models.TextField(blank=True, default="")
+    failure_partial = models.TextField(blank=True, default="")
+    retryable = models.BooleanField(default=False)
+    deadline_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -228,6 +245,37 @@ class Message(models.Model):
 
     def __str__(self) -> str:
         return f"{self.message_type}: {self.claim[:20]}"
+
+
+class UsageRecord(models.Model):
+    """Per-turn observability without storing prompts, responses, or secrets."""
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="usages")
+    turn = models.OneToOneField(Turn, on_delete=models.CASCADE, related_name="usage")
+    roundtable_agent = models.ForeignKey(
+        RoundtableAgent, on_delete=models.PROTECT, related_name="usages"
+    )
+    provider_kind = models.CharField(max_length=16, blank=True, default="")
+    provider_model = models.CharField(max_length=120, blank=True, default="")
+    input_tokens = models.PositiveIntegerField(null=True, blank=True)
+    output_tokens = models.PositiveIntegerField(null=True, blank=True)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    failure_code = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "usage_record"
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["roundtable", "created_at"]),
+            models.Index(fields=["roundtable_agent", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.roundtable_agent}@{self.created_at.isoformat()}"
 
 
 class RoomEvent(models.Model):

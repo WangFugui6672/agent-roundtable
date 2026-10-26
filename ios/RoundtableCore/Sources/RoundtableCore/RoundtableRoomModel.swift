@@ -16,6 +16,8 @@ public final class RoundtableRoomModel {
     public private(set) var activeParticipantId: UUID?
     public private(set) var activeTurn: ScheduledTurn?
     public private(set) var pausePending = false
+    public private(set) var failures: [TurnFailure] = []
+    public private(set) var budgetExhaustion: BudgetExhaustion?
 
     /// Last persisted sequence the client has applied. ``room.joined`` never
     /// moves it (see docs/adr/0002).
@@ -69,6 +71,10 @@ public final class RoundtableRoomModel {
             applyAgentEvent(payload)
         case let .messageCompleted(message):
             applyCompletedMessage(message)
+        case let .agentFailed(failure):
+            applyFailure(failure)
+        case let .budgetExhausted(exhaustion):
+            applyBudgetExhaustion(exhaustion)
         case .pausePending, .paused, .resumed, .ended:
             applyRoomControl(payload)
         case .unknown:
@@ -166,11 +172,36 @@ public final class RoundtableRoomModel {
         for message in joined.messages {
             appendMessage(message)
         }
+        for failure in joined.failures {
+            appendFailure(failure)
+        }
     }
 
     private func appendMessage(_ message: Message) {
         guard seenMessageIds.insert(message.id).inserted else { return }
         messages.append(message)
+    }
+
+    private func appendFailure(_ failure: TurnFailure) {
+        guard !failures.contains(where: { $0.turnId == failure.turnId }) else { return }
+        failures.append(failure)
+    }
+
+    private func applyFailure(_ failure: TurnFailure) {
+        appendFailure(failure)
+        mark(failure.agentId, as: .failed)
+        if failure.turnId == activeTurn?.turnId {
+            activeTurn = nil
+            activeParticipantId = nil
+        }
+    }
+
+    private func applyBudgetExhaustion(_ exhaustion: BudgetExhaustion) {
+        guard budgetExhaustion == nil else { return }
+        budgetExhaustion = exhaustion
+        status = .completed
+        activeTurn = nil
+        activeParticipantId = nil
     }
 
     private func mark(_ participantId: UUID, as state: AgentState) {
