@@ -32,7 +32,7 @@ public final class RoundtableStream: @unchecked Sendable {
         components.path = "/ws/v1/roundtables/\(roomID.uuidString)/"
         components.queryItems = [
             URLQueryItem(name: "guest_session", value: guestSessionID.uuidString),
-            URLQueryItem(name: "cursor", value: String(cursor)),
+            URLQueryItem(name: "cursor", value: String(cursor))
         ]
         return components.url
     }

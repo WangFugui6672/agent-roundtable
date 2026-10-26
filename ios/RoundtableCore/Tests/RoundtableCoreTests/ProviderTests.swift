@@ -55,12 +55,23 @@ private final class ThrowingSecretStore: SecretStore {
     }
 }
 
+/// Bundles the store with its two doubles so tests don't pass 3-tuples around.
+private struct ProviderStoreFixture {
+    let store: ProviderStore
+    let secrets: MemorySecretStore
+    let storage: MemoryProviderStorage
+}
+
 final class ProviderTests: XCTestCase {
     private func makeStore(
         secrets: MemorySecretStore = MemorySecretStore(),
         storage: MemoryProviderStorage = MemoryProviderStorage()
-    ) -> (ProviderStore, MemorySecretStore, MemoryProviderStorage) {
-        (ProviderStore(secrets: secrets, storage: storage), secrets, storage)
+    ) -> ProviderStoreFixture {
+        ProviderStoreFixture(
+            store: ProviderStore(secrets: secrets, storage: storage),
+            secrets: secrets,
+            storage: storage
+        )
     }
 
     func testPresetsExposeDefaultEndpoints() {
@@ -143,9 +154,9 @@ final class ProviderTests: XCTestCase {
     }
 
     func testSaveKeepsSecretOutOfConfigurationStorage() throws {
-        let (store, secrets, storage) = makeStore()
+        let fixture = makeStore()
 
-        try store.save(
+        try fixture.store.save(
             ProviderDraft(
                 kind: .deepseek,
                 baseURL: "https://api.deepseek.com/v1",
@@ -154,11 +165,11 @@ final class ProviderTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(secrets.values[ProviderStore.account(for: .deepseek)], "sk-super-secret")
-        XCTAssertEqual(storage.configurations.count, 1)
-        XCTAssertEqual(storage.configurations[0].model, "deepseek-chat")
+        XCTAssertEqual(fixture.secrets.values[ProviderStore.account(for: .deepseek)], "sk-super-secret")
+        XCTAssertEqual(fixture.storage.configurations.count, 1)
+        XCTAssertEqual(fixture.storage.configurations[0].model, "deepseek-chat")
 
-        let persisted = try JSONEncoder().encode(storage.configurations)
+        let persisted = try JSONEncoder().encode(fixture.storage.configurations)
         let text = try XCTUnwrap(String(data: persisted, encoding: .utf8))
         XCTAssertFalse(text.contains("sk-super-secret"), "configuration storage must never hold the key")
         XCTAssertFalse(text.lowercased().contains("apikey"))
@@ -188,52 +199,52 @@ final class ProviderTests: XCTestCase {
         let storage = MemoryProviderStorage(configurations: [
             ProviderConfiguration(kind: .custom, baseURL: "https://example.com/v1", model: "m")
         ])
-        let (store, _, _) = makeStore(storage: storage)
+        let store = makeStore(storage: storage).store
 
         XCTAssertFalse(store.isConfigured(.custom))
         XCTAssertNil(store.configuration(for: .deepseek))
     }
 
     func testSaveUpdatesExistingConfiguration() throws {
-        let (store, secrets, storage) = makeStore()
+        let fixture = makeStore()
 
-        try store.save(ProviderDraft(kind: .deepseek, baseURL: "https://a/v1", model: "m1", apiKey: "k1"))
-        try store.save(ProviderDraft(kind: .deepseek, baseURL: "https://b/v1", model: "m2", apiKey: "k2"))
+        try fixture.store.save(ProviderDraft(kind: .deepseek, baseURL: "https://a/v1", model: "m1", apiKey: "k1"))
+        try fixture.store.save(ProviderDraft(kind: .deepseek, baseURL: "https://b/v1", model: "m2", apiKey: "k2"))
 
-        XCTAssertEqual(storage.configurations.count, 1)
-        XCTAssertEqual(store.configuration(for: .deepseek)?.baseURL, "https://b/v1")
-        XCTAssertEqual(secrets.values.count, 1)
-        XCTAssertEqual(try store.secret(for: .deepseek), "k2")
+        XCTAssertEqual(fixture.storage.configurations.count, 1)
+        XCTAssertEqual(fixture.store.configuration(for: .deepseek)?.baseURL, "https://b/v1")
+        XCTAssertEqual(fixture.secrets.values.count, 1)
+        XCTAssertEqual(try fixture.store.secret(for: .deepseek), "k2")
     }
 
     func testDeleteRemovesConfigurationAndSecret() throws {
-        let (store, secrets, storage) = makeStore()
-        try store.save(ProviderDraft(kind: .deepseek, baseURL: "https://a/v1", model: "m", apiKey: "k"))
+        let fixture = makeStore()
+        try fixture.store.save(ProviderDraft(kind: .deepseek, baseURL: "https://a/v1", model: "m", apiKey: "k"))
 
-        try store.delete(.deepseek)
+        try fixture.store.delete(.deepseek)
 
-        XCTAssertNil(store.configuration(for: .deepseek))
-        XCTAssertFalse(store.isConfigured(.deepseek))
-        XCTAssertEqual(secrets.removedAccounts, [ProviderStore.account(for: .deepseek)])
-        XCTAssertTrue(storage.configurations.isEmpty)
+        XCTAssertNil(fixture.store.configuration(for: .deepseek))
+        XCTAssertFalse(fixture.store.isConfigured(.deepseek))
+        XCTAssertEqual(fixture.secrets.removedAccounts, [ProviderStore.account(for: .deepseek)])
+        XCTAssertTrue(fixture.storage.configurations.isEmpty)
     }
 
     func testDeleteOfUnknownProviderIsIdempotent() throws {
-        let (store, _, _) = makeStore()
+        let store = makeStore().store
 
         XCTAssertNoThrow(try store.delete(.custom))
         XCTAssertNil(store.configuration(for: .custom))
     }
 
     func testAvailabilityIsNoneWithoutConfiguration() {
-        let (store, _, _) = makeStore()
+        let store = makeStore().store
 
         XCTAssertEqual(store.availability(for: .deepseek), .none)
         XCTAssertEqual(store.availability(for: nil), .none)
     }
 
     func testAvailabilityIsReadyWithStoredKey() throws {
-        let (store, _, _) = makeStore()
+        let store = makeStore().store
         try store.save(
             ProviderDraft(
                 kind: .deepseek,
@@ -259,7 +270,7 @@ final class ProviderTests: XCTestCase {
         let storage = MemoryProviderStorage(configurations: [
             ProviderConfiguration(kind: .custom, baseURL: "https://example.com/v1", model: "m")
         ])
-        let (store, _, _) = makeStore(storage: storage)
+        let store = makeStore(storage: storage).store
 
         guard case let .incomplete(message) = store.availability(for: .custom) else {
             return XCTFail("expected .incomplete")

@@ -13,7 +13,7 @@
 
 - 后端：`make db-up` 起 PostgreSQL，`make backend-run` 起 `127.0.0.1:8000`；首次运行先 `make backend-migrate`。
 - iOS 工程由 `ios/project.yml` 生成且不入库；增删文件后运行 `make ios-project` 再开 Xcode。
-- iOS 单元测试：`make ios-test`。UI 测试需要本地后端，命令见 `README.md`「测试与检查」。
+- iOS 单元测试：`make ios-test`；SwiftLint：`make ios-lint`（首次需 `brew install swiftlint`）。UI 测试需要本地后端，命令见 `README.md`「测试与检查」。
 - 完整步骤与故障排查见 `README.md`「快速开始」。
 
 ## Git 提交类型
@@ -32,6 +32,7 @@
 
 ## 项目范围
 
+- 实现与评审细则见 `docs/agents/coding-standards.md`。
 - 产品需求以 `docs/PRD.md` 为准。
 - 领域术语以 `GLOSSARY.md` 为准。
 - 客户端采用 iOS 先行、Android 后补的顺序。

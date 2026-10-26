@@ -76,6 +76,7 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
         await self.receive_json(content, **kwargs)
 
     async def receive_json(self, content: dict[str, Any], **kwargs) -> None:
+        # TODO(#5): delete this branch once the turn scheduler drives events.
         if content.get("event_type") != p.MOCK_RUN:
             # Unknown client commands are ignored on purpose so older servers
             # never break newer clients that probe for capabilities.

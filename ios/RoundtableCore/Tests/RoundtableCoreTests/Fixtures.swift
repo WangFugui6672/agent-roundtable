@@ -97,7 +97,7 @@ enum Fixtures {
         payload: String,
         eventID: UUID = Fixtures.eventID
     ) -> Data {
-        """
+        Data("""
         {
           "event_id": "\(eventID.uuidString)",
           "room_id": "\(roomID.uuidString)",
@@ -106,7 +106,7 @@ enum Fixtures {
           "event_type": "\(eventType)",
           "payload": \(payload)
         }
-        """.data(using: .utf8)!
+        """.utf8)
     }
 
     static var joinedEnvelope: Data {

@@ -64,7 +64,7 @@ final class EventEnvelopeTests: XCTestCase {
     }
 
     func testAcceptsTimestampsWithoutFractionalSeconds() throws {
-        let data = """
+        let data = Data("""
         {
           "event_id": "0F9A0000-0000-4000-8000-000000000002",
           "room_id": "C0DEC0DE-0000-4000-8000-000000000001",
@@ -73,7 +73,7 @@ final class EventEnvelopeTests: XCTestCase {
           "event_type": "round.started",
           "payload": {"round": 1, "max_rounds": 2, "topic": "t"}
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let envelope = try EventEnvelope.decode(from: data)
 

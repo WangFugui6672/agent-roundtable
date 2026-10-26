@@ -1,0 +1,47 @@
+# SwiftLint 配置（PRD 18.5）。
+# 只约束我们自己写的源码：生成物与构建目录不参与 lint。
+
+included:
+  - AgentRoundtable
+  - AgentRoundtableTests
+  - AgentRoundtableUITests
+  - RoundtableCore/Sources
+  - RoundtableCore/Tests
+
+excluded:
+  - AgentRoundtable.xcodeproj
+  - RoundtableCore/.build
+  - AgentRoundtable/Resources
+
+disabled_rules:
+  # SwiftUI 的 `Button(action:) { } label: { }` 是标准写法，这条规则会误报。
+  - multiple_closures_with_trailing_closure
+
+opt_in_rules:
+  - empty_count
+  - explicit_init
+  - redundant_nil_coalescing
+  - toggle_bool
+  - unneeded_parentheses_in_closure_argument
+  - yoda_condition
+
+line_length:
+  warning: 120
+  error: 160
+  ignores_comments: true
+
+identifier_name:
+  min_length: 1
+  max_length: 50
+
+type_body_length:
+  warning: 350
+  error: 500
+
+file_length:
+  warning: 500
+  error: 700
+
+function_body_length:
+  warning: 80
+  error: 120
