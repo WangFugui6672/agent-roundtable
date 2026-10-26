@@ -31,6 +31,27 @@ final class RoundtableRoomModelTests: XCTestCase {
         XCTAssertTrue(model.messages.isEmpty)
     }
 
+    func testJoinRestoresPendingTurnIdentity() throws {
+        let model = RoundtableRoomModel()
+
+        model.apply(try EventEnvelope.decode(from: Fixtures.activeTurnJoinedEnvelope))
+
+        XCTAssertEqual(model.activeTurn?.turnId, Fixtures.turnID)
+        XCTAssertEqual(model.activeTurn?.roundtableAgentId, Fixtures.advocateID)
+    }
+
+    func testMatchingMessageCompletionClearsThePendingTurn() throws {
+        let model = RoundtableRoomModel()
+        model.apply(try EventEnvelope.decode(from: Fixtures.activeTurnJoinedEnvelope))
+
+        model.apply(
+            try envelope("message.completed", 3, "{\"message\": \(Fixtures.messageJSON)}")
+        )
+
+        XCTAssertNil(model.activeTurn)
+        XCTAssertEqual(model.messages.count, 1)
+    }
+
     func testMessageCompletedAppendsAndAdvancesCursor() throws {
         let model = RoundtableRoomModel()
         model.apply(try joinedEnvelope())

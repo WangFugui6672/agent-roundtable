@@ -27,10 +27,19 @@ public struct RoundStarted: Codable, Equatable, Sendable {
 public struct AgentActivity: Codable, Equatable, Sendable {
     public let agentId: UUID
     public let agentName: String?
+    public let turnId: UUID?
+    public let round: Int?
 
-    public init(agentId: UUID, agentName: String?) {
+    public init(
+        agentId: UUID,
+        agentName: String?,
+        turnId: UUID? = nil,
+        round: Int? = nil
+    ) {
         self.agentId = agentId
         self.agentName = agentName
+        self.turnId = turnId
+        self.round = round
     }
 }
 

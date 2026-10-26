@@ -106,7 +106,39 @@ public struct APIClient: Sendable {
         let body = try JSONEncoder.roundtable.encode(submission)
         return try await send(
             makeRequest(
-                path: "api/v1/roundtables/\(roundtableID.uuidString)/messages",
+                path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/messages",
+                method: "POST",
+                body: body
+            )
+        )
+    }
+
+    /// Reserves the next scheduled Agent, or returns a nil turn when the round is done.
+    public func nextTurn(roundtableID: UUID) async throws -> NextTurnResponse {
+        try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/turns/next",
+                method: "POST"
+            )
+        )
+    }
+
+    /// Persists a scheduled Agent's explicit decision not to speak.
+    public func passTurn(
+        roundtableID: UUID,
+        agentID: UUID,
+        turnID: UUID
+    ) async throws -> EventEnvelope {
+        struct Body: Encodable {
+            let turnId: UUID
+            let roundtableAgentId: UUID
+        }
+        let body = try JSONEncoder.roundtable.encode(
+            Body(turnId: turnID, roundtableAgentId: agentID)
+        )
+        return try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/turns/pass",
                 method: "POST",
                 body: body
             )
@@ -114,7 +146,12 @@ public struct APIClient: Sendable {
     }
 
     public func fetchRoundtable(id: UUID) async throws -> RoundtableSnapshot {
-        try await send(makeRequest(path: "api/v1/roundtables/\(id.uuidString)", method: "GET"))
+        try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(id.uuidString.lowercased())",
+                method: "GET"
+            )
+        )
     }
 
     // MARK: - Plumbing
