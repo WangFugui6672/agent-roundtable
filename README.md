@@ -77,10 +77,10 @@ make backend-test # 30 个后端测试（含 WebSocket 集成测试）
 make ios-test     # RoundtableCore 单元测试（需要 Xcode 提供 XCTest）
 ```
 
-UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8001`（避开本机 8000 上的其它服务）。先在该端口启动后端，再运行：
+UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8000`。先启动后端，再运行：
 
 ```bash
-cd backend && DJANGO_DEBUG=1 uv run python manage.py runserver 0.0.0.0:8001
+cd backend && DJANGO_DEBUG=1 uv run python manage.py runserver 0.0.0.0:8000
 cd ios && xcodebuild test -project AgentRoundtable.xcodeproj -scheme AgentRoundtable \
   -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
