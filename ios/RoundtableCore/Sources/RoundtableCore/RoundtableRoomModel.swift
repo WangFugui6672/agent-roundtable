@@ -40,7 +40,15 @@ public final class RoundtableRoomModel {
         guard envelope.sequence == 0 || envelope.sequence > lastSequence else { return }
         seenEventIds.insert(envelope.eventId)
 
-        switch envelope.payload {
+        handle(envelope.payload)
+
+        if envelope.sequence > 0 {
+            lastSequence = envelope.sequence
+        }
+    }
+
+    private func handle(_ payload: EventPayload) {
+        switch payload {
         case let .joined(joined):
             applyJoin(joined)
         case let .roundStarted(started):
@@ -65,10 +73,6 @@ public final class RoundtableRoomModel {
             // Forward compatibility: the payload is ignored, but the cursor
             // still advances or reconnects would replay the event forever.
             break
-        }
-
-        if envelope.sequence > 0 {
-            lastSequence = envelope.sequence
         }
     }
 

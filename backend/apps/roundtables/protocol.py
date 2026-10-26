@@ -23,6 +23,7 @@ ROUND_COMPLETED = "round.completed"
 EPHEMERAL_SEQUENCE = 0
 
 #: Client -> server command that plays one scripted mock round.
+#: TODO(#5): the turn scheduler replaces this bridge; clients stop sending it.
 MOCK_RUN = "mock.run"
 
 
