@@ -2,7 +2,7 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #10「失败、预算与限流」—— 局部 Agent 失败可恢复，Provider usage、两轮/时间/消息/Token 预算及创建限额已落地。
+**当前阶段：** Issue #8「断线与进程恢复」—— 本地游标补发、乱序缓冲、SwiftData 恢复、离线只读和前后台连接管理已落地。
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -45,9 +45,15 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - iOS 第二轮要求 Provider 返回结构化 JSON，由 `StructuredReplyParser` 校验引用 ID/索引、挑战关系与置信度；格式错误只重试一次。
 - 消息卡展示被引用观点的作者和原内容，并用文字与颜色区分四种立场；VoiceOver 会读出立场、引用内容和挑战对象。
 - 第二轮结束后只产生一次 `round.completed`，圆桌进入 `completed`；`room.joined` 可恢复两轮完整消息和引用关系。
+- WebSocket 使用可取消的指数退避重连，每次重连携带本机最后已处理游标。
+- `room.joined.replay` 返回 90 天补发窗口；游标过期时使用完整快照重置，不会永久跳过缺口。
+- iOS 按 `event_id` 和连续 `sequence` 去重/缓冲乱序事件，未知事件也会推进游标。
+- SwiftData 保存最近圆桌、消息、失败、游标、有界去重状态和最近可见消息；App 重启直接恢复缓存。
+- 断网时已有消息继续可读；App 进入后台会取消本地 Provider Task、暂停连接，回前台只恢复连接并要求用户显式继续。
+- `AppModel` 已通过 `RoundtableRepository` 收口 REST、WebSocket、SwiftData 和游标编排；API Key 不进入 Repository 持久化状态。
 - 后端单元/集成测试、iOS 解码/状态机/Provider/流式客户端测试、Keychain 集成测试、最小 GitHub Actions。
 
-总结、结论卡和完整断线重连见后续 Issue。
+总结与结论卡见后续 Issue。
 
 ## 目录结构
 
@@ -153,16 +159,16 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 ## 已知边界
 
 - `mock.run` 保留为确定性演示与 UI 测试入口；真实两轮讨论由 turn REST 握手驱动。
-- Redis 与 Celery 尚未接入：事件广播暂时使用 Channels 的 `InMemoryChannelLayer`，只在单进程内有效。
+- Redis 与 Celery 尚未接入：事件广播暂时使用 Channels 的 `InMemoryChannelLayer`，只在单进程内有效；事件日志补发本身已持久化。
 - Provider Token 仍以客户端上报为权威观测值；Provider 未返回 usage 时只记录延迟与重试，不伪造 Token。
-- iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
+- 事件补发窗口默认 90 天；窗口外只返回完整圆桌快照并标记 `cursor_expired`。
 - 两轮讨论都由服务端顺序签发 turn；第一轮结束时同一响应自动签发第二轮。
 - `agent.thinking` 由服务端持久化；`agent.typing` 与逐字文本仍是客户端本地临时状态。
 - 第一轮消息的 `message_type` / `stance` 由预设角色推导；第二轮由模型返回结构化字段，客户端校验后提交，后端再次校验。
 - 第二轮引用与挑战关系已持久化并可恢复；引用卡展示原观点摘要，不额外加载被引用消息全文的历史版本。
 - SwiftLint 已接入（`ios/.swiftlint.yml`，`make verify` 与 CI 都执行 `--strict`）；UI 测试仍未在 CI 执行（需要本地后端），CI 只做 `build-for-testing`。
 - Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
-- AppModel 暂时直接持有 `APIClient`、`ProviderStore` 与 `ProviderProbe`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。
+- `RoundtableRepository` 持有圆桌 API、WebSocket、本地存储和游标；`AppModel` 只负责会话、Provider turn 与 UI 状态编排。
 - 匿名会话 ID 目前存 `UserDefaults`，它只是能力凭据、不含模型密钥；会话轮换与安全存储随隐私 Issue（#11）处理。
 
 ## 故障排查

@@ -386,7 +386,7 @@ extension RealTurnFailureTests {
     func testPausedNextTurnResponseAfterFailureStopsGenerationAsPaused() async throws {
         let failure = event(
             "agent.failed",
-            sequence: 2,
+            sequence: 1,
             payload: [
                 "turn_id": advocate.id.uuidString,
                 "round": 1,
@@ -400,7 +400,7 @@ extension RealTurnFailureTests {
         )
         let paused = event(
             "room.paused",
-            sequence: 3,
+            sequence: 2,
             payload: ["status": "paused"]
         )
         let response = jsonResponse(

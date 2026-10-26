@@ -169,7 +169,7 @@ extension AppModel {
 
         guard reportedFailureTurnIDs.insert(context.turn.turnId).inserted else { return }
         do {
-            let envelope = try await api.reportTurnFailure(
+            let envelope = try await repository.reportTurnFailure(
                 roundtableID: context.roundtableID,
                 submission: TurnFailureSubmission(
                     turnId: context.turn.turnId,
@@ -181,7 +181,7 @@ extension AppModel {
                     usage: report.usage
                 )
             )
-            context.room.apply(envelope)
+            try repository.apply(envelope)
         } catch {
             turnState = .failed(
                 agentID: context.turn.roundtableAgentId,

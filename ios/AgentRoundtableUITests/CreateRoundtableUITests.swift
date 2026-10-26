@@ -11,6 +11,7 @@ final class CreateRoundtableUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
+        app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
 
         let topic = app.descendants(matching: .any).matching(identifier: "create.topic").firstMatch

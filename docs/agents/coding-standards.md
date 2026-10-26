@@ -16,6 +16,7 @@
 - 新增字段优先「可选 + 缺省语义明确」，避免破坏旧客户端。
 - `room.joined` 的 `sequence = 0` 是游标语义的一部分，不能改成 1 或省略。
 - 未知 `event_type` 必须被忽略，但游标仍要前进。
+- 服务端只补发约定窗口内的事件；游标过期必须返回完整 `room.joined` 快照和 `replay.cursor_expired`，不能静默跳过缺口。
 
 ## 密钥与安全
 
@@ -31,7 +32,9 @@
 - 展示层（SwiftUI）只做渲染与交互；解码、去重、游标、Provider 生命周期放在 `RoundtableCore`，可以在 macOS 上跑测试。
 - 网络/存储通过协议注入（`HTTPTransport`、`SecretStore`、`ProviderConfigurationStorage`），测试用内存实现，不依赖真实 Keychain 或网络。
 - 新增文件后运行 `make ios-project`；`.xcodeproj` 不入库。
-- 分层例外：当前 `AppModel` 直接持有 `APIClient` / `ProviderStore` / `ProviderProbe`，Repository 化随 Issue #8 一起做，不要在单个 ticket 里顺手重构。
+- `AppModel` 是会话编排器；圆桌 REST、WebSocket、SwiftData 与游标由 `RoundtableRepository` 统一持有。`ProviderStore` / `ProviderProbe` 仍由 `AppModel` 的 Provider 扩展管理。
+- 本地持久化以本机已处理游标为准；`room.joined` 的正常快照不能覆盖它。只有快照明确 `cursor_expired` 时才允许按完整快照重置。
+- API Key 不得进入 `StoredRoomState`、SwiftData payload、日志或普通缓存。
 - UI 标识符（accessibilityIdentifier）用 `feature.element` 形式，便于 UI 测试定位。
 
 ## 后端

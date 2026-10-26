@@ -4,6 +4,7 @@ import SwiftUI
 struct RoundtableView: View {
     @Environment(AppModel.self) private var model
     let room: RoundtableRoomModel
+    @State private var visibleMessageID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -278,12 +279,21 @@ struct RoundtableView: View {
                     }
                 }
                 .padding(16)
+                .scrollTargetLayout()
+            }
+            .scrollPosition(id: $visibleMessageID)
+            .onAppear {
+                visibleMessageID = room.lastVisibleMessageID ?? room.messages.last?.id
+                scrollToVisibleMessage(using: proxy, animated: false)
+            }
+            .onChange(of: visibleMessageID) { _, messageID in
+                guard let messageID else { return }
+                model.markVisibleMessage(messageID)
             }
             .onChange(of: room.messages.count) { _, _ in
                 guard let last = room.messages.last else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
+                visibleMessageID = last.id
+                scrollToVisibleMessage(using: proxy, animated: true)
             }
             .onChange(of: room.failures.count) { _, _ in
                 guard let last = room.failures.last else { return }
@@ -300,7 +310,24 @@ struct RoundtableView: View {
         }
     }
 
-    private var emptyState: some View {
+}
+
+private extension RoundtableView {
+    func scrollToVisibleMessage(
+        using proxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        guard let visibleMessageID else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(visibleMessageID, anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo(visibleMessageID, anchor: .center)
+        }
+    }
+
+    var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.largeTitle)
@@ -317,7 +344,7 @@ struct RoundtableView: View {
         .padding(.vertical, 40)
     }
 
-    private var statusBadge: (text: String, tint: Color) {
+    var statusBadge: (text: String, tint: Color) {
         guard let status = room.status else { return ("准备中", .secondary) }
         if room.budgetExhaustion != nil {
             return ("预算用尽", .orange)
@@ -338,11 +365,12 @@ struct RoundtableView: View {
         }
     }
 
-    private var streamBadge: (text: String, tint: Color) {
+    var streamBadge: (text: String, tint: Color) {
         switch model.streamState {
         case .idle: return ("未连接", .secondary)
         case .connecting: return ("连接中", .orange)
         case .connected: return ("已连接", .green)
+        case .reconnecting: return ("离线，重试中", .orange)
         case .closed: return ("已断开", .secondary)
         case .failed: return ("连接失败", .red)
         }

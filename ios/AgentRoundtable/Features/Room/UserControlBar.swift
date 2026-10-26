@@ -114,7 +114,7 @@ struct UserControlBar: View {
 
     @ViewBuilder
     private var generationButton: some View {
-        if room.status != .paused && room.status != .completed {
+        if room.status != .paused, room.status != .completed, !room.pausePending {
             Button {
                 model.startGeneration()
             } label: {
@@ -129,6 +129,7 @@ struct UserControlBar: View {
             .disabled(
                 model.isFirstRoundRunning
                     || !model.hasConfiguredProvider
+                    || !model.isSceneActive
             )
             .accessibilityLabel(room.currentRound == 0 ? "开始讨论" : "继续自动讨论")
             .accessibilityIdentifier("room.round.start")
@@ -137,7 +138,7 @@ struct UserControlBar: View {
 
     @ViewBuilder
     private var pauseResumeButton: some View {
-        if room.status == .paused {
+        if room.status == .paused || room.pausePending {
             Button {
                 Task { await model.resumeDiscussion() }
             } label: {
