@@ -55,6 +55,7 @@ struct CreateRoundtableView: View {
                         .fill(Color(.secondarySystemGroupedBackground))
                 )
                 .accessibilityLabel("圆桌议题")
+                .accessibilityIdentifier("create.topic")
 
             HStack {
                 Text("越具体，讨论越容易收敛。")
@@ -110,6 +111,7 @@ struct CreateRoundtableView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(!canStart)
+            .accessibilityIdentifier("create.start")
 
             if let error = model.createError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")

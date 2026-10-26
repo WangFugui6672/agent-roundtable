@@ -89,6 +89,7 @@ struct RoundtableView: View {
                 .foregroundStyle(.secondary)
             Text("圆桌已经建好，还没有发言")
                 .font(.headline)
+                .accessibilityIdentifier("room.empty")
             Text("这是 Mock 切片：点击下方按钮，可以看到一轮完整的实时事件往返。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -113,6 +114,7 @@ struct RoundtableView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(model.isMockRunning)
+            .accessibilityIdentifier("room.mock")
 
             Spacer()
 
