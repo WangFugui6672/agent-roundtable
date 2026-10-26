@@ -6,6 +6,22 @@ import XCTest
 
 @MainActor
 final class SwiftDataRoomStoreTests: XCTestCase {
+    func testPersistedPayloadContainsNoSecretsOrPrompt() throws {
+        let state = try storedState()
+        XCTAssertNotNil(state.snapshot.provider)
+
+        let data = try JSONEncoder().encode(state)
+        let object = try JSONSerialization.jsonObject(with: data)
+        let keys = collectKeys(in: object)
+
+        XCTAssertTrue(keys.contains("provider"))
+        XCTAssertFalse(keys.contains("api_key"))
+        XCTAssertFalse(keys.contains("apiKey"))
+        XCTAssertFalse(keys.contains("authorization"))
+        XCTAssertFalse(keys.contains("Authorization"))
+        XCTAssertFalse(keys.contains("prompt"))
+    }
+
     func testPersistsLoadsDeletesAndReopensFromDisk() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -36,7 +52,19 @@ final class SwiftDataRoomStoreTests: XCTestCase {
     }
 
     private func storedState() throws -> StoredRoomState {
-        let joined = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+        let joined = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "room.joined",
+                sequence: 0,
+                payload: """
+                {
+                  "roundtable": \(Fixtures.providerSnapshotJSON),
+                  "messages": [],
+                  "failures": []
+                }
+                """
+            )
+        )
         guard case let .joined(joinedRoom) = joined.payload else {
             throw TestError.missingJoin
         }
@@ -57,6 +85,20 @@ final class SwiftDataRoomStoreTests: XCTestCase {
         let state = model.storedState(savedAt: Date(timeIntervalSince1970: 1_800_000_000))
         XCTAssertEqual(state.lastVisibleMessageID, Fixtures.messageID)
         return state
+    }
+
+    private func collectKeys(in value: Any) -> Set<String> {
+        if let dictionary = value as? [String: Any] {
+            return dictionary.reduce(into: Set(dictionary.keys)) { keys, entry in
+                keys.formUnion(collectKeys(in: entry.value))
+            }
+        }
+        if let array = value as? [Any] {
+            return array.reduce(into: Set<String>()) { keys, item in
+                keys.formUnion(collectKeys(in: item))
+            }
+        }
+        return []
     }
 
     private enum TestError: Error {

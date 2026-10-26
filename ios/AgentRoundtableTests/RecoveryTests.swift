@@ -96,6 +96,34 @@ final class RecoveryTests: XCTestCase {
         app.enterBackground()
     }
 
+    func testBackgroundCancelsGenerationAndLeavesAStablePauseBoundary() async {
+        defaults.set(UUID().uuidString, forKey: "roundtable.guestSessionID")
+        let app = makeModel(
+            store: InMemoryRoomStore(),
+            transport: ProfilesTransport(),
+            socketFactory: CountingSocketFactory()
+        )
+        app.present(makeSnapshot(id: UUID(), status: .ready))
+        app.turnState = .thinking(agentID: UUID())
+        app.isFirstRoundRunning = true
+        app.scheduledTurn = ScheduledTurn(
+            turnId: UUID(),
+            round: 1,
+            roundtableAgentId: UUID(),
+            position: 0,
+            agentKey: "advocate",
+            agentName: "方案派"
+        )
+
+        app.enterBackground()
+
+        XCTAssertEqual(app.turnState, .paused)
+        XCTAssertFalse(app.isFirstRoundRunning)
+        XCTAssertNil(app.scheduledTurn)
+        XCTAssertNil(app.generationTask)
+        await Task.yield()
+    }
+
     private func makeModel(
         store: InMemoryRoomStore,
         transport: HTTPTransport,

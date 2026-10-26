@@ -18,6 +18,7 @@ from apps.roundtables import protocol as p
 from apps.roundtables.services import (
     events_after,
     join_snapshot,
+    room_access_allowed,
     room_group_name,
     run_mock_round,
 )
@@ -62,17 +63,25 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=CLOSE_UNAUTHORIZED)
             return
 
+        if not await room_access_allowed(self.roundtable_id, self.guest_session_id):
+            await self.close(code=CLOSE_UNAUTHORIZED)
+            return
+
+        # Subscribe before building the snapshot. Events committed between
+        # snapshot reads stay queued and are sent after joined/replay.
+        self.replaying = True
+        await self.channel_layer.group_add(room_group_name(self.roundtable_id), self.channel_name)
+
         snapshot = await join_snapshot(self.roundtable_id, self.guest_session_id, self.cursor)
         if snapshot is None:
+            await self.channel_layer.group_discard(
+                room_group_name(self.roundtable_id),
+                self.channel_name,
+            )
             await self.close(code=CLOSE_UNAUTHORIZED)
             return
 
         await self.accept()
-        # Subscribe before replaying: anything submitted from now on either
-        # arrives as a broadcast or as a replayed event, and the client
-        # dedupes by event_id.
-        self.replaying = True
-        await self.channel_layer.group_add(room_group_name(self.roundtable_id), self.channel_name)
         await self._send_event(snapshot)
 
         replay = snapshot["payload"]["replay"]
