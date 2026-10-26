@@ -55,6 +55,67 @@ final class RoundtableRepositoryTests: XCTestCase {
         XCTAssertEqual(restarted.room?.lastSequence, 1)
     }
 
+    func testRestoresCompletedSummaryAfterRestart() throws {
+        let store = InMemoryRoomStore()
+        let first = makeRepository(store: store)
+        let joined = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+        guard case let .joined(room) = joined.payload else {
+            return XCTFail("expected a joined payload")
+        }
+        try first.present(room.roundtable, cursor: 0)
+        try first.apply(
+            try EventEnvelope.decode(
+                from: Fixtures.envelope(
+                    eventType: "summary.completed",
+                    sequence: 1,
+                    payload: "{\"summary\": \(Fixtures.summaryJSON)}"
+                )
+            )
+        )
+
+        let restarted = makeRepository(store: store)
+        XCTAssertTrue(try restarted.restoreRecent())
+        XCTAssertEqual(restarted.room?.status, .completed)
+        XCTAssertEqual(restarted.room?.summary?.id, Fixtures.summaryID)
+        XCTAssertEqual(restarted.room?.summary?.degraded, false)
+    }
+
+    func testIgnoresSummaryResponseForAnotherCurrentRoom() throws {
+        let repository = makeRepository(store: InMemoryRoomStore())
+        let joined = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+        guard case let .joined(room) = joined.payload else {
+            return XCTFail("expected a joined payload")
+        }
+        try repository.present(room.roundtable, cursor: 0)
+
+        let otherRoomID = UUID(uuidString: "C0DEC0DE-0000-4000-8000-000000000099")!
+        let otherSnapshot = try JSONDecoder.roundtable.decode(
+            RoundtableSnapshot.self,
+            from: Data(
+                Fixtures.snapshotJSON.replacingOccurrences(
+                    of: Fixtures.roomID.uuidString,
+                    with: otherRoomID.uuidString
+                ).utf8
+            )
+        )
+        let summary = try JSONDecoder.roundtable.decode(
+            RoundSummary.self,
+            from: Data(Fixtures.summaryJSON.utf8)
+        )
+
+        try repository.apply(
+            RoundSummaryResponse(
+                roundtable: otherSnapshot,
+                summary: summary,
+                events: []
+            )
+        )
+
+        XCTAssertEqual(repository.room?.snapshot?.id, Fixtures.roomID)
+        XCTAssertEqual(repository.room?.status, .ready)
+        XCTAssertNil(repository.room?.summary)
+    }
+
     private func makeRepository(store: InMemoryRoomStore) -> RoundtableRepository {
         RoundtableRepository(
             api: APIClient(baseURL: URL(string: "http://127.0.0.1:8000")!),

@@ -19,6 +19,8 @@ AGENT_PASSED = "agent.passed"
 AGENT_FAILED = "agent.failed"
 MESSAGE_COMPLETED = "message.completed"
 ROUND_COMPLETED = "round.completed"
+SUMMARY_STARTED = "summary.started"
+SUMMARY_COMPLETED = "summary.completed"
 ROOM_BUDGET_EXHAUSTED = "budget.exhausted"
 ROOM_PAUSE_PENDING = "room.pause_pending"
 ROOM_PAUSED = "room.paused"
@@ -34,6 +36,9 @@ CLAIM_MAX_CHARS = 80
 DEFAULT_CONFIDENCE = 0.6
 MAX_REFERENCES = 3
 BODY_HARD_MAX_CHARS = 2000
+SUMMARY_TEXT_MAX_CHARS = 400
+SUMMARY_MAX_ITEMS_PER_SECTION = 8
+SUMMARY_MAX_REFERENCES_PER_ITEM = 3
 
 FAILURE_CODES = frozenset(
     {

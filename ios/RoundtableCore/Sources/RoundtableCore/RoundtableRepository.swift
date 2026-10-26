@@ -6,6 +6,7 @@ public struct StoredRoomState: Codable, Equatable, Sendable {
     public let messages: [Message]
     public let failures: [TurnFailure]
     public let budgetExhaustion: BudgetExhaustion?
+    public let summary: RoundSummary?
     public let lastSequence: Int
     public let seenEventIDs: [UUID]
     public let lastVisibleMessageID: UUID?
@@ -16,6 +17,7 @@ public struct StoredRoomState: Codable, Equatable, Sendable {
         messages: [Message],
         failures: [TurnFailure],
         budgetExhaustion: BudgetExhaustion?,
+        summary: RoundSummary? = nil,
         lastSequence: Int,
         seenEventIDs: [UUID],
         lastVisibleMessageID: UUID?,
@@ -25,6 +27,7 @@ public struct StoredRoomState: Codable, Equatable, Sendable {
         self.messages = messages
         self.failures = failures
         self.budgetExhaustion = budgetExhaustion
+        self.summary = summary
         self.lastSequence = lastSequence
         self.seenEventIDs = seenEventIDs
         self.lastVisibleMessageID = lastVisibleMessageID
@@ -126,6 +129,16 @@ public final class RoundtableRepository {
         )
     }
 
+    public func createFollowUp(
+        parentRoundtableID: UUID,
+        topic: String
+    ) async throws -> RoundtableSnapshot {
+        try await api.createFollowUp(
+            parentRoundtableID: parentRoundtableID,
+            topic: topic
+        )
+    }
+
     public func nextTurn(roundtableID: UUID) async throws -> NextTurnResponse {
         try await api.nextTurn(roundtableID: roundtableID)
     }
@@ -159,6 +172,16 @@ public final class RoundtableRepository {
         submission: TurnFailureSubmission
     ) async throws -> EventEnvelope {
         try await api.reportTurnFailure(
+            roundtableID: roundtableID,
+            submission: submission
+        )
+    }
+
+    public func submitSummary(
+        roundtableID: UUID,
+        submission: RoundSummarySubmission
+    ) async throws -> RoundSummaryResponse {
+        try await api.submitSummary(
             roundtableID: roundtableID,
             submission: submission
         )
@@ -225,6 +248,15 @@ public final class RoundtableRepository {
 
     public func apply(_ response: RoomCommandResponse) throws {
         guard let room else { return }
+        for event in response.events {
+            room.apply(event)
+        }
+        room.update(from: response.roundtable)
+        try persist()
+    }
+
+    public func apply(_ response: RoundSummaryResponse) throws {
+        guard let room, room.snapshot?.id == response.roundtable.id else { return }
         for event in response.events {
             room.apply(event)
         }

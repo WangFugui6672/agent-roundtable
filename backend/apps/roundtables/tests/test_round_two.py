@@ -505,14 +505,18 @@ def test_round_two_completes_once_after_each_participant_reviews(api_client):
 
     assert completed.status_code == 200
     assert completed.json()["turn"] is None
-    assert [event["event_type"] for event in completed.json()["events"]] == ["round.completed"]
+    assert [event["event_type"] for event in completed.json()["events"]] == [
+        "round.completed",
+        "summary.started",
+    ]
     assert completed.json()["events"][0]["payload"] == {"round": 2}
-    assert repeated.json()["turn"] is None
-    assert repeated.json()["events"] == []
+    assert repeated.status_code == 400
+    assert "status" in repeated.json()["error"]["details"]
     room.refresh_from_db()
     assert room.current_round == 2
-    assert room.status == Roundtable.Status.COMPLETED
+    assert room.status == Roundtable.Status.SUMMARIZING
     assert room.events.filter(event_type="round.completed", payload__round=2).count() == 1
+    assert room.events.filter(event_type="summary.started", payload__round=2).count() == 1
     restored = build_join_envelope(room)["payload"]["messages"]
     round_two_messages = [message for message in restored if message["round_number"] == 2]
     assert [message["stance"] for message in round_two_messages] == [

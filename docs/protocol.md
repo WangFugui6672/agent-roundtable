@@ -1,6 +1,6 @@
 # Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #8）
+**状态：** 实现中（Issue #9）
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -37,6 +37,7 @@
 | `validation_error` | 400 | 请求体校验失败 |
 | `active_roundtable_limit` | 429 | 同一匿名会话已有 3 个进行中的圆桌 |
 | `mock_daily_limit` | 429 | 同一匿名会话在本 UTC 日已创建 10 个 Mock 圆桌 |
+| `summary_version_conflict` | 409 | 结论提交的 `expected_version` 已过期 |
 | `not_found` | 404 | 路由不存在（由 Django 404 处理器返回 JSON） |
 | `method_not_allowed` | 405 | HTTP 方法不被该路由支持 |
 | `server_error` | 500 | 未处理异常（由 Django 500 处理器返回 JSON） |
@@ -146,6 +147,9 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
     "base_url": "https://api.deepseek.com/v1",
     "model": "deepseek-chat"
   },
+  "parent_roundtable_id": null,
+  "source_summary_id": null,
+  "follow_up_context": null,
   "budget": {
     "max_rounds": 2,
     "max_agent_messages": 6,
@@ -177,6 +181,8 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 `pause_pending`：用户要求在安全边界暂停，但仍有在途 turn。仅在 `status = running` 时可能为 `true`。
 `active_turn`：当前待执行的 turn；没有在途 turn 时为 `null`。字段形状见 2.8，重连客户端用 `turn_id` 继续或拒绝过期回报。
 `provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
+`parent_roundtable_id` / `source_summary_id`：继续追问创建的新圆桌会显式保存父圆桌与原结论关系，否则为 `null`。
+`follow_up_context`：继续追问时返回 `{"parent_topic": "...", "summary": <RoundSummary>}`；普通圆桌为 `null`。
 `budget`：服务端实际执行的轮数、消息数、时间和客户端上报 Token 上限。`token_source = client_reported` 表示 Token 不是服务端计量或计费事实；Django 不接触 Provider 请求。
 
 ### 2.7 提交结构化发言
@@ -294,7 +300,7 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 - 服务端在一个事务内锁定圆桌、选择下一位 Agent、写入 `Turn` 和持久化事件，再通过统一服务入口广播。
 - 同一圆桌最多存在一个 `pending` turn。iOS 重复请求时返回同一个 `turn_id` 和空 `events`，不会重复签发。
 - 当前轮所有 Agent 已 `completed` 或 `passed` 时，服务端发送唯一的 `round.completed`。若还未达到 `max_rounds`，同一响应会立即追加下一轮的 `round.started` 和 `agent.thinking`，并返回新 turn，客户端无需额外请求即可自动进入第二轮。
-- 达到 `max_rounds` 后才返回 `turn: null`，圆桌进入 `completed`。之后重复请求返回同一轮次、`turn: null` 和空 `events`，不会重复产生 `round.completed`。
+- 达到 `max_rounds` 后返回 `turn: null`，追加唯一 `summary.started` 并进入 `summarizing`。完成结算后重复请求返回 `400 validation_error`，不会重复产生 `round.completed`。
 - `turn_id` 是后续消息完成、失败或 pass 的唯一回合身份。iOS 不得自行生成或替换。
 - `agent.thinking` 表示服务端已把该 turn 签发给客户端；`agent.typing` 和逐字 delta 仍是本地临时状态。
 
@@ -485,10 +491,10 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 
 `POST /api/v1/roundtables/{id}/end`，无请求体。
 
-- 圆桌进入 `completed`，清除 `pause_pending`，产生 `room.ended`。
+- 圆桌进入 `summarizing`，清除 `pause_pending`，依次产生 `room.ended` 与 `summary.started`。
 - 如有在途 turn，其状态改为 `cancelled`，此后使用该 `turn_id` 提交 message 或 pass 都返回 `400`。
 - 重复调用返回当前快照和空 `events`。
-- 结束后禁止写入用户消息、Agent 消息或签发新 turn。总结生成入口由 Issue #9 扩展，本切片不提前实现。
+- 结束后禁止写入用户消息、Agent 消息或签发新 turn；客户端继续生成并提交结论。总结保存后圆桌进入 `completed`。
 
 以上三个控制命令与用户消息命令统一返回：
 
@@ -518,13 +524,103 @@ Token 的可信度边界：
 结束事件优先级：
 
 1. 用户 `end` 产生一次 `room.ended`，优先于后续所有预算检查。
-2. 当前轮已经是最后一轮且所有参与者均已关闭时，产生一次 `round.completed`；自然完成优先于预算耗尽。
+2. 当前轮已经是最后一轮且所有参与者均已关闭时，产生一次 `round.completed`，随后追加一次 `summary.started` 并进入 `summarizing`；自然完成优先于预算耗尽。
 3. 仍有后续发言空间，但时长、消息数或上报 Token 已达上限时，产生一次 `budget.exhausted` 并把圆桌置为 `completed`。
 4. 单个 `agent.failed` 只关闭该 turn，不终止整场讨论。
 
 若当前轮自然结束、仍有下一轮空间，但预算已经耗尽，同一响应先返回该轮的 `round.completed`，再返回唯一的 `budget.exhausted`，不会签发下一轮 turn。
 
-`budget.exhausted` 只会写一次；之后重复请求 `turns/next` 返回 `turn: null` 和空 `events`。Mock 模式执行同一时间/消息预算检查。
+`budget.exhausted` 只会写一次；圆桌完成后重复请求 `turns/next` 返回 `400 validation_error`。Mock 模式执行同一时间/消息预算检查。
+
+### 2.16 读取与提交结论
+
+`GET /api/v1/roundtables/{id}/summary` 返回 `{"summary": <RoundSummary|null>}`。尚未生成结论时为 `null`：
+
+```json
+{
+  "id": "5a0e...",
+  "version": 1,
+  "degraded": false,
+  "consensus": [
+    {
+      "text": "先完成可验证的小实验。",
+      "reference_message_ids": ["6f0e..."]
+    }
+  ],
+  "dissent": [],
+  "recommendations": [],
+  "unresolved": [],
+  "created_at": "2026-10-26T01:05:03.456Z",
+  "updated_at": "2026-10-26T01:05:03.456Z"
+}
+```
+
+结论项规则：
+
+- 每个 `text` 去除首尾空白后为 1-400 字符。
+- 每个分组最多 8 项。
+- 每项必须引用 1-3 条同一圆桌中已经存在的有效 Agent 观点；用户消息、pass、summary、未知消息和跨圆桌消息都不是合法来源。
+- `degraded = true` 表示 Provider 不可用或严格结构校验连续失败，客户端已改用规则化摘要；引用仍然必须是真实已存在消息。
+- 后端不提供直接编辑结论正文的接口。
+
+`POST /api/v1/roundtables/{id}/summary` 需要 `X-Guest-Session`：
+
+```json
+{
+  "expected_version": 0,
+  "degraded": false,
+  "consensus": [
+    {
+      "text": "先完成可验证的小实验。",
+      "reference_message_ids": ["6f0e..."]
+    }
+  ],
+  "dissent": [],
+  "recommendations": [],
+  "unresolved": []
+}
+```
+
+- 首次提交必须使用 `expected_version = 0`，保存为版本 1，圆桌进入 `completed`。
+- 重新生成使用当前版本作为 `expected_version`，成功保存为新版本并追加新的 `summary.completed`。
+- 网络重试使用旧 `expected_version` 且内容完全相同时是幂等重试，返回 `200`、当前结论和空 `events`。
+- 其他版本不匹配返回 `409 summary_version_conflict`，不会覆盖较新的结论。
+- 只有第二轮已经完成且状态为 `summarizing | completed` 时才能提交；请求体任意层级出现 API Key 会返回 `400 validation_error`。
+
+首次成功返回 `201`，幂等重试返回 `200`：
+
+```json
+{
+  "roundtable": {"status": "completed", "...": "..."},
+  "summary": {"version": 1, "...": "..."},
+  "events": [
+    {
+      "event_id": "0f9f...",
+      "room_id": "c0de...",
+      "sequence": 23,
+      "created_at": "2026-10-26T01:05:03.456Z",
+      "event_type": "summary.completed",
+      "payload": {"summary": {"version": 1, "...": "..."}}
+    }
+  ]
+}
+```
+
+总结由 iOS 使用当前 Provider 生成：模型输出只包含 `text` 和候选观点 `reference_indexes`，客户端将索引映射为真实消息 ID。严格 schema 失败最多重试一次；再次失败或 Provider 不可用时，`RuleBasedSummary` 只用原消息 claim/正文生成本地降级项并设置 `degraded = true`。候选范围、强制引用和提示约束可以降低“引入新事实”的风险，但后端无法证明任意自然语言片段没有隐含新事实。
+
+### 2.17 继续追问
+
+`POST /api/v1/roundtables/{id}/follow-ups`，需要 `X-Guest-Session`：
+
+```json
+{"topic": "如果团队只有两个人，还应该马上扩大验证范围吗？"}
+```
+
+- 父圆桌必须是 `completed` 且已有 `RoundSummary`。
+- 服务端创建新的 `ready` 圆桌，复制父圆桌的三个参与者和 Provider 元数据。
+- 新圆桌保存 `parent_roundtable_id` 与 `source_summary_id`，并在 `follow_up_context` 返回原议题和原结论。
+- 原圆桌不被修改；所有后续消息、turn 和控制只作用于新圆桌。
+- 新圆桌仍受活跃圆桌上限约束。
 
 ## 3. WebSocket
 
@@ -589,7 +685,7 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 | event_type | payload | 说明 |
 | --- | --- | --- |
-| `room.joined` | `{"roundtable": <快照>, "messages": [<Message>], "failures": [<TurnFailure>], "replay": <ReplayMetadata>}` | 进入圆桌；恢复完整消息、失败 turn 和补发窗口；`failures`、`replay` 缺失时旧客户端按兼容缺省处理 |
+| `room.joined` | `{"roundtable": <快照>, "messages": [<Message>], "failures": [<TurnFailure>], "summary": <RoundSummary|null>, "replay": <ReplayMetadata>}` | 进入圆桌；恢复完整消息、失败 turn、结论和补发窗口；新增字段缺失时旧客户端按兼容缺省处理 |
 | `round.started` | `{"round": 1, "max_rounds": 2, "topic": "..."}` | 一轮开始 |
 | `agent.thinking` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | 服务端已签发本轮 turn |
 | `agent.typing` | `{"agent_id": "<RoundtableAgent.id>"}` | Agent 输入中 |
@@ -602,8 +698,10 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 | `room.pause_pending` | `{"turn_id": "<Turn.id>"}` | 已请求暂停，等待当前 turn 完成 |
 | `room.paused` | `{"status": "paused"}` | 圆桌已暂停 |
 | `room.resumed` | `{"status": "running"}` | 圆桌已继续 |
-| `room.ended` | `{"status": "completed", "cancelled_turn_id": "<Turn.id>", "cancelled_agent_id": "<RoundtableAgent.id>"}` | 用户提前结束圆桌；无在途 turn 时两个取消字段为 `null` |
-| `summary.started` / `summary.delta` / `summary.completed` | 预留 | 结论阶段（Issue #9） |
+| `room.ended` | `{"status": "summarizing", "cancelled_turn_id": "<Turn.id>", "cancelled_agent_id": "<RoundtableAgent.id>"}` | 用户提前结束讨论并进入总结；无在途 turn 时两个取消字段为 `null` |
+| `summary.started` | `{"round": <current_round>}` | 自然完成最后一轮或用户提前结束，圆桌进入 `summarizing` |
+| `summary.delta` | 本地预留 | 总结流只属于生成设备，不持久化、不广播 |
+| `summary.completed` | `{"summary": <RoundSummary>}` | 结论已校验保存，圆桌进入 `completed` |
 | `room.failed` | `{"reason": "..."}` | 圆桌级失败（预留） |
 
 `Message`：
@@ -648,7 +746,9 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 3. 有有效观点时调用 `POST /messages`；无独立观点时调用 `POST /turns/pass`；Provider 失败时调用 `POST /turns/fail`。
 4. iOS 再次调用 `POST /turns/next`。第一轮最后一位完成后，该响应同时包含第一轮 `round.completed`、第二轮 `round.started` 和第二轮唯一 turn。
 5. 第二轮 iOS 使用同一 Provider 生成结构化 JSON，解析并校验引用、立场和挑战对象；格式非法时最多重试一次。
-6. 第二轮最后一位完成后返回第二轮唯一的 `round.completed` 和 `turn: null`，圆桌进入 `completed`。
+6. 第二轮最后一位完成后返回第二轮唯一的 `round.completed`、`summary.started` 和 `turn: null`，圆桌进入 `summarizing`。
+7. iOS 使用同一 Provider 生成严格结构化结论；失败时规则化降级，再调用 `POST /summary`。首次成功后圆桌进入 `completed`。
+8. `completed` 圆桌只读：新 Agent 消息、用户消息、turn、pause/resume 均返回 `400 validation_error`。继续追问必须调用 `POST /follow-ups` 创建新圆桌。
 
 客户端在任一时刻只执行一个 turn。Provider 失败必须按稳定错误码回报一次；服务端关闭该 turn 后，用户继续讨论时 `turns/next` 会调度下一位仍有资格的 Agent。客户端不得静默切换 Provider、Model 或 Mock。
 
@@ -685,7 +785,7 @@ message.completed(supplement, references=[proposal])
 round.completed
 ```
 
-首轮结束后圆桌为 `running`；达到 `max_rounds`（默认 2）后为 `completed`。
+首轮结束后圆桌为 `running`；第二轮 Mock 脚本结束后追加 `summary.started` 并进入 `summarizing`。没有真实 Provider 的 Mock 演示由 iOS 规则化摘要降级完成。
 
 ## 4. 客户端实现要求
 
@@ -697,4 +797,6 @@ round.completed
 - `room.joined` 用于渲染参与者与空圆桌状态；`sequence == 0` 不参与游标计算。
 - `replay.cursor_expired = true` 时使用完整 `room.joined` 快照重置本地投影和游标，再继续处理 live 事件。
 - 重连后优先使用快照中的 `active_turn.turn_id` 恢复在途回合，不得自行创建替代 turn。
+- `room.joined.summary` 与本地 SwiftData 都保留结论；已完成圆桌重启后必须恢复总结和只读状态。
+- 结论卡只渲染议题、三个 Agent、主要观点、共识、分歧和建议，不包含 API Key、内部 ID、Prompt、公开链接、二维码或房间导入信息。
 - 连接循环使用可取消的指数退避；App 进入后台时停止 Provider Task 和连接，回前台只恢复连接，不自动启动新的自动讨论，等待用户显式继续。

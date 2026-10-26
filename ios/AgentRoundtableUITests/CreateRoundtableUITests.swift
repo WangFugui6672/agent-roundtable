@@ -10,6 +10,7 @@ final class CreateRoundtableUITests: XCTestCase {
     func testCreateRoundtableAndPlayMockRound() throws {
         let app = XCUIApplication()
         app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
+        app.launchEnvironment["RT_RESET_PROVIDER_STATE"] = "1"
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
@@ -65,6 +66,49 @@ final class CreateRoundtableUITests: XCTestCase {
             "挑战关系没有展示明确对象：\(app.debugDescription)"
         )
         attachScreenshot(of: app, named: "03-mock-round-two-review")
+        try assertSummaryCardAndRestart(app)
+    }
+
+    private func assertSummaryCardAndRestart(_ app: XCUIApplication) throws {
+        let degraded = app.staticTexts["summary.degraded"]
+        XCTAssertTrue(
+            degraded.waitForExistence(timeout: 25),
+            "第二轮后没有自动进入降级总结：\(app.debugDescription)"
+        )
+        let cardButton = app.buttons["summary.card.open"]
+        scrollToElement(cardButton, in: app)
+        XCTAssertTrue(cardButton.waitForExistence(timeout: 5))
+        cardButton.tap()
+        XCTAssertTrue(
+            app.images["summary.card.preview"].waitForExistence(timeout: 15),
+            "ImageRenderer 没有生成结论卡：\(app.debugDescription)"
+        )
+        XCTAssertTrue(app.buttons["summary.card.save"].exists)
+        XCTAssertTrue(app.buttons["summary.card.share"].exists)
+        XCTAssertTrue(app.buttons["follow-up.create"].exists)
+        XCTAssertTrue(
+            app.textFields["follow-up.topic"].exists
+                || app.textViews["follow-up.topic"].exists
+        )
+        attachScreenshot(of: app, named: "04-summary-card")
+        app.buttons["关闭"].tap()
+
+        app.terminate()
+        let restored = XCUIApplication()
+        restored.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
+        restored.launch()
+        let restoredCard = restored.buttons["summary.card.open"]
+        scrollToElement(restoredCard, in: restored)
+        XCTAssertTrue(
+            restoredCard.waitForExistence(timeout: 15),
+            "进程重启后没有恢复已完成结论：\(restored.debugDescription)"
+        )
+    }
+
+    private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0 ..< 6 where !element.isHittable {
+            app.swipeUp()
+        }
     }
 
     private func attachScreenshot(of app: XCUIApplication, named name: String) {

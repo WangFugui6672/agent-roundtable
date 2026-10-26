@@ -18,24 +18,44 @@ from rest_framework.exceptions import ValidationError
 
 from apps.roundtables import mock
 from apps.roundtables import protocol as p
-from apps.roundtables.budget import MAX_TURN_SECONDS
+from apps.roundtables.budget import (
+    ACTIVE_STATUSES,
+    MAX_ACTIVE_ROUNDTABLES,
+    MAX_TURN_SECONDS,
+)
 from apps.roundtables.message_validation import validate_agent_message
 from apps.roundtables.models import (
+    GuestSession,
     Message,
     RoomEvent,
+    RoundSummary,
     Roundtable,
     RoundtableAgent,
     Turn,
     UsageRecord,
 )
 from apps.roundtables.scheduler import select_next_speaker
-from apps.roundtables.serializers import MessageSerializer, RoundtableSerializer, TurnSerializer
+from apps.roundtables.serializers import (
+    MessageSerializer,
+    RoundSummarySerializer,
+    RoundtableSerializer,
+    TurnSerializer,
+)
+from roundtable.exceptions import ActiveRoundtableLimit, SummaryVersionConflict
 
 
 @dataclass(frozen=True)
 class RoomCommandResult:
     room: Roundtable
     events: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class SummaryCommandResult:
+    room: Roundtable
+    summary: RoundSummary
+    events: list[dict[str, Any]]
+    created: bool
 
 
 def _event_envelope(event: RoomEvent) -> dict[str, Any]:
@@ -158,6 +178,198 @@ def _budget_exhausted_payload(room: Roundtable, reason: str) -> dict[str, Any]:
     }
 
 
+def _normalize_summary_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "text": item["text"],
+            "reference_message_ids": [
+                str(message_id) for message_id in item["reference_message_ids"]
+            ],
+        }
+        for item in items
+    ]
+
+
+def _validate_summary_references(
+    room: Roundtable,
+    normalized: dict[str, list[dict[str, Any]]],
+) -> None:
+    reference_ids = {
+        message_id
+        for key in ("consensus", "dissent", "recommendations", "unresolved")
+        for item in normalized[key]
+        for message_id in item["reference_message_ids"]
+    }
+    opinions = Message.objects.filter(
+        id__in=reference_ids,
+        roundtable=room,
+        author_type=Message.AuthorType.AGENT,
+        message_type__in={
+            Message.Type.PROPOSAL,
+            Message.Type.SUPPORT,
+            Message.Type.CHALLENGE,
+            Message.Type.SUPPLEMENT,
+            Message.Type.QUESTION,
+        },
+    )
+    found = {str(message_id) for message_id in opinions.values_list("id", flat=True)}
+    if found != reference_ids:
+        raise ValidationError(
+            {"reference_message_ids": ("结论引用必须指向当前圆桌中已经存在的有效 Agent 观点。")}
+        )
+
+
+def submit_summary(
+    roundtable_id: str,
+    guest_session_id: str,
+    validated: dict[str, Any],
+) -> SummaryCommandResult | None:
+    """Create or regenerate the structured result for a completed discussion."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+
+        summary = RoundSummary.objects.select_for_update().filter(roundtable=room).first()
+        if summary is None and room.status != Roundtable.Status.SUMMARIZING:
+            raise ValidationError({"status": "第二轮结束后才能提交结论。"})
+        if room.status not in {
+            Roundtable.Status.SUMMARIZING,
+            Roundtable.Status.COMPLETED,
+        }:
+            raise ValidationError({"status": "圆桌当前状态不能提交结论。"})
+        ended_early = room.events.filter(event_type=p.ROOM_ENDED).exists()
+        if room.current_round < room.max_rounds and not ended_early:
+            raise ValidationError({"status": "第二轮尚未完成，不能提交结论。"})
+
+        normalized = {
+            key: _normalize_summary_items(validated[key])
+            for key in ("consensus", "dissent", "recommendations", "unresolved")
+        }
+        _validate_summary_references(room, normalized)
+
+        expected_version = validated["expected_version"]
+        if summary is None:
+            if expected_version != 0:
+                raise SummaryVersionConflict(message="尚未存在结论，expected_version 必须为 0。")
+            summary = RoundSummary.objects.create(
+                id=uuid.uuid4(),
+                roundtable=room,
+                degraded=validated["degraded"],
+                version=1,
+                **normalized,
+            )
+        else:
+            content_matches = (
+                summary.consensus == normalized["consensus"]
+                and summary.dissent == normalized["dissent"]
+                and summary.recommendations == normalized["recommendations"]
+                and summary.unresolved == normalized["unresolved"]
+                and summary.degraded == validated["degraded"]
+            )
+            if expected_version != summary.version:
+                if expected_version == summary.version - 1 and content_matches:
+                    return SummaryCommandResult(
+                        room=room,
+                        summary=summary,
+                        events=[],
+                        created=False,
+                    )
+                raise SummaryVersionConflict()
+            summary.degraded = validated["degraded"]
+            summary.version += 1
+            for key, items in normalized.items():
+                setattr(summary, key, items)
+            summary.save(
+                update_fields=[
+                    "degraded",
+                    "version",
+                    "consensus",
+                    "dissent",
+                    "recommendations",
+                    "unresolved",
+                    "updated_at",
+                ]
+            )
+
+        room.status = Roundtable.Status.COMPLETED
+        room.pause_pending = False
+        event = _append_room_event(
+            room,
+            p.SUMMARY_COMPLETED,
+            {"summary": RoundSummarySerializer(summary).data},
+        )
+        room.save(
+            update_fields=[
+                "status",
+                "pause_pending",
+                "event_sequence",
+                "updated_at",
+            ]
+        )
+        envelope = _event_envelope(event)
+        _broadcast_after_commit(room.id, [envelope])
+        return SummaryCommandResult(
+            room=room,
+            summary=summary,
+            events=[envelope],
+            created=True,
+        )
+
+
+def create_follow_up(
+    roundtable_id: str,
+    guest_session_id: str,
+    topic: str,
+) -> Roundtable | None:
+    """Create a fresh read/write room that keeps an explicit parent summary link."""
+    with transaction.atomic():
+        parent = (
+            Roundtable.objects.select_for_update()
+            .prefetch_related("agents__agent_profile")
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if parent is None:
+            return None
+        if parent.status != Roundtable.Status.COMPLETED:
+            raise ValidationError({"status": "只有已完成圆桌可以继续追问。"})
+        summary = RoundSummary.objects.filter(roundtable=parent).first()
+        if summary is None:
+            raise ValidationError({"summary": "当前圆桌还没有可用的结论。"})
+
+        GuestSession.objects.select_for_update().get(id=parent.guest_session_id)
+        active_count = Roundtable.objects.filter(
+            guest_session_id=parent.guest_session_id,
+            status__in=ACTIVE_STATUSES,
+        ).count()
+        if active_count >= MAX_ACTIVE_ROUNDTABLES:
+            raise ActiveRoundtableLimit()
+
+        follow_up = Roundtable.objects.create(
+            id=uuid.uuid4(),
+            guest_session_id=parent.guest_session_id,
+            topic=topic,
+            provider_kind=parent.provider_kind,
+            provider_base_url=parent.provider_base_url,
+            provider_model=parent.provider_model,
+            parent_roundtable=parent,
+            source_summary=summary,
+        )
+        for agent in parent.agents.all():
+            RoundtableAgent.objects.create(
+                id=uuid.uuid4(),
+                roundtable=follow_up,
+                agent_profile=agent.agent_profile,
+                position=agent.position,
+            )
+        return _room_for_session(str(follow_up.id), str(parent.guest_session_id))
+
+
 def _expire_pending_turn(room: Roundtable, turn: Turn) -> RoomEvent:
     agent = turn.roundtable_agent
     turn.status = Turn.Status.FAILED
@@ -194,10 +406,12 @@ def build_join_envelope(
     failures = room.turns.filter(status=Turn.Status.FAILED).select_related(
         "roundtable_agent__agent_profile"
     )
+    summary = RoundSummary.objects.filter(roundtable=room).first()
     payload: dict[str, Any] = {
         "roundtable": RoundtableSerializer(room).data,
         "messages": MessageSerializer(messages, many=True).data,
         "failures": [_turn_failure_payload(turn) for turn in failures],
+        "summary": RoundSummarySerializer(summary).data if summary else None,
     }
     if replay is not None:
         payload["replay"] = replay
@@ -383,11 +597,17 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
         RoundtableAgent.objects.bulk_update(agents, ["state"])
 
         room.current_round = round_number
-        room.status = (
-            Roundtable.Status.COMPLETED
-            if round_number >= room.max_rounds
-            else Roundtable.Status.RUNNING
-        )
+        if round_number >= room.max_rounds:
+            room.status = Roundtable.Status.SUMMARIZING
+            created.append(
+                _append_room_event(
+                    room,
+                    p.SUMMARY_STARTED,
+                    {"round": round_number},
+                )
+            )
+        else:
+            room.status = Roundtable.Status.RUNNING
         room.save(
             update_fields=[
                 "current_round",
@@ -574,7 +794,10 @@ def end_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult | N
         )
         if room is None:
             return None
-        if room.status == Roundtable.Status.COMPLETED:
+        if room.status in {
+            Roundtable.Status.SUMMARIZING,
+            Roundtable.Status.COMPLETED,
+        }:
             return RoomCommandResult(room=room, events=[])
 
         pending_turn = (
@@ -596,22 +819,29 @@ def end_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult | N
             agent.state = RoundtableAgent.State.WAITING
             agent.save(update_fields=["state"])
 
-        # Issue #9 can route this boundary through summarizing before completion.
-        room.status = Roundtable.Status.COMPLETED
+        room.status = Roundtable.Status.SUMMARIZING
         room.pause_pending = False
-        event = _append_room_event(
+        ended_event = _append_room_event(
             room,
             p.ROOM_ENDED,
             {
-                "status": Roundtable.Status.COMPLETED,
+                "status": Roundtable.Status.SUMMARIZING,
                 "cancelled_turn_id": cancelled_turn_id,
                 "cancelled_agent_id": cancelled_agent_id,
             },
         )
+        summary_event = _append_room_event(
+            room,
+            p.SUMMARY_STARTED,
+            {"round": room.current_round},
+        )
         room.save(update_fields=["status", "pause_pending", "event_sequence", "updated_at"])
-        envelope = _event_envelope(event)
-        _broadcast_after_commit(room.id, [envelope])
-        return RoomCommandResult(room=room, events=[envelope])
+        envelopes = [
+            _event_envelope(ended_event),
+            _event_envelope(summary_event),
+        ]
+        _broadcast_after_commit(room.id, envelopes)
+        return RoomCommandResult(room=room, events=envelopes)
 
 
 def create_message(
@@ -710,15 +940,6 @@ def next_turn(
         )
         if room is None:
             return None
-        if room.status == Roundtable.Status.COMPLETED and (
-            room.budget_exhausted_reason
-            or RoomEvent.objects.filter(
-                roundtable=room,
-                event_type=p.ROUND_COMPLETED,
-                payload__round=room.current_round,
-            ).exists()
-        ):
-            return room.current_round, None, []
         if room.status == Roundtable.Status.COMPLETED:
             raise ValidationError({"status": "圆桌当前状态不能签发新的 turn。"})
         if room.status in {
@@ -961,7 +1182,14 @@ def next_turn(
                 _broadcast_after_commit(room.id, envelopes)
                 return room.current_round, TurnSerializer(turn).data, envelopes
 
-            room.status = Roundtable.Status.COMPLETED
+            room.status = Roundtable.Status.SUMMARIZING
+            created.append(
+                _append_room_event(
+                    room,
+                    p.SUMMARY_STARTED,
+                    {"round": completed_round},
+                )
+            )
             room.save(update_fields=["status", "event_sequence", "updated_at"])
             envelopes = [_event_envelope(event) for event in created]
             _broadcast_after_commit(room.id, envelopes)
