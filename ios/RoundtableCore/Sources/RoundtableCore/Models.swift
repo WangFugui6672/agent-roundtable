@@ -284,6 +284,7 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let body: String
     public let stance: Stance?
     public let references: [UUID]
+    public let challengeTargetAgentId: UUID?
     public let confidence: Double?
     public let mentionedAgentIds: [UUID]
     public let createdAt: Date
@@ -298,6 +299,7 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         body: String,
         stance: Stance?,
         references: [UUID],
+        challengeTargetAgentId: UUID? = nil,
         confidence: Double? = nil,
         mentionedAgentIds: [UUID] = [],
         createdAt: Date
@@ -311,6 +313,7 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         self.body = body
         self.stance = stance
         self.references = references
+        self.challengeTargetAgentId = challengeTargetAgentId
         self.confidence = confidence
         self.mentionedAgentIds = mentionedAgentIds
         self.createdAt = createdAt
@@ -326,6 +329,7 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         case body
         case stance
         case references
+        case challengeTargetAgentId
         case confidence
         case mentionedAgentIds
         case createdAt
@@ -342,6 +346,8 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
         stance = try container.decodeIfPresent(Stance.self, forKey: .stance)
         references = try container.decodeIfPresent([UUID].self, forKey: .references) ?? []
+        challengeTargetAgentId =
+            try container.decodeIfPresent(UUID.self, forKey: .challengeTargetAgentId)
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
         mentionedAgentIds =
             try container.decodeIfPresent([UUID].self, forKey: .mentionedAgentIds) ?? []

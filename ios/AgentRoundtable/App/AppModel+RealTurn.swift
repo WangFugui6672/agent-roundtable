@@ -8,6 +8,14 @@ private struct GenerationContext {
     let configuration: ProviderConfiguration
 }
 
+private struct SecondRoundContext {
+    let participant: Participant
+    let configuration: ProviderConfiguration
+    let apiKey: String
+    let roundtableID: UUID
+    let room: RoundtableRoomModel
+}
+
 /// Executes server-scheduled Provider turns for the first round.
 extension AppModel {
     // MARK: - First round (Issue #5)
@@ -153,6 +161,19 @@ extension AppModel {
             return false
         }
 
+        if turn.round >= 2 {
+            return await runSecondRoundTurn(
+                turn,
+                context: SecondRoundContext(
+                    participant: participant,
+                    configuration: configuration,
+                    apiKey: apiKey,
+                    roundtableID: roundtableID,
+                    room: room
+                )
+            )
+        }
+
         let prompt = AgentPrompt.messages(
             topic: room.snapshot?.topic ?? "",
             participant: participant,
@@ -190,6 +211,115 @@ extension AppModel {
             let partial = text.trimmingCharacters(in: .whitespacesAndNewlines)
             failTurn(
                 agentID: participant.id,
+                message: Self.userMessage(for: error),
+                partial: partial.isEmpty ? nil : partial
+            )
+            return false
+        }
+    }
+
+    private func runSecondRoundTurn(
+        _ turn: ScheduledTurn,
+        context: SecondRoundContext
+    ) async -> Bool {
+        let basePrompt = AgentPrompt.messages(
+            topic: context.room.snapshot?.topic ?? "",
+            participant: context.participant,
+            transcript: context.room.messages,
+            roundNumber: turn.round
+        )
+
+        for attempt in 0 ..< 2 {
+            if let result = await runSecondRoundAttempt(
+                turn,
+                context: context,
+                attempt: attempt,
+                basePrompt: basePrompt
+            ) {
+                return result
+            }
+        }
+        return false
+    }
+
+    private func runSecondRoundAttempt(
+        _ turn: ScheduledTurn,
+        context: SecondRoundContext,
+        attempt: Int,
+        basePrompt: [ChatMessage]
+    ) async -> Bool? {
+        let prompt = attempt == 0
+            ? basePrompt
+            : basePrompt + [
+                .user(
+                    """
+                    上一次输出不是合法的互评 JSON。请严格只返回 system 要求的 JSON 对象，
+                    必须包含合法 stance、一条候选引用、可选 challenge_target_agent_id 和 confidence。
+                    """
+                )
+            ]
+        var text = ""
+        do {
+            turnState = .thinking(agentID: context.participant.id)
+            for try await delta in chatClient.stream(
+                configuration: context.configuration,
+                apiKey: context.apiKey,
+                messages: prompt
+            ) {
+                text += delta
+                turnState = .typing(
+                    agentID: context.participant.id,
+                    text: "正在组织引用与立场…"
+                )
+            }
+
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
+            if MessageComposer.isPass(trimmed) {
+                let envelope = try await api.passTurn(
+                    roundtableID: context.roundtableID,
+                    agentID: context.participant.id,
+                    turnID: turn.turnId
+                )
+                context.room.apply(envelope)
+                turnState = .passed(agentID: context.participant.id)
+                return true
+            }
+
+            let submission: MessageSubmission
+            do {
+                submission = try StructuredReplyParser.parse(
+                    trimmed,
+                    participant: context.participant,
+                    turn: turn,
+                    transcript: context.room.messages
+                )
+            } catch let structuredError as StructuredReplyError {
+                if attempt == 0 {
+                    return nil
+                }
+                failTurn(
+                    agentID: context.participant.id,
+                    message: "模型结构化输出无效，已重试一次。\(structuredError.localizedDescription)"
+                )
+                return false
+            }
+
+            turnState = .submitting(agentID: context.participant.id)
+            let envelope = try await api.submitMessage(
+                roundtableID: context.roundtableID,
+                submission: submission
+            )
+            context.room.apply(envelope)
+            turnState = .completed(agentID: context.participant.id)
+            return true
+        } catch {
+            if Task.isCancelled || isEnding {
+                return false
+            }
+            let partial = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            failTurn(
+                agentID: context.participant.id,
                 message: Self.userMessage(for: error),
                 partial: partial.isEmpty ? nil : partial
             )

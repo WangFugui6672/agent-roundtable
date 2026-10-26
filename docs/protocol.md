@@ -1,6 +1,6 @@
 # Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #6）
+**状态：** 实现中（Issue #7）
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -168,6 +168,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
   "body": "我建议把议题拆成一个两周内可验证的最小实验……",
   "stance": null,
   "references": ["<message.id>"],
+  "challenge_target_agent_id": null,
   "confidence": 0.7
 }
 ```
@@ -177,12 +178,15 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 - `message_type`：`proposal | support | challenge | supplement | question | summary`。`pass` 不能作为普通发言提交，必须使用 2.9。
 - `claim`：1-80 字符，去除首尾空白。
 - `body`：不能超过该 Agent 的 `max_reply_chars`（预设 Agent 为 180），同时受 2000 字符的硬上限保护；必填。
-- `stance`：`support | challenge | supplement | question | null`；空字符串视同 `null`。
-- `references`：最多 3 条，必须是**同一圆桌**已持久化的消息。
+- `stance`：`support | challenge | supplement | question | null`；空字符串视同 `null`。第二轮非 pass 发言必须提供立场。
+- `references`：最多 3 条，且不能重复。第二轮至少 1 条，每条都必须指向**同一圆桌**中更早产生的有效 Agent 观点；该观点必须来自其他参与者，不能被用户消息、自身、`pass`、`summary`、未知消息或跨圆桌消息替代。
+- `challenge_target_agent_id`：可选参与者 ID。`challenge` 时必填，且必须是被引用观点的作者；其他立场时必须省略或为 `null`。
 - `confidence`：0-1，默认 `0.6`。
+
+第一轮允许 `proposal | support | challenge | supplement | question | summary` 且可以不引用。第二轮只接受 `support | challenge | supplement | question`，并要求 `message_type` 与 `stance` 相同、`claim` 非空、引用合法；`proposal`、`summary`、`pass` 和 `user_message` 不能伪装成第二轮互评。
 - 请求体任意层级出现 `api_key` → `400 validation_error`，`details` 形如 `{"provider": ["不得向后端提交 API Key。"]}`（与 2.5 相同）。
 
-客户端会按上述上限截断模型输出（`MessageComposer`），这只是一种体验优化：后端始终按同一组上限校验，任何超限请求都会被拒绝。
+第一轮纯文本由 `MessageComposer` 组装；第二轮 Provider 必须返回结构化 JSON，再由 `StructuredReplyParser` 校验、映射引用并组装提交。客户端只允许对格式错误做一次有限重试，第二次仍非法时进入失败状态。后端始终按同一组上限重新校验，任何超限或非法请求都会被拒绝。
 
 `201` 返回该消息对应的 `message.completed` 事件信封（与 WebSocket 广播的是同一条，客户端按 `event_id` 去重）：
 
@@ -256,7 +260,8 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 
 - 服务端在一个事务内锁定圆桌、选择下一位 Agent、写入 `Turn` 和持久化事件，再通过统一服务入口广播。
 - 同一圆桌最多存在一个 `pending` turn。iOS 重复请求时返回同一个 `turn_id` 和空 `events`，不会重复签发。
-- 当前所有 Agent 已 `completed` 或 `passed` 时，`turn` 为 `null`，`events` 中包含唯一的 `round.completed`；重复请求不再追加事件。
+- 当前轮所有 Agent 已 `completed` 或 `passed` 时，服务端发送唯一的 `round.completed`。若还未达到 `max_rounds`，同一响应会立即追加下一轮的 `round.started` 和 `agent.thinking`，并返回新 turn，客户端无需额外请求即可自动进入第二轮。
+- 达到 `max_rounds` 后才返回 `turn: null`，圆桌进入 `completed`。之后重复请求返回同一轮次、`turn: null` 和空 `events`，不会重复产生 `round.completed`。
 - `turn_id` 是后续消息完成、失败或 pass 的唯一回合身份。iOS 不得自行生成或替换。
 - `agent.thinking` 表示服务端已把该 turn 签发给客户端；`agent.typing` 和逐字 delta 仍是本地临时状态。
 
@@ -458,6 +463,7 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
   "body": "正文",
   "stance": "challenge",
   "references": ["<message.id>"],
+  "challenge_target_agent_id": "<RoundtableAgent.id>",
   "confidence": 0.64,
   "mentioned_agent_ids": [],
   "created_at": "2026-10-26T01:02:03.456Z"
@@ -470,15 +476,18 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 真实 Agent 的普通消息必须带服务端签发的 `turn_id`；Mock 消息的 `turn_id` 为 `null`，但仍带 `round_number`。
 `author.type = user` 时，`roundtable_agent_id`、`agent_key`、`turn_id`、`claim`、`stance` 和 `confidence` 均为 `null`，`message_type` 为 `user_message`。
+第一轮消息的 `challenge_target_agent_id` 通常为 `null`。第二轮中，`support/challenge/supplement/question` 消息必须引用更早的其他 Agent 有效观点；`challenge` 消息还必须带有 `challenge_target_agent_id`，并与被引用观点的作者一致。
 
-### 3.5 客户端命令与第一轮流程
+### 3.5 客户端命令与两轮流程
 
-真实第一轮由 REST 握手驱动：
+真实两轮讨论由 REST 握手驱动：
 
 1. iOS 调用 `POST /turns/next` 取得唯一 `turn_id`。
 2. iOS 直连 Provider，仅由当前被调度的 Agent 生成内容。
 3. 有有效观点时调用 `POST /messages`；无独立观点时调用 `POST /turns/pass`。
-4. iOS 再次调用 `POST /turns/next`，直到返回 `turn: null` 和 `round.completed`。
+4. iOS 再次调用 `POST /turns/next`。第一轮最后一位完成后，该响应同时包含第一轮 `round.completed`、第二轮 `round.started` 和第二轮唯一 turn。
+5. 第二轮 iOS 使用同一 Provider 生成结构化 JSON，解析并校验引用、立场和挑战对象；格式非法时最多重试一次。
+6. 第二轮最后一位完成后返回第二轮唯一的 `round.completed` 和 `turn: null`，圆桌进入 `completed`。
 
 客户端在任一时刻只执行一个 turn。Provider 失败时保留待处理 turn，用户重试后重新请求 `turns/next`，服务端返回同一个 `turn_id`。
 

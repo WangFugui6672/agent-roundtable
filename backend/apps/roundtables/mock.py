@@ -23,6 +23,7 @@ def _message(
     body: str,
     stance: str | None = None,
     references: list[str] | None = None,
+    challenge_target_agent_id: str | None = None,
     confidence: float,
 ) -> dict[str, Any]:
     return {
@@ -41,6 +42,7 @@ def _message(
             "body": body,
             "stance": stance,
             "references": references or [],
+            "challenge_target_agent_id": challenge_target_agent_id,
             "confidence": confidence,
             "mentioned_agent_ids": [],
             "created_at": p.now_iso(),
@@ -92,6 +94,7 @@ def build_mock_round(room, agents, round_number: int) -> list[tuple[str, dict[st
         ),
         stance="challenge",
         references=[proposal["message"]["id"]],
+        challenge_target_agent_id=str(first.id) if round_number >= 2 else None,
         confidence=0.64,
     )
     supplement = _message(
