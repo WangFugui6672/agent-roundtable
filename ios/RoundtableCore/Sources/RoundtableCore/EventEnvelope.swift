@@ -55,6 +55,30 @@ public struct RoundCompleted: Codable, Equatable, Sendable {
     }
 }
 
+public struct RoomPausePending: Codable, Equatable, Sendable {
+    public let turnId: UUID
+
+    public init(turnId: UUID) {
+        self.turnId = turnId
+    }
+}
+
+public struct RoomStateChanged: Codable, Equatable, Sendable {
+    public let status: RoundtableStatus
+    public let cancelledTurnId: UUID?
+    public let cancelledAgentId: UUID?
+
+    public init(
+        status: RoundtableStatus,
+        cancelledTurnId: UUID? = nil,
+        cancelledAgentId: UUID? = nil
+    ) {
+        self.status = status
+        self.cancelledTurnId = cancelledTurnId
+        self.cancelledAgentId = cancelledAgentId
+    }
+}
+
 public enum EventPayload: Equatable, Sendable {
     case joined(JoinedRoom)
     case roundStarted(RoundStarted)
@@ -63,6 +87,10 @@ public enum EventPayload: Equatable, Sendable {
     case agentPassed(AgentActivity)
     case messageCompleted(Message)
     case roundCompleted(RoundCompleted)
+    case pausePending(RoomPausePending)
+    case paused(RoomStateChanged)
+    case resumed(RoomStateChanged)
+    case ended(RoomStateChanged)
     case unknown
 }
 
@@ -114,27 +142,76 @@ extension EventEnvelope: Decodable {
         sequence = try container.decode(Int.self, forKey: .sequence)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         eventType = try container.decode(String.self, forKey: .eventType)
+        payload = try Self.decodePayload(eventType: eventType, container: container)
+    }
 
+    private static func decodePayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
         switch eventType {
         case "room.joined":
-            payload = .joined(try container.decode(JoinedRoom.self, forKey: .payload))
-        case "round.started":
-            payload = .roundStarted(try container.decode(RoundStarted.self, forKey: .payload))
-        case "agent.thinking":
-            payload = .agentThinking(try container.decode(AgentActivity.self, forKey: .payload))
-        case "agent.typing":
-            payload = .agentTyping(try container.decode(AgentActivity.self, forKey: .payload))
-        case "agent.passed":
-            payload = .agentPassed(try container.decode(AgentActivity.self, forKey: .payload))
+            return .joined(try container.decode(JoinedRoom.self, forKey: .payload))
+        case "round.started", "round.completed":
+            return try decodeRoundPayload(eventType: eventType, container: container)
+        case "agent.thinking", "agent.typing", "agent.passed":
+            return try decodeAgentPayload(eventType: eventType, container: container)
         case "message.completed":
             let completed = try container.decode(MessageCompletedPayload.self, forKey: .payload)
-            payload = .messageCompleted(completed.message)
-        case "round.completed":
-            payload = .roundCompleted(try container.decode(RoundCompleted.self, forKey: .payload))
+            return .messageCompleted(completed.message)
+        case "room.pause_pending", "room.paused", "room.resumed", "room.ended":
+            return try decodeRoomControlPayload(eventType: eventType, container: container)
         default:
             // Unknown events must not break the stream: the server may ship
             // new event types before the client is updated.
-            payload = .unknown
+            return .unknown
+        }
+    }
+
+    private static func decodeRoundPayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
+        switch eventType {
+        case "round.started":
+            return .roundStarted(try container.decode(RoundStarted.self, forKey: .payload))
+        default:
+            return .roundCompleted(try container.decode(RoundCompleted.self, forKey: .payload))
+        }
+    }
+
+    private static func decodeAgentPayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
+        let activity = try container.decode(AgentActivity.self, forKey: .payload)
+        switch eventType {
+        case "agent.thinking":
+            return .agentThinking(activity)
+        case "agent.typing":
+            return .agentTyping(activity)
+        default:
+            return .agentPassed(activity)
+        }
+    }
+
+    private static func decodeRoomControlPayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
+        if eventType == "room.pause_pending" {
+            return .pausePending(
+                try container.decode(RoomPausePending.self, forKey: .payload)
+            )
+        }
+        let state = try container.decode(RoomStateChanged.self, forKey: .payload)
+        switch eventType {
+        case "room.paused":
+            return .paused(state)
+        case "room.resumed":
+            return .resumed(state)
+        default:
+            return .ended(state)
         }
     }
 }

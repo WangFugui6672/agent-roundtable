@@ -14,7 +14,7 @@ struct RoundtableView: View {
             turnStatus
             messageList
             Divider()
-            footer
+            UserControlBar(room: room)
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("圆桌")
@@ -149,6 +149,24 @@ struct RoundtableView: View {
                     identifier: "room.round.completed"
                 )
             )
+        case .paused:
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "讨论已暂停",
+                    icon: "pause.circle",
+                    tint: .orange,
+                    identifier: "room.paused"
+                )
+            )
+        case .ended:
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "讨论已结束",
+                    icon: "stop.circle",
+                    tint: .blue,
+                    identifier: "room.ended"
+                )
+            )
         case let .failed(agentID, message, partial):
             return TurnPresentation(
                 failure: TurnFailure(message: message, partial: partial),
@@ -195,7 +213,7 @@ struct RoundtableView: View {
                     .accessibilityIdentifier(banner.identifier)
                 Spacer()
                 switch model.turnState {
-                case .completed, .passed, .roundCompleted:
+                case .completed, .passed, .roundCompleted, .paused, .ended:
                     Button("关闭") { model.dismissTurnError() }
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -260,51 +278,11 @@ struct RoundtableView: View {
         .padding(.vertical, 40)
     }
 
-    private var footer: some View {
-        HStack(spacing: 12) {
-            Button {
-                Task { await model.runFirstRound() }
-            } label: {
-                HStack(spacing: 6) {
-                    if model.isFirstRoundRunning {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                    Label("开始第一轮", systemImage: "play.fill")
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(
-                model.isFirstRoundRunning
-                    || model.turnState.isBusy
-                    || !model.hasConfiguredProvider
-            )
-            .accessibilityIdentifier("room.round.start")
-
-            Button {
-                Task { await model.runMockRound() }
-            } label: {
-                Label("Mock", systemImage: "play.circle")
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.isMockRunning || model.isFirstRoundRunning)
-            .accessibilityIdentifier("room.mock")
-
-            Spacer()
-
-            if case let .failed(message) = model.streamState {
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.trailing)
-            }
-        }
-        .padding(16)
-    }
-
     private var statusBadge: (text: String, tint: Color) {
         guard let status = room.status else { return ("准备中", .secondary) }
+        if room.pausePending {
+            return ("将在当前发言后暂停", .orange)
+        }
         switch status {
         case .draft: return ("草稿", .secondary)
         case .ready: return ("就绪", .secondary)

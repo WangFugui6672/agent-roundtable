@@ -133,6 +133,16 @@ public struct NextTurnResponse: Decodable, Equatable, Sendable {
     }
 }
 
+public struct RoomCommandResponse: Decodable, Equatable, Sendable {
+    public let roundtable: RoundtableSnapshot
+    public let events: [EventEnvelope]
+
+    public init(roundtable: RoundtableSnapshot, events: [EventEnvelope]) {
+        self.roundtable = roundtable
+        self.events = events
+    }
+}
+
 public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let topic: String
@@ -141,6 +151,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let maxRounds: Int
     public var currentRound: Int
     public let lastSequence: Int
+    public let pausePending: Bool?
     public let activeTurn: ScheduledTurn?
     public let provider: ProviderMetadata?
     public let createdAt: Date
@@ -155,6 +166,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         maxRounds: Int,
         currentRound: Int,
         lastSequence: Int,
+        pausePending: Bool? = nil,
         activeTurn: ScheduledTurn? = nil,
         provider: ProviderMetadata? = nil,
         createdAt: Date,
@@ -168,6 +180,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         self.maxRounds = maxRounds
         self.currentRound = currentRound
         self.lastSequence = lastSequence
+        self.pausePending = pausePending
         self.activeTurn = activeTurn
         self.provider = provider
         self.createdAt = createdAt
@@ -184,6 +197,7 @@ public enum MessageType: String, Codable, Sendable, CaseIterable {
     case question
     case pass
     case summary
+    case userMessage = "user_message"
     case unknown
 
     public init(from decoder: Decoder) throws {
@@ -205,15 +219,58 @@ public enum Stance: String, Codable, Sendable, CaseIterable {
     }
 }
 
+public enum MessageAuthorType: String, Codable, Sendable, CaseIterable {
+    case agent
+    case user
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = MessageAuthorType(rawValue: raw) ?? .unknown
+    }
+}
+
 public struct MessageAuthor: Codable, Equatable, Sendable {
-    public let roundtableAgentId: UUID
-    public let agentKey: String
+    public let type: MessageAuthorType
+    public let roundtableAgentId: UUID?
+    public let agentKey: String?
     public let name: String
 
-    public init(roundtableAgentId: UUID, agentKey: String, name: String) {
+    public init(
+        type: MessageAuthorType,
+        roundtableAgentId: UUID? = nil,
+        agentKey: String? = nil,
+        name: String
+    ) {
+        self.type = type
         self.roundtableAgentId = roundtableAgentId
         self.agentKey = agentKey
         self.name = name
+    }
+
+    public init(roundtableAgentId: UUID, agentKey: String, name: String) {
+        self.init(
+            type: .agent,
+            roundtableAgentId: roundtableAgentId,
+            agentKey: agentKey,
+            name: name
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case roundtableAgentId
+        case agentKey
+        case name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roundtableAgentId = try container.decodeIfPresent(UUID.self, forKey: .roundtableAgentId)
+        agentKey = try container.decodeIfPresent(String.self, forKey: .agentKey)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decodeIfPresent(MessageAuthorType.self, forKey: .type)
+            ?? (roundtableAgentId == nil ? .unknown : .agent)
     }
 }
 
@@ -223,11 +280,12 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let roundNumber: Int
     public let author: MessageAuthor
     public let messageType: MessageType
-    public let claim: String
+    public let claim: String?
     public let body: String
     public let stance: Stance?
     public let references: [UUID]
-    public let confidence: Double
+    public let confidence: Double?
+    public let mentionedAgentIds: [UUID]
     public let createdAt: Date
 
     public init(
@@ -236,11 +294,12 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         roundNumber: Int = 0,
         author: MessageAuthor,
         messageType: MessageType,
-        claim: String,
+        claim: String? = nil,
         body: String,
         stance: Stance?,
         references: [UUID],
-        confidence: Double,
+        confidence: Double? = nil,
+        mentionedAgentIds: [UUID] = [],
         createdAt: Date
     ) {
         self.id = id
@@ -253,6 +312,39 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         self.stance = stance
         self.references = references
         self.confidence = confidence
+        self.mentionedAgentIds = mentionedAgentIds
         self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case turnId
+        case roundNumber
+        case author
+        case messageType
+        case claim
+        case body
+        case stance
+        case references
+        case confidence
+        case mentionedAgentIds
+        case createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        turnId = try container.decodeIfPresent(UUID.self, forKey: .turnId)
+        roundNumber = try container.decodeIfPresent(Int.self, forKey: .roundNumber) ?? 0
+        author = try container.decode(MessageAuthor.self, forKey: .author)
+        messageType = try container.decode(MessageType.self, forKey: .messageType)
+        claim = try container.decodeIfPresent(String.self, forKey: .claim)
+        body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
+        stance = try container.decodeIfPresent(Stance.self, forKey: .stance)
+        references = try container.decodeIfPresent([UUID].self, forKey: .references) ?? []
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
+        mentionedAgentIds =
+            try container.decodeIfPresent([UUID].self, forKey: .mentionedAgentIds) ?? []
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
     }
 }

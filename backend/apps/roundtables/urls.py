@@ -6,10 +6,14 @@ from apps.roundtables.views import (
     AgentProfileListView,
     GuestSessionCreateView,
     RoundtableDetailView,
+    RoundtableEndView,
     RoundtableListCreateView,
     RoundtableMessageView,
     RoundtableNextTurnView,
+    RoundtablePauseView,
+    RoundtableResumeView,
     RoundtableTurnPassView,
+    RoundtableUserMessageView,
 )
 
 urlpatterns = [
@@ -25,6 +29,26 @@ urlpatterns = [
         "roundtables/<uuid:roundtable_id>/messages",
         RoundtableMessageView.as_view(),
         name="roundtable-message-create",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/user-messages",
+        RoundtableUserMessageView.as_view(),
+        name="roundtable-user-message-create",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/pause",
+        RoundtablePauseView.as_view(),
+        name="roundtable-pause",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/resume",
+        RoundtableResumeView.as_view(),
+        name="roundtable-resume",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/end",
+        RoundtableEndView.as_view(),
+        name="roundtable-end",
     ),
     path(
         "roundtables/<uuid:roundtable_id>/turns/next",
