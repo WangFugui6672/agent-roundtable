@@ -75,6 +75,8 @@ struct ParticipantChip: View {
 
 struct MessageRow: View {
     let message: Message
+    let messages: [Message]
+    let participants: [Participant]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -115,13 +117,36 @@ struct MessageRow: View {
                 .foregroundStyle(.tertiary)
             }
 
-            if !message.references.isEmpty {
+            if let challengeTargetName {
                 Label(
-                    "引用了 \(message.references.count) 条观点",
-                    systemImage: "arrowshape.turn.up.left"
+                    "向 \(challengeTargetName) 提出\(stanceLabel)",
+                    systemImage: "person.crop.circle.badge.exclamationmark"
                 )
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .accessibilityIdentifier("room.message.challenge-target")
+            }
+
+            ForEach(referencedMessages) { reference in
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(
+                        "引用 \(reference.author.name) 的原观点",
+                        systemImage: "quote.opening"
+                    )
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    Text(reference.claim ?? reference.body)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                }
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(stanceTint.opacity(0.55))
+                        .frame(width: 3)
+                }
+                .accessibilityElement(children: .combine)
             }
         }
         .padding(14)
@@ -135,9 +160,56 @@ struct MessageRow: View {
                 )
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(message.author.name)：\(message.claim ?? message.body)。\(message.body)"
-        )
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private var referencedMessages: [Message] {
+        message.references.compactMap { referenceID in
+            messages.first(where: { $0.id == referenceID })
+        }
+    }
+
+    private var challengeTargetName: String? {
+        guard let targetID = message.challengeTargetAgentId else { return nil }
+        return participants.first(where: { $0.id == targetID })?.agent.name
+    }
+
+    private var stanceLabel: String {
+        switch message.stance {
+        case .support: "支持"
+        case .challenge: "质疑"
+        case .supplement: "补充"
+        case .question: "追问"
+        case .unknown, .none:
+            message.messageType == .proposal ? "提议" : "发言"
+        }
+    }
+
+    private var stanceTint: Color {
+        switch message.stance {
+        case .support: .green
+        case .challenge: .red
+        case .supplement: .blue
+        case .question: .orange
+        case .unknown, .none: .secondary
+        }
+    }
+
+    private var accessibilitySummary: String {
+        var parts = [
+            "\(message.author.name)，\(stanceLabel)",
+            message.claim ?? message.body,
+            message.body
+        ]
+        if let challengeTargetName {
+            parts.append("向 \(challengeTargetName) 提出\(stanceLabel)")
+        }
+        for reference in referencedMessages {
+            parts.append(
+                "引用 \(reference.author.name) 的原观点：\(reference.claim ?? reference.body)"
+            )
+        }
+        return parts.joined(separator: "。")
     }
 }
 

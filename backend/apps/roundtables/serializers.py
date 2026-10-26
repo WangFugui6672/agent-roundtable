@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 from rest_framework import serializers
 
+from apps.roundtables.message_validation import validate_agent_message
 from apps.roundtables.models import AgentProfile, Message, Roundtable, RoundtableAgent, Turn
 from apps.roundtables.protocol import (
     BODY_HARD_MAX_CHARS,
@@ -191,6 +192,7 @@ class MessageSerializer(serializers.ModelSerializer):
     claim = serializers.SerializerMethodField()
     confidence = serializers.SerializerMethodField()
     mentioned_agent_ids = serializers.SerializerMethodField()
+    challenge_target_agent_id = serializers.SerializerMethodField()
     turn_id = serializers.UUIDField(source="turn.id", allow_null=True, read_only=True)
 
     class Meta:
@@ -205,6 +207,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "body",
             "stance",
             "references",
+            "challenge_target_agent_id",
             "confidence",
             "mentioned_agent_ids",
             "created_at",
@@ -226,6 +229,11 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_references(self, obj: Message) -> list[str]:
         return [str(reference.id) for reference in obj.references.all()]
+
+    def get_challenge_target_agent_id(self, obj: Message) -> str | None:
+        if obj.challenge_target_id is None:
+            return None
+        return str(obj.challenge_target_id)
 
     def get_stance(self, obj: Message) -> str | None:
         return obj.stance or None
@@ -300,6 +308,7 @@ class MessageCreateSerializer(serializers.Serializer):
     references = serializers.ListField(
         child=serializers.UUIDField(), required=False, max_length=MAX_REFERENCES, default=list
     )
+    challenge_target_agent_id = serializers.UUIDField(required=False, allow_null=True)
     confidence = serializers.FloatField(
         min_value=0, max_value=1, required=False, default=DEFAULT_CONFIDENCE
     )
@@ -339,6 +348,18 @@ class MessageCreateSerializer(serializers.Serializer):
         references = attrs.get("references") or []
         if len(set(references)) != len(references):
             raise serializers.ValidationError({"references": "引用消息不能重复。"})
+        turn = Turn.objects.filter(
+            id=attrs["turn_id"],
+            roundtable=roundtable,
+            status=Turn.Status.PENDING,
+        ).first()
+        if turn is not None:
+            validate_agent_message(
+                roundtable=roundtable,
+                agent=agent,
+                turn=turn,
+                data=attrs,
+            )
         if references:
             found = Message.objects.filter(id__in=references, roundtable=roundtable).count()
             if found != len(references):

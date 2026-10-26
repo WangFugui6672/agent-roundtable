@@ -2,7 +2,7 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #6「用户插话、点名与暂停」—— 用户可发送消息、显式点名 Agent，并在当前 Agent 完成后暂停、继续或提前结束讨论。
+**当前阶段：** Issue #7「第二轮引用式互评」—— 第一轮结束后自动进入第二轮，Agent 以结构化引用、立场和挑战关系互评。
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -33,9 +33,16 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - 用户插话后当前 Provider turn 会完成，服务端在安全边界进入 `paused`；暂停、继续和结束命令均可重复调用而不重复产生事件。
 - 提前结束会取消服务端 pending turn，并取消 iOS 本地 Provider Task，结束后的消息和 turn 写入被拒绝。
 - 圆桌页提供用户输入、mention 选择、暂停/继续/结束控件。
+- 第一轮结束后，服务端在同一次 `turns/next` 事务中写入唯一的 `round.completed`，并立即签发第二轮 turn；客户端无需额外操作。
+- 第二轮每位参与者最多一个 turn，只接受 `support / challenge / supplement / question`，且 `message_type` 必须与 `stance` 一致。
+- 第二轮引用必须指向同一圆桌中更早产生的其他参与者有效观点；用户消息、自身、pass、summary、未知和跨圆桌消息都会被拒绝。
+- `challenge` 必须携带 `challenge_target_agent_id`，目标必须是被引用观点的作者；其他立场不能携带挑战目标。
+- iOS 第二轮要求 Provider 返回结构化 JSON，由 `StructuredReplyParser` 校验引用 ID/索引、挑战关系与置信度；格式错误只重试一次。
+- 消息卡展示被引用观点的作者和原内容，并用文字与颜色区分四种立场；VoiceOver 会读出立场、引用内容和挑战对象。
+- 第二轮结束后只产生一次 `round.completed`，圆桌进入 `completed`；`room.joined` 可恢复两轮完整消息和引用关系。
 - 后端单元/集成测试、iOS 解码/状态机/Provider/流式客户端测试、Keychain 集成测试、最小 GitHub Actions。
 
-第二轮互评、总结、结论卡、完整断线重连见后续 Issue。
+总结、结论卡和完整断线重连见后续 Issue。
 
 ## 目录结构
 
@@ -123,6 +130,7 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - `room.joined` 的序号为 0、不推进游标的约定。
 - 创建圆桌时的 Provider 元数据快照，以及后端拒绝 `api_key` 字段的约定。
 - turn 握手、`active_turn` 恢复、消息/pass 的 turn 校验。
+- 第二轮自动推进、四种立场、有效观点引用和 challenge target 校验。
 - 用户消息、显式 mention、pause_pending、暂停/继续/结束和幂等语义。
 - `mock.run` 确定性演示命令与一轮 Mock 的事件顺序。
 
@@ -136,13 +144,13 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 
 ## 已知边界
 
-- `mock.run` 保留为确定性演示与 UI 测试入口；真实第一轮由 turn REST 握手驱动。
+- `mock.run` 保留为确定性演示与 UI 测试入口；真实两轮讨论由 turn REST 握手驱动。
 - Redis 与 Celery 尚未接入：事件广播暂时使用 Channels 的 `InMemoryChannelLayer`，只在单进程内有效。
 - iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
-- 第一轮由服务端顺序签发 turn；用户插话、点名、暂停、继续和提前结束已由 Issue #6 接入。
+- 两轮讨论都由服务端顺序签发 turn；第一轮结束时同一响应自动签发第二轮。
 - `agent.thinking` 由服务端持久化；`agent.typing` 与逐字文本仍是客户端本地临时状态。
-- 引用关系（`references`）后端已支持校验，客户端暂未自动填写；「挑战对象」字段尚未建模，二者随第二轮互评（Issue #7）一起处理。
-- 消息的 `message_type` / `stance` 由预设角色推导（方案派→proposal、质疑派→challenge、体验派→supplement），`confidence` 固定 0.6；让模型自己产出结构化字段与真实置信度随 #7 评估阶段再做。
+- 第一轮消息的 `message_type` / `stance` 由预设角色推导；第二轮由模型返回结构化字段，客户端校验后提交，后端再次校验。
+- 第二轮引用与挑战关系已持久化并可恢复；引用卡展示原观点摘要，不额外加载被引用消息全文的历史版本。
 - SwiftLint 已接入（`ios/.swiftlint.yml`，`make verify` 与 CI 都执行 `--strict`）；UI 测试仍未在 CI 执行（需要本地后端），CI 只做 `build-for-testing`。
 - Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
 - AppModel 暂时直接持有 `APIClient`、`ProviderStore` 与 `ProviderProbe`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。
