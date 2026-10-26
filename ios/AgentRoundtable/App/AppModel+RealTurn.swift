@@ -7,28 +7,35 @@ extension AppModel {
     // MARK: - Real provider turn (Issue #4)
 
     func runRealTurn(participant: Participant) async {
-        guard case .idle = turnState, let room else { return }
+        guard !turnState.isBusy, let room else { return }
         guard let roundtableID = room.snapshot?.id else { return }
 
-        guard case let .ready(metadata) = providerStore.availability(for: activeProvider),
-              let configuration = providerStore.configuration(for: metadata.kind)
-        else {
+        guard let configuration = activeConfiguration else {
             turnState = .failed(
                 agentID: participant.id,
-                message: providerIncompleteMessage ?? "尚未配置 Provider，无法调用真实模型。"
+                message: providerIncompleteMessage ?? "尚未配置 Provider，无法调用真实模型。",
+                partial: nil
             )
             return
         }
 
         let apiKey: String
         do {
-            apiKey = try providerStore.secret(for: metadata.kind) ?? ""
+            apiKey = try providerStore.secret(for: configuration.kind) ?? ""
         } catch {
-            turnState = .failed(agentID: participant.id, message: Self.providerMessage(for: error))
+            turnState = .failed(
+                agentID: participant.id,
+                message: Self.userMessage(for: error),
+                partial: nil
+            )
             return
         }
         guard !apiKey.isEmpty else {
-            turnState = .failed(agentID: participant.id, message: "API Key 为空，请重新输入。")
+            turnState = .failed(
+                agentID: participant.id,
+                message: "API Key 为空，请重新输入。",
+                partial: nil
+            )
             return
         }
 
@@ -60,23 +67,33 @@ extension AppModel {
                 submission: submission
             )
             room.apply(envelope)
-            turnState = .idle
+            turnState = .completed(agentID: participant.id)
         } catch {
+            let partial = text.trimmingCharacters(in: .whitespacesAndNewlines)
             turnState = .failed(
                 agentID: participant.id,
-                message: Self.turnErrorMessage(for: error)
+                message: Self.userMessage(for: error),
+                partial: partial.isEmpty ? nil : partial
             )
         }
     }
 
-    func resetTurn() {
+    /// Re-runs the failed turn with the same provider; the partial draft is
+    /// replaced by the new stream.
+    func retryTurn() async {
+        guard case let .failed(agentID, _, _) = turnState,
+              let participant = room?.participants.first(where: { $0.id == agentID })
+        else { return }
         turnState = .idle
+        await runRealTurn(participant: participant)
     }
 
-    static func turnErrorMessage(for error: Error) -> String {
-        if let providerError = error as? ProviderError {
-            return providerError.message
+    func dismissTurnError() {
+        switch turnState {
+        case .failed, .completed:
+            turnState = .idle
+        default:
+            break
         }
-        return message(for: error)
     }
 }

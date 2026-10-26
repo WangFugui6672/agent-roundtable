@@ -5,7 +5,13 @@ from urllib.parse import urlsplit
 from rest_framework import serializers
 
 from apps.roundtables.models import AgentProfile, Message, Roundtable, RoundtableAgent
-from apps.roundtables.protocol import iso8601_millis
+from apps.roundtables.protocol import (
+    BODY_HARD_MAX_CHARS,
+    CLAIM_MAX_CHARS,
+    DEFAULT_CONFIDENCE,
+    MAX_REFERENCES,
+    iso8601_millis,
+)
 
 MVP_AGENT_COUNT = 3
 
@@ -127,7 +133,9 @@ class RoundtableCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs: dict) -> dict:
         if contains_secret(self.initial_data):
-            raise serializers.ValidationError({"provider": "不得向后端提交 API Key。"})
+            # List-shaped detail keeps `error.details` uniform with the other
+            # field errors (docs/protocol.md 2.5) and is asserted by tests.
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
         return attrs
 
     def validate_agent_profile_ids(self, value: list) -> list:
@@ -190,21 +198,29 @@ class MessageCreateSerializer(serializers.Serializer):
 
     roundtable_agent_id = serializers.UUIDField()
     message_type = serializers.ChoiceField(choices=Message.Type.choices)
-    claim = serializers.CharField(max_length=80, trim_whitespace=True)
+    claim = serializers.CharField(max_length=CLAIM_MAX_CHARS, trim_whitespace=True)
     body = serializers.CharField(
-        max_length=2000, trim_whitespace=True, required=False, allow_blank=True, default=""
+        max_length=BODY_HARD_MAX_CHARS,
+        trim_whitespace=True,
+        required=False,
+        allow_blank=True,
+        default="",
     )
     stance = serializers.ChoiceField(
         choices=Message.Stance.choices, required=False, allow_null=True, allow_blank=True
     )
     references = serializers.ListField(
-        child=serializers.UUIDField(), required=False, max_length=3, default=list
+        child=serializers.UUIDField(), required=False, max_length=MAX_REFERENCES, default=list
     )
-    confidence = serializers.FloatField(min_value=0, max_value=1, required=False, default=0.6)
+    confidence = serializers.FloatField(
+        min_value=0, max_value=1, required=False, default=DEFAULT_CONFIDENCE
+    )
 
     def validate(self, attrs: dict) -> dict:
         if contains_secret(self.initial_data):
-            raise serializers.ValidationError({"provider": "不得向后端提交 API Key。"})
+            # List-shaped detail keeps `error.details` uniform with the other
+            # field errors (docs/protocol.md 2.5) and is asserted by tests.
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
 
         roundtable: Roundtable = self.context["roundtable"]
         agent = (

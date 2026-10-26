@@ -22,6 +22,12 @@ ROUND_COMPLETED = "round.completed"
 #: move the client's resume cursor.
 EPHEMERAL_SEQUENCE = 0
 
+#: Message limits shared with the client (docs/protocol.md 2.7).
+CLAIM_MAX_CHARS = 80
+DEFAULT_CONFIDENCE = 0.6
+MAX_REFERENCES = 3
+BODY_HARD_MAX_CHARS = 2000
+
 #: Client -> server command that plays one scripted mock round.
 #: TODO(#5): the turn scheduler replaces this bridge; clients stop sending it.
 MOCK_RUN = "mock.run"

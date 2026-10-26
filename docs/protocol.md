@@ -170,11 +170,13 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 - `roundtable_agent_id`：必须是该圆桌的参与者。
 - `message_type`：`proposal | support | challenge | supplement | question | pass | summary`。
 - `claim`：1-80 字符，去除首尾空白。
-- `body`：不能超过该 Agent 的 `max_reply_chars`（预设 Agent 为 180）；`pass` 允许空正文，其他类型必填。
-- `stance`：`support | challenge | supplement | question | null`。
+- `body`：不能超过该 Agent 的 `max_reply_chars`（预设 Agent 为 180），同时受 2000 字符的硬上限保护；`pass` 允许空正文，其他类型必填。
+- `stance`：`support | challenge | supplement | question | null`；空字符串视同 `null`。
 - `references`：最多 3 条，必须是**同一圆桌**已持久化的消息。
 - `confidence`：0-1，默认 `0.6`。
-- 请求体任意层级出现 `api_key` → `400 validation_error`（与 2.5 相同）。
+- 请求体任意层级出现 `api_key` → `400 validation_error`，`details` 形如 `{"provider": ["不得向后端提交 API Key。"]}`（与 2.5 相同）。
+
+客户端会按上述上限截断模型输出（`MessageComposer`），这只是一种体验优化：后端始终按同一组上限校验，任何超限请求都会被拒绝。
 
 `201` 返回该消息对应的 `message.completed` 事件信封（与 WebSocket 广播的是同一条，客户端按 `event_id` 去重）：
 
@@ -189,7 +191,9 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 }
 ```
 
-服务端在同一事务里：写入消息、把该 Agent 的状态置为 `completed`、必要时把圆桌从 `ready` 推进到 `running`、`event_sequence` 加一、写入 `room_event`。提交成功后还会通过 channel layer 广播给该房间已连接的 WebSocket。
+服务端在同一事务里：写入消息、把该 Agent 的状态置为 `completed`、必要时把圆桌从 `ready` 或 `paused` 推进到 `running`、`event_sequence` 加一、写入 `room_event`。提交成功后还会通过 channel layer 广播给该房间已连接的 WebSocket。
+
+> 当前 channel layer 是 Django Channels 的 `InMemoryChannelLayer`，只在单进程内广播；Issue #5 引入 Redis 后改为跨进程。
 
 **为什么由客户端提交**：模型请求由 iOS 直连 Provider（ADR 0001），Django 只负责校验与持久化，所以消息一定经过一次 HTTP 提交；`agent.thinking` / `agent.typing` 是客户端本地状态，本切片不落库。
 

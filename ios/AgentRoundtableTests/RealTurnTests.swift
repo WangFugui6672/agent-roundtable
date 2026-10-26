@@ -14,21 +14,35 @@ private final class TurnSecretStore: SecretStore {
 }
 
 private actor TurnLineStream: LineStreaming {
-    private let statusCode: Int
+    private let statusCodes: [Int]
     private let deltas: [String]
+    private let errorAfterDeltas: Error?
+    private var attempt = 0
 
-    init(statusCode: Int = 200, deltas: [String]) {
-        self.statusCode = statusCode
+    init(
+        statusCode: Int = 200,
+        deltas: [String],
+        statusCodes: [Int]? = nil,
+        errorAfterDeltas: Error? = nil
+    ) {
+        self.statusCodes = statusCodes ?? [statusCode]
         self.deltas = deltas
+        self.errorAfterDeltas = errorAfterDeltas
     }
 
     func stream(_ request: URLRequest) async throws -> StreamingResponse {
-        let lines = deltas.map { #"data: {"choices":[{"delta":{"content":"\#($0)"}}]}"# } + ["data: [DONE]"]
+        let status = statusCodes[min(attempt, statusCodes.count - 1)]
+        attempt += 1
+        var lines = deltas.map { #"data: {"choices":[{"delta":{"content":"\#($0)"}}]}"# }
+        if errorAfterDeltas == nil {
+            lines.append("data: [DONE]")
+        }
+        let failure = errorAfterDeltas
         return StreamingResponse(
-            statusCode: statusCode,
+            statusCode: status,
             lines: AsyncThrowingStream { continuation in
                 for line in lines { continuation.yield(line) }
-                continuation.finish()
+                continuation.finish(throwing: failure)
             }
         )
     }
@@ -77,6 +91,8 @@ final class RealTurnTests: XCTestCase {
     private func makeModel(
         deltas: [String] = ["先做一个两周实验。"],
         statusCode: Int = 200,
+        statusCodes: [Int]? = nil,
+        errorAfterDeltas: Error? = nil,
         responses: [HTTPResponse]? = nil
     ) -> (AppModel, TurnTransport) {
         let transport = TurnTransport(responses: responses ?? [])
@@ -87,7 +103,14 @@ final class RealTurnTests: XCTestCase {
         let model = AppModel(
             defaults: defaults,
             providerStore: store,
-            chatClient: ProviderChatClient(streaming: TurnLineStream(statusCode: statusCode, deltas: deltas)),
+            chatClient: ProviderChatClient(
+                streaming: TurnLineStream(
+                    statusCode: statusCode,
+                    deltas: deltas,
+                    statusCodes: statusCodes,
+                    errorAfterDeltas: errorAfterDeltas
+                )
+            ),
             api: APIClient(
                 baseURL: URL(string: "http://127.0.0.1:8000")!,
                 transport: transport,
@@ -196,12 +219,12 @@ final class RealTurnTests: XCTestCase {
             ]
         )
         enableProvider(on: model)
-        model.open(snapshot(), connectStream: false)
+        model.present(snapshot())
         let participant = try XCTUnwrap(model.room?.participants.first)
 
         await model.runRealTurn(participant: participant)
 
-        XCTAssertEqual(model.turnState, .idle)
+        XCTAssertEqual(model.turnState, .completed(agentID: agentID))
         XCTAssertEqual(model.room?.messages.count, 1)
         XCTAssertEqual(model.room?.messages.first?.claim, "先做一个两周实验")
 
@@ -228,12 +251,12 @@ final class RealTurnTests: XCTestCase {
     func testProviderFailureIsShownWithoutSubmitting() async throws {
         let (model, transport) = makeModel(deltas: [], statusCode: 401)
         enableProvider(on: model)
-        model.open(snapshot(), connectStream: false)
+        model.present(snapshot())
         let participant = try XCTUnwrap(model.room?.participants.first)
 
         await model.runRealTurn(participant: participant)
 
-        guard case let .failed(_, message) = model.turnState else {
+        guard case let .failed(_, message, _) = model.turnState else {
             return XCTFail("expected failed, got \(model.turnState)")
         }
         XCTAssertTrue(message.contains("API Key"))
@@ -244,12 +267,12 @@ final class RealTurnTests: XCTestCase {
 
     func testMissingProviderBlocksTheTurn() async throws {
         let (model, _) = makeModel()
-        model.open(snapshot(), connectStream: false)
+        model.present(snapshot())
         let participant = try XCTUnwrap(model.room?.participants.first)
 
         await model.runRealTurn(participant: participant)
 
-        guard case let .failed(_, message) = model.turnState else {
+        guard case let .failed(_, message, _) = model.turnState else {
             return XCTFail("expected failed, got \(model.turnState)")
         }
         XCTAssertTrue(message.contains("尚未配置"))
@@ -258,12 +281,12 @@ final class RealTurnTests: XCTestCase {
     func testEmptyReplyIsRejected() async throws {
         let (model, transport) = makeModel(deltas: [])
         enableProvider(on: model)
-        model.open(snapshot(), connectStream: false)
+        model.present(snapshot())
         let participant = try XCTUnwrap(model.room?.participants.first)
 
         await model.runRealTurn(participant: participant)
 
-        guard case let .failed(_, message) = model.turnState else {
+        guard case let .failed(_, message, _) = model.turnState else {
             return XCTFail("expected failed, got \(model.turnState)")
         }
         XCTAssertTrue(message.contains("空"))
@@ -271,15 +294,82 @@ final class RealTurnTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
-    func testResetTurnClearsFailure() async throws {
+    func testPartialDraftIsKeptWhenTheStreamBreaks() async throws {
+        let (model, transport) = makeModel(
+            deltas: ["先做一个两周"],
+            errorAfterDeltas: URLError(.networkConnectionLost)
+        )
+        enableProvider(on: model)
+        model.present(snapshot())
+        let participant = try XCTUnwrap(model.room?.participants.first)
+
+        await model.runRealTurn(participant: participant)
+
+        guard case let .failed(_, message, partial) = model.turnState else {
+            return XCTFail("expected failed, got \(model.turnState)")
+        }
+        XCTAssertTrue(message.contains("网络"))
+        XCTAssertEqual(partial, "先做一个两周")
+        let requests = await transport.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testRetryRunsTheTurnAgain() async throws {
+        let (model, transport) = makeModel(
+            deltas: ["第二次成功了。"],
+            statusCodes: [401, 200],
+            responses: [
+                .init(
+                    data: Data(envelopeJSON(claim: "第二次成功了", body: "第二次成功了。").utf8),
+                    statusCode: 201
+                )
+            ]
+        )
+        enableProvider(on: model)
+        model.present(snapshot())
+        let participant = try XCTUnwrap(model.room?.participants.first)
+
+        await model.runRealTurn(participant: participant)
+        guard case .failed = model.turnState else {
+            return XCTFail("expected the first attempt to fail, got \(model.turnState)")
+        }
+
+        await model.retryTurn()
+
+        XCTAssertEqual(model.turnState, .completed(agentID: agentID))
+        XCTAssertEqual(model.room?.messages.count, 1)
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 1, "only the successful attempt submits")
+    }
+
+    func testCompletedStateCanBeDismissed() async throws {
+        let (model, _) = makeModel(
+            responses: [
+                .init(
+                    data: Data(envelopeJSON(claim: "完成", body: "完成。").utf8),
+                    statusCode: 201
+                )
+            ]
+        )
+        enableProvider(on: model)
+        model.present(snapshot())
+        let participant = try XCTUnwrap(model.room?.participants.first)
+        await model.runRealTurn(participant: participant)
+
+        model.dismissTurnError()
+
+        XCTAssertEqual(model.turnState, .idle)
+    }
+
+    func testDismissClearsFailure() async throws {
         let (model, _) = makeModel(deltas: [], statusCode: 500)
         enableProvider(on: model)
-        model.open(snapshot(), connectStream: false)
+        model.present(snapshot())
         let participant = try XCTUnwrap(model.room?.participants.first)
         await model.runRealTurn(participant: participant)
         XCTAssertTrue(model.turnState.isBusy == false)
 
-        model.resetTurn()
+        model.dismissTurnError()
 
         XCTAssertEqual(model.turnState, .idle)
     }
