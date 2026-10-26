@@ -41,3 +41,7 @@ node_modules/
 *.log
 tmp/
 
+
+# XcodeGen outputs
+ios/AgentRoundtable.xcodeproj/
+ios/AgentRoundtable/Info.plist
