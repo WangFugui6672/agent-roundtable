@@ -340,12 +340,12 @@ private struct ChatStreamOptions: Encodable {
     }
 }
 
-fileprivate struct SSEChunk: Decodable {
+private struct SSEChunk: Decodable {
     let choices: [SSEChoice]
     let usage: SSEUsage?
 }
 
-fileprivate struct SSEChoice: Decodable {
+private struct SSEChoice: Decodable {
     let delta: SSEDelta?
     let finishReason: String?
 
@@ -355,11 +355,11 @@ fileprivate struct SSEChoice: Decodable {
     }
 }
 
-fileprivate struct SSEDelta: Decodable {
+private struct SSEDelta: Decodable {
     let content: String?
 }
 
-fileprivate struct SSEUsage: Decodable {
+private struct SSEUsage: Decodable {
     let promptTokens: Int?
     let completionTokens: Int?
     let totalTokens: Int?

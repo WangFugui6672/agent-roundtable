@@ -381,3 +381,49 @@ final class RealTurnFailureTests: XCTestCase {
         return HTTPResponse(data: data, statusCode: statusCode)
     }
 }
+
+extension RealTurnFailureTests {
+    func testPausedNextTurnResponseAfterFailureStopsGenerationAsPaused() async throws {
+        let failure = event(
+            "agent.failed",
+            sequence: 2,
+            payload: [
+                "turn_id": advocate.id.uuidString,
+                "round": 1,
+                "agent_id": advocate.agentID.uuidString,
+                "agent_name": advocate.name,
+                "failure_code": "turn_timeout",
+                "message": "单个 Agent 的生成超过 60 秒上限。",
+                "retryable": true,
+                "partial": NSNull()
+            ]
+        )
+        let paused = event(
+            "room.paused",
+            sequence: 3,
+            payload: ["status": "paused"]
+        )
+        let response = jsonResponse(
+            [
+                "round": 1,
+                "turn": NSNull(),
+                "events": [failure, paused]
+            ],
+            statusCode: 200
+        )
+        let (model, transport) = makeModel(
+            deltasByAttempt: [[]],
+            responses: [response]
+        )
+        enableProvider(on: model)
+        model.present(snapshot())
+
+        await model.runFirstRound()
+
+        XCTAssertEqual(model.turnState, .paused)
+        XCTAssertEqual(model.room?.status, .paused)
+        XCTAssertEqual(model.room?.failures.count, 1)
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+}

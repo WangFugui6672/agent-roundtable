@@ -505,6 +505,58 @@ def test_final_round_completion_wins_over_duration_budget(api_client):
     assert room.events.filter(event_type="budget.exhausted").count() == 0
 
 
+def test_final_round_expired_turn_returns_both_failure_and_completion(api_client):
+    room = make_room()
+    first = request_next_turn(api_client, room).json()["turn"]
+    turn = Turn.objects.get(id=first["turn_id"])
+    turn.round_number = 2
+    turn.deadline_at = timezone.now() - timedelta(seconds=1)
+    turn.save(update_fields=["round_number", "deadline_at"])
+    room.current_round = 2
+    room.status = Roundtable.Status.RUNNING
+    room.save(update_fields=["current_round", "status"])
+    room.agents.exclude(id=first["roundtable_agent_id"]).update(
+        state=RoundtableAgent.State.COMPLETED
+    )
+
+    response = request_next_turn(api_client, room)
+
+    assert response.status_code == 200
+    assert response.json()["turn"] is None
+    assert [event["event_type"] for event in response.json()["events"]] == [
+        "agent.failed",
+        "round.completed",
+    ]
+    room.refresh_from_db()
+    assert room.status == Roundtable.Status.COMPLETED
+
+
+def test_expired_turn_honors_pause_pending_before_scheduling_another_agent(api_client):
+    room = make_room()
+    first = request_next_turn(api_client, room).json()["turn"]
+    api_client.post(
+        f"/api/v1/roundtables/{room.id}/user-messages",
+        {"body": "先在这里暂停一下。"},
+        format="json",
+        HTTP_X_GUEST_SESSION=str(room.guest_session_id),
+    )
+    turn = Turn.objects.get(id=first["turn_id"])
+    turn.deadline_at = timezone.now() - timedelta(seconds=1)
+    turn.save(update_fields=["deadline_at"])
+
+    response = request_next_turn(api_client, room)
+
+    assert response.status_code == 200
+    assert response.json()["turn"] is None
+    assert [event["event_type"] for event in response.json()["events"]] == [
+        "agent.failed",
+        "room.paused",
+    ]
+    room.refresh_from_db()
+    assert room.status == Roundtable.Status.PAUSED
+    assert room.pause_pending is False
+
+
 def test_budget_between_rounds_does_not_start_round_two(api_client):
     room = make_room()
     room.current_round = 1
