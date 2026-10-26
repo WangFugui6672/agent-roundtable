@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.db import transaction
 from rest_framework import status
 from rest_framework.request import Request
@@ -14,9 +16,11 @@ from apps.roundtables.models import AgentProfile, GuestSession, Roundtable, Roun
 from apps.roundtables.protocol import iso8601_millis
 from apps.roundtables.serializers import (
     AgentProfileSerializer,
+    MessageCreateSerializer,
     RoundtableCreateSerializer,
     RoundtableSerializer,
 )
+from apps.roundtables.services import create_message, room_group_name
 from roundtable.exceptions import GuestSessionRequired, RoundtableNotFound
 
 GUEST_SESSION_HEADER = "X-Guest-Session"
@@ -101,3 +105,25 @@ class RoundtableDetailView(APIView):
         if roundtable is None:
             raise RoundtableNotFound()
         return Response(RoundtableSerializer(roundtable).data)
+
+
+class RoundtableMessageView(APIView):
+    """Persist one structured utterance produced by the iOS provider client."""
+
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        roundtable = Roundtable.objects.filter(id=roundtable_id, guest_session=session).first()
+        if roundtable is None:
+            raise RoundtableNotFound()
+
+        body = MessageCreateSerializer(data=request.data, context={"roundtable": roundtable})
+        body.is_valid(raise_exception=True)
+        envelope = create_message(str(roundtable.id), str(session.id), body.validated_data)
+
+        channel_layer = get_channel_layer()
+        if channel_layer is not None:
+            async_to_sync(channel_layer.group_send)(
+                room_group_name(roundtable.id),
+                {"type": "room.event", "envelope": envelope},
+            )
+        return Response(envelope, status=status.HTTP_201_CREATED)
