@@ -107,6 +107,10 @@ Agent 评估当前消息后决定不发言的状态。Pass 是正常行为，不
 
 Bring Your Own Key。用户提供自己的模型服务凭据，产品不提供或代付服务端模型额度。
 
+## Provider（模型服务商）
+
+用户选择的模型服务来源：Qwen、DeepSeek，或任意 OpenAI-compatible 服务。一场圆桌的所有 Agent 共用同一个 Provider。代码与协议中用 `kind` 表示它的稳定标识：`qwen | deepseek | custom`。
+
 ## Provider 配置（Provider Configuration）
 
 一场圆桌调用模型所需的非秘密信息，包括 Provider、BaseURL 和 Model。API Key 是秘密，不属于普通 Provider 配置。
