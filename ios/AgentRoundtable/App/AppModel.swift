@@ -30,17 +30,45 @@ final class AppModel {
     private(set) var isMockRunning = false
     private(set) var createError: String?
 
+    // Provider state (Issue #3). Secrets never enter these properties: only the
+    // non-secret configuration is exposed to the UI.
+    private(set) var activeProvider: ProviderKind?
+    private(set) var providerError: String?
+    private(set) var providerCheckMessage: String?
+    private(set) var isSavingProvider = false
+    private(set) var isCheckingProvider = false
+
     private var api: APIClient
     private var guestSessionID: UUID?
     private var stream: RoundtableStream?
     private var streamTask: Task<Void, Never>?
     private let defaults: UserDefaults
+    private let providerStore: ProviderStore
+    private let probe: ProviderProbe
 
     private static let sessionKey = "roundtable.guestSessionID"
+    private static let activeProviderKey = "roundtable.activeProviderKind"
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        providerStore: ProviderStore? = nil,
+        probe: ProviderProbe = ProviderProbe()
+    ) {
         self.defaults = defaults
         self.api = APIClient(baseURL: Self.defaultBaseURL)
+        self.providerStore = providerStore ?? ProviderStore()
+        self.probe = probe
+
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["RT_RESET_PROVIDER_STATE"] == "1" {
+            self.providerStore.reset()
+            defaults.removeObject(forKey: Self.activeProviderKey)
+        }
+        #endif
+
+        if let raw = defaults.string(forKey: Self.activeProviderKey) {
+            self.activeProvider = ProviderKind(rawValue: raw)
+        }
     }
 
     // MARK: - Bootstrap
@@ -122,12 +150,141 @@ final class AppModel {
         do {
             let snapshot = try await api.createRoundtable(
                 topic: trimmed,
-                agentProfileIds: selectedProfileIDs
+                agentProfileIds: selectedProfileIDs,
+                provider: providerMetadata()
             )
             open(snapshot)
         } catch {
             createError = Self.message(for: error)
         }
+    }
+
+    // MARK: - Provider
+
+    /// Non-secret snapshot submitted with a new roundtable, or nil when the user
+    /// has not configured a provider yet (Mock demo still works).
+    func providerMetadata() -> ProviderMetadata? {
+        guard let kind = activeProvider,
+              let configuration = providerStore.configuration(for: kind),
+              providerStore.isConfigured(kind)
+        else { return nil }
+        return configuration.metadata
+    }
+
+    func providerConfiguration(for kind: ProviderKind) -> ProviderConfiguration? {
+        providerStore.configuration(for: kind)
+    }
+
+    func isProviderConfigured(_ kind: ProviderKind) -> Bool {
+        providerStore.isConfigured(kind)
+    }
+
+    var providerSummary: String {
+        guard let metadata = providerMetadata() else {
+            return "未配置 Provider，将使用 Mock 演示"
+        }
+        return "\(metadata.kind.displayName) · \(metadata.model)"
+    }
+
+    var hasConfiguredProvider: Bool {
+        providerMetadata() != nil
+    }
+
+    /// Saves the provider. An empty key field keeps the Keychain item that is
+    /// already stored, so users can change BaseURL/Model without re-entering it.
+    @discardableResult
+    func saveProvider(
+        kind: ProviderKind,
+        baseURL: String,
+        model: String,
+        apiKey: String
+    ) -> Bool {
+        isSavingProvider = true
+        defer { isSavingProvider = false }
+        providerError = nil
+        providerCheckMessage = nil
+
+        var draft = ProviderDraft(kind: kind, baseURL: baseURL, model: model, apiKey: apiKey)
+        if draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let stored = (try? providerStore.secret(for: kind)) ?? nil,
+           !stored.isEmpty {
+            draft.apiKey = stored
+        }
+
+        do {
+            try providerStore.save(draft)
+            setActiveProvider(kind)
+            return true
+        } catch {
+            providerError = Self.providerMessage(for: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func deleteProvider(_ kind: ProviderKind) -> Bool {
+        providerError = nil
+        providerCheckMessage = nil
+        do {
+            try providerStore.delete(kind)
+            if activeProvider == kind {
+                setActiveProvider(nil)
+            }
+            providerCheckMessage = "已删除该 Provider 及其 Keychain 中的 API Key。"
+            return true
+        } catch {
+            providerError = Self.providerMessage(for: error)
+            return false
+        }
+    }
+
+    func clearProviderFeedback() {
+        providerError = nil
+        providerCheckMessage = nil
+    }
+
+    /// Verifies BaseURL + key against the provider's `GET /models` endpoint.
+    /// Network failures and invalid keys produce a readable message instead of
+    /// silently swapping models (PRD 7.13).
+    func checkProvider(kind: ProviderKind, baseURL: String, model: String, apiKey: String) async {
+        isCheckingProvider = true
+        providerError = nil
+        providerCheckMessage = nil
+        defer { isCheckingProvider = false }
+
+        var draft = ProviderDraft(kind: kind, baseURL: baseURL, model: model, apiKey: apiKey)
+        if draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let stored = (try? providerStore.secret(for: kind)) ?? nil,
+           !stored.isEmpty {
+            draft.apiKey = stored
+        }
+
+        do {
+            let (configuration, key) = try draft.validated()
+            let outcome = await probe.check(configuration: configuration, apiKey: key)
+            providerCheckMessage = outcome.message
+        } catch {
+            providerError = Self.providerMessage(for: error)
+        }
+    }
+
+    func setActiveProvider(_ kind: ProviderKind?) {
+        activeProvider = kind
+        if let kind {
+            defaults.set(kind.rawValue, forKey: Self.activeProviderKey)
+        } else {
+            defaults.removeObject(forKey: Self.activeProviderKey)
+        }
+    }
+
+    static func providerMessage(for error: Error) -> String {
+        if let validation = error as? ProviderValidationError {
+            return validation.message
+        }
+        if let keychain = error as? KeychainError {
+            return keychain.message
+        }
+        return error.localizedDescription
     }
 
     // MARK: - Room

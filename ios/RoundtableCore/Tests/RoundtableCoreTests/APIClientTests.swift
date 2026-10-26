@@ -75,6 +75,63 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(ids, [Fixtures.advocateID.uuidString])
     }
 
+    func testSendsProviderMetadataWithRoundtable() async throws {
+        let transport = StubTransport(
+            responses: [.init(data: Data(Fixtures.providerSnapshotJSON.utf8), statusCode: 201)]
+        )
+        let client = APIClient(
+            baseURL: baseURL,
+            transport: transport,
+            guestSessionId: guestSessionID
+        )
+
+        let snapshot = try await client.createRoundtable(
+            topic: "该不该把验证周期压缩到两周？",
+            agentProfileIds: [Fixtures.advocateID],
+            provider: ProviderMetadata(
+                kind: .deepseek,
+                baseURL: "https://api.deepseek.com/v1",
+                model: "deepseek-chat"
+            )
+        )
+
+        XCTAssertEqual(snapshot.provider, ProviderMetadata(
+            kind: .deepseek,
+            baseURL: "https://api.deepseek.com/v1",
+            model: "deepseek-chat"
+        ))
+
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let provider = try XCTUnwrap(json["provider"] as? [String: Any])
+        XCTAssertEqual(provider["kind"] as? String, "deepseek")
+        XCTAssertEqual(provider["base_url"] as? String, "https://api.deepseek.com/v1")
+        XCTAssertEqual(provider["model"] as? String, "deepseek-chat")
+        XCTAssertEqual(provider.count, 3, "provider metadata must not carry secrets")
+        XCTAssertNil(provider["api_key"])
+    }
+
+    func testOmitsProviderWhenNoneConfigured() async throws {
+        let transport = StubTransport(
+            responses: [.init(data: Data(Fixtures.snapshotJSON.utf8), statusCode: 201)]
+        )
+        let client = APIClient(
+            baseURL: baseURL,
+            transport: transport,
+            guestSessionId: guestSessionID
+        )
+
+        _ = try await client.createRoundtable(topic: "x", agentProfileIds: [Fixtures.advocateID])
+
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["provider"])
+    }
+
     func testFetchesAgentProfiles() async throws {
         let response = "[" + """
         {

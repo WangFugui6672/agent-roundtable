@@ -116,4 +116,19 @@ enum Fixtures {
             payload: "{\"roundtable\": \(snapshotJSON), \"messages\": []}"
         )
     }
+
+    /// Snapshot returned once the roundtable was created with a provider (Issue #3).
+    static var providerSnapshotJSON: String {
+        snapshotJSON.replacingOccurrences(
+            of: "\"mode\": \"decision\",",
+            with: """
+            "mode": "decision",
+              "provider": {
+                "kind": "deepseek",
+                "base_url": "https://api.deepseek.com/v1",
+                "model": "deepseek-chat"
+              },
+            """
+        )
+    }
 }

@@ -4,6 +4,7 @@ import SwiftUI
 struct CreateRoundtableView: View {
     @Environment(AppModel.self) private var model
     @State private var topic = ""
+    @State private var showingProviderSettings = false
     @FocusState private var topicFocused: Bool
 
     private var trimmedTopic: String {
@@ -20,6 +21,7 @@ struct CreateRoundtableView: View {
                 header
                 topicSection
                 participantsSection
+                providerSection
                 startSection
                 disclaimer
             }
@@ -29,6 +31,9 @@ struct CreateRoundtableView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("新建圆桌")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingProviderSettings) {
+            ProviderSettingsView(initialKind: model.activeProvider ?? .deepseek)
+        }
     }
 
     private var header: some View {
@@ -88,6 +93,48 @@ struct CreateRoundtableView: View {
                     model.toggleSelection(profile)
                 }
             }
+        }
+    }
+
+    private var providerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("模型 Provider")
+                .font(.headline)
+
+            Button {
+                showingProviderSettings = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: model.hasConfiguredProvider ? "bolt.horizontal.circle.fill" : "bolt.slash")
+                        .font(.title3)
+                        .foregroundStyle(model.hasConfiguredProvider ? Color.accentColor : .secondary)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(model.providerSummary)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+                        Text(model.hasConfiguredProvider
+                             ? "API Key 保存在本机 Keychain，不会上传。"
+                             : "配置后可改用你自己的模型 Key。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("create.provider")
         }
     }
 
