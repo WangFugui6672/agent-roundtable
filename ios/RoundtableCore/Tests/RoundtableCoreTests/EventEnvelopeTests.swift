@@ -1,0 +1,86 @@
+import XCTest
+
+@testable import RoundtableCore
+
+final class EventEnvelopeTests: XCTestCase {
+    func testDecodesJoinSnapshot() throws {
+        let envelope = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+
+        XCTAssertEqual(envelope.eventId, Fixtures.eventID)
+        XCTAssertEqual(envelope.roomId, Fixtures.roomID)
+        XCTAssertEqual(envelope.sequence, 0)
+        XCTAssertEqual(envelope.eventType, "room.joined")
+        XCTAssertEqual(
+            envelope.createdAt.timeIntervalSince1970,
+            Date(timeIntervalSince1970: 1_792_976_523.456).timeIntervalSince1970,
+            accuracy: 0.001
+        )
+
+        guard case let .joined(joined) = envelope.payload else {
+            return XCTFail("expected a joined payload, got \(envelope.payload)")
+        }
+        XCTAssertEqual(joined.messages, [])
+        XCTAssertEqual(joined.roundtable.topic, "该不该把验证周期压缩到两周？")
+        XCTAssertEqual(joined.roundtable.status, .ready)
+        XCTAssertEqual(joined.roundtable.participants.count, 3)
+        XCTAssertEqual(joined.roundtable.participants[0].agent.name, "方案派")
+        XCTAssertEqual(joined.roundtable.participants[0].position, 0)
+        XCTAssertEqual(joined.roundtable.lastSequence, 0)
+    }
+
+    func testDecodesCompletedMessage() throws {
+        let data = Fixtures.envelope(
+            eventType: "message.completed",
+            sequence: 4,
+            payload: "{\"message\": \(Fixtures.messageJSON)}"
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .messageCompleted(message) = envelope.payload else {
+            return XCTFail("expected a completed message, got \(envelope.payload)")
+        }
+        XCTAssertEqual(message.id, Fixtures.messageID)
+        XCTAssertEqual(message.author.name, "方案派")
+        XCTAssertEqual(message.author.agentKey, "advocate")
+        XCTAssertEqual(message.author.roundtableAgentId, Fixtures.advocateID)
+        XCTAssertEqual(message.messageType, .proposal)
+        XCTAssertNil(message.stance)
+        XCTAssertEqual(message.references, [])
+        XCTAssertEqual(message.confidence, 0.72, accuracy: 0.0001)
+    }
+
+    func testKeepsUnknownEventTypesForForwardCompatibility() throws {
+        let data = Fixtures.envelope(eventType: "future.thing", sequence: 9, payload: "{\"x\": 1}")
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        XCTAssertEqual(envelope.eventType, "future.thing")
+        XCTAssertEqual(envelope.payload, .unknown)
+    }
+
+    func testRejectsMalformedJSON() {
+        XCTAssertThrowsError(try EventEnvelope.decode(from: Data("not json".utf8)))
+    }
+
+    func testAcceptsTimestampsWithoutFractionalSeconds() throws {
+        let data = """
+        {
+          "event_id": "0F9A0000-0000-4000-8000-000000000002",
+          "room_id": "C0DEC0DE-0000-4000-8000-000000000001",
+          "sequence": 1,
+          "created_at": "2026-10-26T01:02:03Z",
+          "event_type": "round.started",
+          "payload": {"round": 1, "max_rounds": 2, "topic": "t"}
+        }
+        """.data(using: .utf8)!
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .roundStarted(started) = envelope.payload else {
+            return XCTFail("expected round.started, got \(envelope.payload)")
+        }
+        XCTAssertEqual(started.round, 1)
+        XCTAssertEqual(started.maxRounds, 2)
+    }
+}
