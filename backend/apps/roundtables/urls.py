@@ -12,6 +12,7 @@ from apps.roundtables.views import (
     RoundtableNextTurnView,
     RoundtablePauseView,
     RoundtableResumeView,
+    RoundtableTurnFailView,
     RoundtableTurnPassView,
     RoundtableUserMessageView,
 )
@@ -59,5 +60,10 @@ urlpatterns = [
         "roundtables/<uuid:roundtable_id>/turns/pass",
         RoundtableTurnPassView.as_view(),
         name="roundtable-turn-pass",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/turns/fail",
+        RoundtableTurnFailView.as_view(),
+        name="roundtable-turn-fail",
     ),
 ]

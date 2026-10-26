@@ -69,69 +69,6 @@ final class RealTurnTests: XCTestCase {
         assertFirstRoundRequests(await transport.recordedRequests())
     }
 
-    func testProviderFailureKeepsTheTurnAndDoesNotSubmit() async throws {
-        let (model, transport) = makeModel(
-            deltasByAttempt: [[]],
-            statusCodes: [401],
-            responses: [nextResponse(advocate, sequence: 1, startsRound: true)]
-        )
-        enableProvider(on: model)
-        model.present(snapshot())
-
-        await model.runFirstRound()
-
-        guard case let .failed(_, message, _) = model.turnState else {
-            return XCTFail("expected failed, got \(model.turnState)")
-        }
-        XCTAssertTrue(message.contains("API Key"))
-        XCTAssertEqual(model.scheduledTurn?.turnId, advocate.id)
-        let requests = await transport.recordedRequests()
-        XCTAssertEqual(requests.count, 1)
-        XCTAssertTrue(requests[0].url?.path.hasSuffix("/turns/next") == true)
-        XCTAssertTrue(model.room?.messages.isEmpty == true)
-    }
-
-    func testRetryReusesTheSamePendingTurnAndSubmitsOnce() async throws {
-        let reply = ReplyFixture(
-            messageType: "proposal",
-            stance: nil,
-            claim: "第二次成功了",
-            body: "第二次成功了。",
-            sequence: 3
-        )
-        let (model, transport) = makeModel(
-            deltasByAttempt: [[], ["第二次成功了。"]],
-            statusCodes: [401, 200],
-            responses: [
-                nextResponse(advocate, sequence: 1, startsRound: true),
-                nextResponse(advocate, sequence: 1, startsRound: true),
-                completedResponse(advocate, reply: reply),
-                roundCompletedResponse(sequence: 4)
-            ]
-        )
-        enableProvider(on: model)
-        model.present(snapshot())
-
-        await model.runFirstRound()
-        guard case .failed = model.turnState else {
-            return XCTFail("expected the first attempt to fail, got \(model.turnState)")
-        }
-        await model.retryTurn()
-
-        XCTAssertEqual(model.turnState, .roundCompleted(round: 1))
-        XCTAssertEqual(model.room?.messages.count, 1)
-        let requests = await transport.recordedRequests()
-        XCTAssertEqual(
-            requests.map { $0.url?.path },
-            [
-                "/api/v1/roundtables/\(roomID.uuidString.lowercased())/turns/next",
-                "/api/v1/roundtables/\(roomID.uuidString.lowercased())/turns/next",
-                "/api/v1/roundtables/\(roomID.uuidString.lowercased())/messages",
-                "/api/v1/roundtables/\(roomID.uuidString.lowercased())/turns/next"
-            ]
-        )
-    }
-
     func testMissingProviderBlocksBeforeRequestingATurn() async throws {
         let (model, transport) = makeModel(deltasByAttempt: [[]])
         model.present(snapshot())
@@ -179,6 +116,7 @@ final class RealTurnTests: XCTestCase {
 extension RealTurnTests {
     func makeModel(
         deltasByAttempt: [[String]],
+        usageByAttempt: [ProviderUsage?] = [],
         statusCodes: [Int] = [200],
         errorAfterDeltas: Error? = nil,
         responses: [HTTPResponse] = []
@@ -190,6 +128,7 @@ extension RealTurnTests {
         )
         let stream = TurnLineStream(
             deltasByAttempt: deltasByAttempt,
+            usageByAttempt: usageByAttempt,
             statusCodes: statusCodes,
             errorAfterDeltas: errorAfterDeltas
         )
@@ -425,6 +364,33 @@ extension RealTurnTests {
                     "round": 1,
                     "agent_id": turn.agentID.uuidString,
                     "agent_name": turn.name
+                ]
+            ),
+            statusCode: 201
+        )
+    }
+
+    func failureResponse(
+        _ turn: TurnFixture,
+        code: String,
+        retryable: Bool,
+        sequence: Int,
+        round: Int = 1,
+        partial: String? = nil
+    ) -> HTTPResponse {
+        jsonResponse(
+            event(
+                "agent.failed",
+                sequence: sequence,
+                payload: [
+                    "turn_id": turn.id.uuidString,
+                    "round": round,
+                    "agent_id": turn.agentID.uuidString,
+                    "agent_name": turn.name,
+                    "failure_code": code,
+                    "message": "Provider 请求失败。",
+                    "retryable": retryable,
+                    "partial": partial ?? NSNull()
                 ]
             ),
             statusCode: 201

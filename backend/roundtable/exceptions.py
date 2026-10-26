@@ -41,6 +41,18 @@ class RoundtableNotFound(APIError):
     default_detail = "圆桌不存在。"
 
 
+class ActiveRoundtableLimit(APIError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_code = "active_roundtable_limit"
+    default_detail = "同一匿名会话最多同时保留 3 个进行中的圆桌。"
+
+
+class MockDailyLimit(APIError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_code = "mock_daily_limit"
+    default_detail = "Mock 模式每个匿名会话每天最多创建 10 个圆桌。"
+
+
 def _flatten(detail: Any) -> Any:
     if isinstance(detail, dict):
         return {key: _flatten(value) for key, value in detail.items()}

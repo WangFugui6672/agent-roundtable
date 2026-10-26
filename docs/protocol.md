@@ -1,6 +1,6 @@
 # Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #7）
+**状态：** 实现中（Issue #10）
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -35,6 +35,8 @@
 | `guest_session_required` | 401 | 缺少 `X-Guest-Session` 头，或会话不存在 |
 | `roundtable_not_found` | 404 | 圆桌不存在，或不属于当前会话 |
 | `validation_error` | 400 | 请求体校验失败 |
+| `active_roundtable_limit` | 429 | 同一匿名会话已有 3 个进行中的圆桌 |
+| `mock_daily_limit` | 429 | 同一匿名会话在本 UTC 日已创建 10 个 Mock 圆桌 |
 | `not_found` | 404 | 路由不存在（由 Django 404 处理器返回 JSON） |
 | `method_not_allowed` | 405 | HTTP 方法不被该路由支持 |
 | `server_error` | 500 | 未处理异常（由 Django 500 处理器返回 JSON） |
@@ -99,6 +101,15 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
   - `base_url`：必须是 `http`/`https` 地址，不能带查询参数或片段；服务端会去掉末尾 `/` 再保存。
   - `model`：1-120 字符，去除首尾空白后不能为空。
 
+创建限额：
+
+- 同一匿名会话同时最多保留 3 个 `ready | running | paused | summarizing` 圆桌；完成后可以继续创建。
+- 省略 `provider` 的 Mock 圆桌，每匿名会话每 UTC 日最多创建 10 个。
+- 真实 Provider 圆桌没有每日创建上限。
+- 限额检查在锁定 `GuestSession` 的事务内完成，并发请求不能穿透。
+
+超过限额时分别返回 `429 active_roundtable_limit` 或 `429 mock_daily_limit`，错误消息包含对应上限，客户端应直接展示而不自动重试。
+
 **API Key 不上传。** 请求体任何层级出现 `api_key` / `apiKey` / `provider_api_key` 字段都会被拒绝：
 
 ```json
@@ -135,6 +146,18 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
     "base_url": "https://api.deepseek.com/v1",
     "model": "deepseek-chat"
   },
+  "budget": {
+    "max_rounds": 2,
+    "max_agent_messages": 6,
+    "agent_messages_used": 0,
+    "max_reported_tokens": 2400,
+    "reported_tokens": 0,
+    "max_duration_seconds": 90,
+    "started_at": null,
+    "elapsed_seconds": 0,
+    "exhausted_reason": null,
+    "token_source": "client_reported"
+  },
   "created_at": "2026-10-26T01:02:03.456Z",
   "updated_at": "2026-10-26T01:02:03.456Z",
   "participants": [
@@ -154,6 +177,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 `pause_pending`：用户要求在安全边界暂停，但仍有在途 turn。仅在 `status = running` 时可能为 `true`。
 `active_turn`：当前待执行的 turn；没有在途 turn 时为 `null`。字段形状见 2.8，重连客户端用 `turn_id` 继续或拒绝过期回报。
 `provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
+`budget`：服务端实际执行的轮数、消息数、时间和客户端上报 Token 上限。`token_source = client_reported` 表示 Token 不是服务端计量或计费事实；Django 不接触 Provider 请求。
 
 ### 2.7 提交结构化发言
 
@@ -169,7 +193,13 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
   "stance": null,
   "references": ["<message.id>"],
   "challenge_target_agent_id": null,
-  "confidence": 0.7
+  "confidence": 0.7,
+  "usage": {
+    "input_tokens": 380,
+    "output_tokens": 120,
+    "latency_ms": 2450,
+    "retry_count": 0
+  }
 }
 ```
 
@@ -182,6 +212,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 - `references`：最多 3 条，且不能重复。第二轮至少 1 条，每条都必须指向**同一圆桌**中更早产生的有效 Agent 观点；该观点必须来自其他参与者，不能被用户消息、自身、`pass`、`summary`、未知消息或跨圆桌消息替代。
 - `challenge_target_agent_id`：可选参与者 ID。`challenge` 时必填，且必须是被引用观点的作者；其他立场时必须省略或为 `null`。
 - `confidence`：0-1，默认 `0.6`。
+- `usage`：可选、仅用于可观测性和客户端上报 Token 预算。字段全部可选；`retry_count` 为 0-10，默认 0。后端只保存模型快照、Token、延迟、重试和失败码，不保存 Prompt 或 Provider 请求头。
 
 第一轮允许 `proposal | support | challenge | supplement | question | summary` 且可以不引用。第二轮只接受 `support | challenge | supplement | question`，并要求 `message_type` 与 `stance` 相同、`claim` 非空、引用合法；`proposal`、`summary`、`pass` 和 `user_message` 不能伪装成第二轮互评。
 - 请求体任意层级出现 `api_key` → `400 validation_error`，`details` 形如 `{"provider": ["不得向后端提交 API Key。"]}`（与 2.5 相同）。
@@ -202,6 +233,8 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 ```
 
 服务端在同一事务里：写入消息、把该 Agent 的状态置为 `completed`、必要时把圆桌从 `ready` 或 `paused` 推进到 `running`、`event_sequence` 加一、写入 `room_event`。提交成功后还会通过 channel layer 广播给该房间已连接的 WebSocket。
+
+若请求带 `usage`，服务端同时写入该 turn 的 `UsageRecord`，并把可取得的 `input_tokens + output_tokens` 累加到房间的 `reported_tokens`。这些数字来自客户端，不是服务端精确计费依据。
 
 turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使用过期 `turn_id` 都会返回 `400 validation_error`，不会写入第二条消息或事件。
 
@@ -272,11 +305,17 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 ```json
 {
   "turn_id": "a11c...",
-  "roundtable_agent_id": "d00d..."
+  "roundtable_agent_id": "d00d...",
+  "usage": {
+    "input_tokens": 320,
+    "output_tokens": 8,
+    "latency_ms": 1800,
+    "retry_count": 0
+  }
 }
 ```
 
-两个字段必须属于当前 `pending` turn。成功时 `201` 返回该 turn 对应的 `agent.passed` 事件：
+`turn_id` 和 `roundtable_agent_id` 必须属于当前 `pending` turn；`usage` 可选且形状与 2.7 相同。成功时 `201` 返回该 turn 对应的 `agent.passed` 事件：
 
 ```json
 {
@@ -296,7 +335,79 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 
 `pass` 只关闭 turn 并改变参与者状态，**不会创建普通 `Message`**，也不会被当作有效观点参与引用或后续调度。重复 pass 返回 `400 validation_error`，不会重复产生事件。
 
-### 2.10 发送用户消息
+### 2.10 报告 Agent 失败
+
+`POST /api/v1/roundtables/{id}/turns/fail`，需要 `X-Guest-Session`：
+
+```json
+{
+  "turn_id": "a11c...",
+  "roundtable_agent_id": "d00d...",
+  "failure_code": "provider_timeout",
+  "message": "请求超时，请稍后重试。",
+  "retryable": true,
+  "partial": "已经生成的半段观点",
+  "usage": {
+    "input_tokens": 210,
+    "output_tokens": 35,
+    "latency_ms": 60000,
+    "retry_count": 1
+  }
+}
+```
+
+- `turn_id` 与 `roundtable_agent_id` 必须对应当前唯一 `pending` turn。
+- `failure_code` 是稳定机器码；`message` 是用户可读原因，最多 500 字符。
+- `retryable` 只描述该错误是否值得用户再次尝试，不表示服务端会自动重试。
+- `partial` 可选，最多 2000 字符；客户端保留流式半成品供用户阅读。
+- `usage` 可选，形状与 2.7 相同。
+
+稳定 `failure_code`：
+
+| code | 可重试 | 含义 |
+| --- | --- | --- |
+| `provider_unauthorized` | 否 | 401/403，Key 无效或没有权限 |
+| `provider_insufficient_balance` | 否 | 402，余额不足或计费未开通 |
+| `provider_model_not_found` | 否 | 404，接口或 Model 不存在 |
+| `provider_rate_limited` | 是 | 429，Provider 限流 |
+| `provider_timeout` | 是 | Provider 请求超时 |
+| `provider_network` | 是 | 网络不可达或连接中断 |
+| `provider_empty_reply` | 是 | Provider 返回空内容 |
+| `provider_invalid_response` | 是 | SSE/结构化输出非法；格式化解析最多重试一次后仍失败 |
+| `provider_server_error` | 是 | Provider 5xx |
+| `provider_not_configured` | 否 | Keychain 中缺少可用 Key |
+| `scheduler_invalid_agent` | 否 | 服务端签发了未知参与者，属于契约错误 |
+| `client_request_failed` | 视 HTTP 状态 | iOS 回报服务端时请求失败 |
+| `provider_error` | 是 | 其他未知 Provider 错误 |
+| `turn_timeout` | 是 | 服务端发现 pending turn 超过 60 秒 |
+
+成功时 `201` 返回唯一 `agent.failed` 事件：
+
+```json
+{
+  "event_id": "0f9c...",
+  "room_id": "c0de...",
+  "sequence": 4,
+  "created_at": "2026-10-26T01:02:03.456Z",
+  "event_type": "agent.failed",
+  "payload": {
+    "turn_id": "a11c...",
+    "round": 1,
+    "agent_id": "d00d...",
+    "agent_name": "方案派",
+    "failure_code": "provider_timeout",
+    "message": "请求超时，请稍后重试。",
+    "retryable": true,
+    "partial": "已经生成的半段观点"
+  }
+}
+```
+
+失败只关闭当前 turn，不把整场圆桌标记为失败，也不删除已经完成的消息。之后调用 `turns/next` 会继续选择仍有资格的其他 Agent。重复、过期、错误 Agent 或已结束房间的失败回报全部返回 `400 validation_error`，不会重复写事件。
+
+服务端也会在 `turns/next` 边界检查 pending turn 的截止时间；超过 60 秒时先写入一次 `turn_timeout` 的 `agent.failed`，再尝试调度下一位 Agent。失败发生在 `pause_pending` 边界时，客户端还会通过事件流收到 `room.paused`。
+
+### 2.11 发送用户消息
 
 `POST /api/v1/roundtables/{id}/user-messages`，需要 `X-Guest-Session`，且必须是创建者：
 
@@ -352,7 +463,7 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 - 用户插话不会取消当前 Provider 生成；只有 `end` 或离开圆桌会由客户端取消本地生成 Task。
 - 重复插话可以继续追加用户消息，但不会重复产生 `room.pause_pending`。
 
-### 2.11 暂停
+### 2.12 暂停
 
 `POST /api/v1/roundtables/{id}/pause`，无请求体。
 
@@ -361,7 +472,7 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 - 已暂停或已处于 `pause_pending` 时重复调用返回当前快照和空 `events`，不会重复产生事件。
 - `completed | failed | archived | summarizing` 状态返回 `400 validation_error`。
 
-### 2.12 继续
+### 2.13 继续
 
 `POST /api/v1/roundtables/{id}/resume`，无请求体。
 
@@ -370,7 +481,7 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 - 已处于正常运行状态时重复调用返回当前快照和空 `events`。
 - 重复调用只用于幂等；客户端仍只启动一条自动 turn 流程。
 
-### 2.13 提前结束
+### 2.14 提前结束
 
 `POST /api/v1/roundtables/{id}/end`，无请求体。
 
@@ -386,6 +497,34 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 ```
 
 即使命令是幂等空操作，客户端也应以 `roundtable` 快照校正本地状态。
+
+### 2.15 失败、预算与结束优先级
+
+服务端强制执行以下 MVP 默认值：
+
+- 最多 2 轮。
+- 最多 6 条有效 Agent 消息（三位参与者 × 两轮）。
+- 单个 turn 最多 60 秒。
+- 整场讨论最多 90 秒。
+- 客户端上报 Token 上限 2400。
+
+Token 的可信度边界：
+
+- Django 不代理 Provider 请求，因此不能看到真实 Token 或账单。
+- 服务端只会累加 iOS 从 Provider SSE `usage` 中解析后上报的 `input_tokens + output_tokens`。
+- `reported_tokens` 是客户端自报观测值，不是安全计费依据；超限时会停止后续调度，但不能证明 Provider 实际计费。
+- 服务端可靠执行的是轮数、消息数、Turn 截止时间和整场时间。
+
+结束事件优先级：
+
+1. 用户 `end` 产生一次 `room.ended`，优先于后续所有预算检查。
+2. 当前轮已经是最后一轮且所有参与者均已关闭时，产生一次 `round.completed`；自然完成优先于预算耗尽。
+3. 仍有后续发言空间，但时长、消息数或上报 Token 已达上限时，产生一次 `budget.exhausted` 并把圆桌置为 `completed`。
+4. 单个 `agent.failed` 只关闭该 turn，不终止整场讨论。
+
+若当前轮自然结束、仍有下一轮空间，但预算已经耗尽，同一响应先返回该轮的 `round.completed`，再返回唯一的 `budget.exhausted`，不会签发下一轮 turn。
+
+`budget.exhausted` 只会写一次；之后重复请求 `turns/next` 返回 `turn: null` 和空 `events`。Mock 模式执行同一时间/消息预算检查。
 
 ## 3. WebSocket
 
@@ -430,14 +569,16 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 | event_type | payload | 说明 |
 | --- | --- | --- |
-| `room.joined` | `{"roundtable": <快照>, "messages": [<Message>]}` | 进入圆桌；`messages` 为该圆桌已持久化的发言，按创建时间升序，用于首次渲染 |
+| `room.joined` | `{"roundtable": <快照>, "messages": [<Message>], "failures": [<TurnFailure>]}` | 进入圆桌；恢复完整消息和失败 turn；`failures` 缺失时旧客户端按空数组处理 |
 | `round.started` | `{"round": 1, "max_rounds": 2, "topic": "..."}` | 一轮开始 |
 | `agent.thinking` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | 服务端已签发本轮 turn |
 | `agent.typing` | `{"agent_id": "<RoundtableAgent.id>"}` | Agent 输入中 |
 | `agent.passed` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | Agent 明确选择沉默，不产生普通消息 |
+| `agent.failed` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派", "failure_code": "provider_timeout", "message": "...", "retryable": true, "partial": "..."}` | 单个 Agent 失败；不影响已完成消息 |
 | `message.delta` | `{"message_id": "...", "delta": "..."}` | 流式片段（Mock 切片暂不产生） |
 | `message.completed` | `{"message": <Message>}` | 一条结构化发言完成 |
 | `round.completed` | `{"round": 1}` | 一轮结束 |
+| `budget.exhausted` | `{"reason": "duration | agent_messages | reported_tokens", "message": "...", "round": 1}` | 单次预算终态事件 |
 | `room.pause_pending` | `{"turn_id": "<Turn.id>"}` | 已请求暂停，等待当前 turn 完成 |
 | `room.paused` | `{"status": "paused"}` | 圆桌已暂停 |
 | `room.resumed` | `{"status": "running"}` | 圆桌已继续 |
@@ -484,12 +625,12 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 1. iOS 调用 `POST /turns/next` 取得唯一 `turn_id`。
 2. iOS 直连 Provider，仅由当前被调度的 Agent 生成内容。
-3. 有有效观点时调用 `POST /messages`；无独立观点时调用 `POST /turns/pass`。
+3. 有有效观点时调用 `POST /messages`；无独立观点时调用 `POST /turns/pass`；Provider 失败时调用 `POST /turns/fail`。
 4. iOS 再次调用 `POST /turns/next`。第一轮最后一位完成后，该响应同时包含第一轮 `round.completed`、第二轮 `round.started` 和第二轮唯一 turn。
 5. 第二轮 iOS 使用同一 Provider 生成结构化 JSON，解析并校验引用、立场和挑战对象；格式非法时最多重试一次。
 6. 第二轮最后一位完成后返回第二轮唯一的 `round.completed` 和 `turn: null`，圆桌进入 `completed`。
 
-客户端在任一时刻只执行一个 turn。Provider 失败时保留待处理 turn，用户重试后重新请求 `turns/next`，服务端返回同一个 `turn_id`。
+客户端在任一时刻只执行一个 turn。Provider 失败必须按稳定错误码回报一次；服务端关闭该 turn 后，用户继续讨论时 `turns/next` 会调度下一位仍有资格的 Agent。客户端不得静默切换 Provider、Model 或 Mock。
 
 用户控制补充：
 
@@ -504,7 +645,7 @@ Mock 演示仍支持一条 WebSocket 命令：
 {"event_type": "mock.run"}
 ```
 
-服务端执行一轮脚本化 Mock 讨论（11 个事件），每个事件都已持久化并经同一服务入口广播。达到 `max_rounds` 后再发送不会产生任何事件。
+服务端执行一轮脚本化 Mock 讨论（11 个事件），每个事件都已持久化并经同一服务入口广播。达到 `max_rounds` 后再发送不会产生任何事件。超过时间预算时只返回一次 `budget.exhausted`。
 
 > `mock.run` 仅用于确定性演示和 UI 测试，不参与真实 Provider 的 turn 调度。未知命令一律忽略，便于客户端向前兼容地探测能力。
 

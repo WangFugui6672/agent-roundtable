@@ -15,15 +15,18 @@ final class TurnSecretStore: SecretStore {
 actor TurnLineStream: LineStreaming {
     private let statusCodes: [Int]
     private let deltasByAttempt: [[String]]
+    private let usageByAttempt: [ProviderUsage?]
     private let errorAfterDeltas: Error?
     private var attempt = 0
 
     init(
         deltasByAttempt: [[String]],
+        usageByAttempt: [ProviderUsage?] = [],
         statusCodes: [Int] = [200],
         errorAfterDeltas: Error? = nil
     ) {
         self.deltasByAttempt = deltasByAttempt
+        self.usageByAttempt = usageByAttempt
         self.statusCodes = statusCodes
         self.errorAfterDeltas = errorAfterDeltas
     }
@@ -31,8 +34,11 @@ actor TurnLineStream: LineStreaming {
     func stream(_ request: URLRequest) async throws -> StreamingResponse {
         let status = statusCodes[min(attempt, statusCodes.count - 1)]
         let deltas = deltasByAttempt[min(attempt, deltasByAttempt.count - 1)]
+        let usage = usageByAttempt.isEmpty
+            ? nil
+            : usageByAttempt[min(attempt, usageByAttempt.count - 1)]
         attempt += 1
-        var lines = deltas.map { delta -> String in
+        var lines: [String] = deltas.map { delta -> String in
             let payload: [String: Any] = [
                 "choices": [
                     ["delta": ["content": delta]]
@@ -40,6 +46,19 @@ actor TurnLineStream: LineStreaming {
             ]
             let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
             return "data: \(String(data: data, encoding: .utf8) ?? "")"
+        }
+        if let usage {
+            let usagePayload: [String: Any] = [
+                "prompt_tokens": usage.inputTokens ?? NSNull(),
+                "completion_tokens": usage.outputTokens ?? NSNull(),
+                "total_tokens": usage.totalTokens ?? NSNull()
+            ]
+            let payload: [String: Any] = [
+                "choices": [],
+                "usage": usagePayload
+            ]
+            let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+            lines.append("data: \(String(data: data, encoding: .utf8) ?? "")")
         }
         if errorAfterDeltas == nil {
             lines.append("data: [DONE]")

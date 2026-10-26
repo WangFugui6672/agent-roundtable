@@ -162,6 +162,46 @@ final class EventEnvelopeTests: XCTestCase {
         XCTAssertEqual(endedState.status, .completed)
     }
 
+    func testDecodesAgentFailureAndBudgetExhaustion() throws {
+        let failure = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "agent.failed",
+                sequence: 8,
+                payload: """
+                {
+                  "turn_id": "\(Fixtures.turnID.uuidString)",
+                  "round": 1,
+                  "agent_id": "\(Fixtures.advocateID.uuidString)",
+                  "agent_name": "方案派",
+                  "failure_code": "provider_timeout",
+                  "message": "请求超时。",
+                  "retryable": true,
+                  "partial": "已经生成的片段"
+                }
+                """
+            )
+        )
+        let budget = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "budget.exhausted",
+                sequence: 9,
+                payload: """
+                {"reason": "reported_tokens", "message": "讨论已达到 Token 上限。", "round": 1}
+                """
+            )
+        )
+
+        guard case let .agentFailed(details) = failure.payload,
+              case let .budgetExhausted(exhaustion) = budget.payload
+        else {
+            return XCTFail("expected failure and budget events")
+        }
+        XCTAssertEqual(details.failureCode, "provider_timeout")
+        XCTAssertEqual(details.partial, "已经生成的片段")
+        XCTAssertTrue(details.retryable)
+        XCTAssertEqual(exhaustion.reason, .reportedTokens)
+    }
+
     func testKeepsUnknownEventTypesForForwardCompatibility() throws {
         let data = Fixtures.envelope(eventType: "future.thing", sequence: 9, payload: "{\"x\": 1}")
 

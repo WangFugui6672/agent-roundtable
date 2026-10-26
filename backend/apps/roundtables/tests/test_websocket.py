@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import pytest
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
+from django.utils import timezone
 
 from apps.roundtables.models import (
     GuestSession,
@@ -140,6 +142,30 @@ async def test_mock_budget_stops_after_two_rounds():
     room = await sync_to_async(Roundtable.objects.get)(id=room_id)
     assert room.current_round == 2
     assert room.status == Roundtable.Status.COMPLETED
+    await communicator.disconnect()
+
+
+async def test_mock_run_respects_the_discussion_time_budget_once():
+    session_id, room_id = await sync_to_async(_seed_room)()
+    await sync_to_async(Roundtable.objects.filter(id=room_id).update)(
+        started_at=timezone.now() - timedelta(seconds=91)
+    )
+    communicator, _ = await _connect(session_id, room_id)
+    await communicator.receive_json_from(timeout=1)
+
+    await communicator.send_json_to({"event_type": "mock.run"})
+    event = await communicator.receive_json_from(timeout=2)
+
+    assert event["event_type"] == "budget.exhausted"
+    assert event["payload"]["reason"] == "duration"
+    await communicator.send_json_to({"event_type": "mock.run"})
+    assert await communicator.receive_nothing(timeout=0.3)
+    room = await sync_to_async(Roundtable.objects.get)(id=room_id)
+    assert room.status == Roundtable.Status.COMPLETED
+    assert (
+        await sync_to_async(lambda: room.events.filter(event_type="budget.exhausted").count())()
+        == 1
+    )
     await communicator.disconnect()
 
 

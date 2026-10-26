@@ -64,6 +64,25 @@ final class ProviderChatClientTests: XCTestCase {
         }
     }
 
+    private func collectEvents(
+        _ client: ProviderChatClient,
+        messages: [ChatMessage] = [.system("你是方案派"), .user("议题：测试")]
+    ) async -> Result<[ProviderStreamEvent], Error> {
+        var events: [ProviderStreamEvent] = []
+        do {
+            for try await event in client.streamEvents(
+                configuration: configuration,
+                apiKey: "sk-test",
+                messages: messages
+            ) {
+                events.append(event)
+            }
+            return .success(events)
+        } catch {
+            return .failure(error)
+        }
+    }
+
     func testStreamsDeltasFromSSE() async throws {
         let transport = StubLineStream(lines: [
             #"data: {"choices":[{"delta":{"role":"assistant"}}]}"#,
@@ -91,6 +110,27 @@ final class ProviderChatClientTests: XCTestCase {
         let result = await collect(ProviderChatClient(streaming: transport))
 
         XCTAssertEqual(try result.get(), ["第一段"])
+    }
+
+    func testParsesUsageAndFinishReasonFromSSE() async throws {
+        let transport = StubLineStream(lines: [
+            #"data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}],"usage":null}"#,
+            #"data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"# +
+                #""completion_tokens":4,"total_tokens":16}}"#,
+            "data: [DONE]"
+        ])
+        let client = ProviderChatClient(streaming: transport)
+
+        let result = await collectEvents(client)
+
+        XCTAssertEqual(
+            try result.get(),
+            [
+                .delta("你好"),
+                .usage(ProviderUsage(inputTokens: 12, outputTokens: 4, totalTokens: 16)),
+                .completed(finishReason: "stop")
+            ]
+        )
     }
 
     func testRequestTargetsChatCompletionsWithStreaming() async throws {
@@ -150,6 +190,8 @@ final class ProviderChatClientTests: XCTestCase {
             return XCTFail("expected http(429), got \(error)")
         }
         XCTAssertTrue(error.message.contains("限流"))
+        XCTAssertEqual(error.failureCode, "provider_rate_limited")
+        XCTAssertTrue(error.retryable)
     }
 
     func testTransportFailureIsReportedAsNetworkError() async {
@@ -166,6 +208,8 @@ final class ProviderChatClientTests: XCTestCase {
             return XCTFail("expected .transport, got \(error)")
         }
         XCTAssertTrue(error.message.contains("网络"))
+        XCTAssertEqual(error.failureCode, "provider_network")
+        XCTAssertTrue(error.retryable)
     }
 
     func testTimeoutHasItsOwnMessage() async {
@@ -180,6 +224,8 @@ final class ProviderChatClientTests: XCTestCase {
         }
         XCTAssertEqual(error, .timeout)
         XCTAssertTrue(error.message.contains("超时"))
+        XCTAssertEqual(error.failureCode, "provider_timeout")
+        XCTAssertTrue(error.retryable)
     }
 
     func testProviderErrorMessagesAreActionable() {
@@ -188,6 +234,7 @@ final class ProviderChatClientTests: XCTestCase {
         XCTAssertTrue(ProviderError.emptyReply.message.contains("空"))
         XCTAssertTrue(ProviderError.http(status: 500, detail: "boom").message.contains("boom"))
     }
+
 }
 
 final class MessageComposerTests: XCTestCase {

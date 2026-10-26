@@ -34,6 +34,26 @@ AgentProfile 在某个圆桌中的实例。它保存该圆桌内的当前目标�
 
 服务端签发给单个 RoundtableAgent 的一次发言任务，包含稳定 `turn_id`、轮次和 Agent。iOS 执行 Provider 后必须用同一个 `turn_id` 提交发言或 pass；同一圆桌同一时间最多存在一个待完成 turn，每位参与者在每轮最多有一个 Turn。
 
+## Turn 失败（Turn Failure）
+
+单个 Turn 在 Provider 请求、网络、超时或结构化校验失败后进入的终态。失败带稳定 `failure_code`、用户可读原因、`retryable` 和可选 partial，以 `agent.failed` 事件关闭当前 Turn；它不等于整场圆桌失败，也不删除已完成消息。
+
+## 用量记录（UsageRecord）
+
+每个 Turn 一条的可观测记录，保存模型快照、输入/输出 Token（若客户端可取得）、延迟、重试次数和失败码。不得保存 Prompt 正文、Provider 完整响应或 API Key。
+
+## 客户端上报 Token
+
+BYOK 架构下，Django 看不到 Provider 的真实 Token。iOS 从 SSE `usage` 解析后上报的数字只用于展示和客户端上报预算，不是服务端计费级计量。服务端可靠强制的是轮数、消息数、Turn 截止时间和整场时间。
+
+## 预算耗尽（Budget Exhausted）
+
+圆桌仍有潜在发言空间，但时长、Agent 消息数或客户端上报 Token 已达到上限时的终态。它只产生一次 `budget.exhausted` 事件；若最后一轮已经自然完成，则 `round.completed` 优先，不再追加预算耗尽事件。
+
+## 进行中圆桌限额
+
+同一匿名会话最多同时保留 3 个 `ready | running | paused | summarizing` 圆桌。Mock 圆桌另受每 UTC 日 10 个的创建限额；真实 Provider 圆桌没有每日创建上限。
+
 ## 参与者（Participant）
 
 圆桌快照与界面中对 RoundtableAgent 的称呼。`participants` 数组就是该圆桌的 RoundtableAgent 列表，顺序由 `position` 决定。
