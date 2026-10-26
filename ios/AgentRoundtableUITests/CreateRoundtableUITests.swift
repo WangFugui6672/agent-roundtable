@@ -41,6 +41,25 @@ final class CreateRoundtableUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(claim.waitForExistence(timeout: 25), "Mock 事件没有被客户端解码并渲染")
         attachScreenshot(of: app, named: "02-mock-round")
+
+        XCTAssertTrue(mock.isEnabled)
+        mock.tap()
+
+        let quotedClaim = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "引用 方案派 的原观点")
+        ).firstMatch
+        XCTAssertTrue(
+            quotedClaim.waitForExistence(timeout: 25),
+            "第二轮没有展示被引用观点的作者与原内容：\(app.debugDescription)"
+        )
+        let challengeTarget = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "向 方案派 提出质疑")
+        ).firstMatch
+        XCTAssertTrue(
+            challengeTarget.waitForExistence(timeout: 10),
+            "挑战关系没有展示明确对象：\(app.debugDescription)"
+        )
+        attachScreenshot(of: app, named: "03-mock-round-two-review")
     }
 
     private func attachScreenshot(of app: XCUIApplication, named name: String) {

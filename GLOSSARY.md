@@ -32,7 +32,7 @@ AgentProfile 在某个圆桌中的实例。它保存该圆桌内的当前目标�
 
 ## Turn（回合）
 
-服务端签发给单个 RoundtableAgent 的一次发言任务，包含稳定 `turn_id`、轮次和 Agent。iOS 执行 Provider 后必须用同一个 `turn_id` 提交发言或 pass；同一圆桌同一时间最多存在一个待完成 turn。
+服务端签发给单个 RoundtableAgent 的一次发言任务，包含稳定 `turn_id`、轮次和 Agent。iOS 执行 Provider 后必须用同一个 `turn_id` 提交发言或 pass；同一圆桌同一时间最多存在一个待完成 turn，每位参与者在每轮最多有一个 Turn。
 
 ## 参与者（Participant）
 
@@ -83,7 +83,7 @@ AgentProfile 在某个圆桌中的实例。它保存该圆桌内的当前目标�
 
 ## 引用（Reference）
 
-一条消息对另一条具体消息的明确关联。引用必须指向同一圆桌中的有效消息。
+一条消息对另一条具体消息的明确关联。第二轮的有效 Agent 发言必须引用同一圆桌中更早产生、来自其他参与者的有效 Agent 观点。用户消息、自身观点、pass、summary、未知消息和跨圆桌消息都不是合法引用目标。
 
 ## 立场（Stance）
 
@@ -96,7 +96,7 @@ Agent 对其他观点的关系。合法值包括：
 
 ## 挑战（Challenge）
 
-一种要求特定 Agent 回应某条观点的行为。挑战产生明确的回复关系，不保证被挑战者必须同意。
+一种要求特定 Agent 回应某条观点的行为。挑战带有 `challenge_target_agent_id`，目标必须是当前圆桌参与者，并且是被引用观点的作者；挑战关系不保证被挑战者必须同意。
 
 ## 沉默（Pass）
 

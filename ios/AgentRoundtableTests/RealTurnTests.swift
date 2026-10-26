@@ -5,110 +5,22 @@ import RoundtableCore
 
 @testable import AgentRoundtable
 
-private final class TurnSecretStore: SecretStore {
-    var values: [String: String] = [:]
-
-    func secret(for account: String) throws -> String? { values[account] }
-    func setSecret(_ secret: String, for account: String) throws { values[account] = secret }
-    func removeSecret(for account: String) throws { values[account] = nil }
-}
-
-private actor TurnLineStream: LineStreaming {
-    private let statusCodes: [Int]
-    private let deltasByAttempt: [[String]]
-    private let errorAfterDeltas: Error?
-    private var attempt = 0
-
-    init(
-        deltasByAttempt: [[String]],
-        statusCodes: [Int] = [200],
-        errorAfterDeltas: Error? = nil
-    ) {
-        self.deltasByAttempt = deltasByAttempt
-        self.statusCodes = statusCodes
-        self.errorAfterDeltas = errorAfterDeltas
-    }
-
-    func stream(_ request: URLRequest) async throws -> StreamingResponse {
-        let status = statusCodes[min(attempt, statusCodes.count - 1)]
-        let deltas = deltasByAttempt[min(attempt, deltasByAttempt.count - 1)]
-        attempt += 1
-        var lines = deltas.map { #"data: {"choices":[{"delta":{"content":"\#($0)"}}]}"# }
-        if errorAfterDeltas == nil {
-            lines.append("data: [DONE]")
-        }
-        let failure = errorAfterDeltas
-        return StreamingResponse(
-            statusCode: status,
-            lines: AsyncThrowingStream { continuation in
-                for line in lines { continuation.yield(line) }
-                continuation.finish(throwing: failure)
-            }
-        )
-    }
-}
-
-private actor TurnTransport: HTTPTransport {
-    private var responses: [HTTPResponse]
-    private(set) var requests: [URLRequest] = []
-
-    init(responses: [HTTPResponse]) {
-        self.responses = responses
-    }
-
-    func send(_ request: URLRequest) async throws -> HTTPResponse {
-        requests.append(request)
-        guard !responses.isEmpty else {
-            return HTTPResponse(data: Data(), statusCode: 500)
-        }
-        return responses.removeFirst()
-    }
-
-    func recordedRequests() -> [URLRequest] { requests }
-}
-
-private struct TurnFixture {
-    let id: UUID
-    let agentID: UUID
-    let position: Int
-    let key: String
-    let name: String
-
-    var wire: [String: Any] {
-        [
-            "turn_id": id.uuidString,
-            "round": 1,
-            "roundtable_agent_id": agentID.uuidString,
-            "position": position,
-            "agent_key": key,
-            "agent_name": name
-        ]
-    }
-}
-
-private struct ReplyFixture {
-    let messageType: String
-    let stance: String?
-    let claim: String
-    let body: String
-    let sequence: Int
-}
-
 @MainActor
 final class RealTurnTests: XCTestCase {
     private var suiteName = ""
     private var defaults: UserDefaults!
     private var secrets: TurnSecretStore!
+    var lastStream: TurnLineStream?
 
-    private let roomID = UUID(uuidString: "C0DEC0DE-0000-4000-8000-000000000001")!
-    private let advocate = TurnFixture(
+    let roomID = UUID(uuidString: "C0DEC0DE-0000-4000-8000-000000000001")!
+    let advocate = TurnFixture(
         id: UUID(uuidString: "A11CE000-0000-4000-8000-000000000011")!,
         agentID: UUID(uuidString: "D00D0000-0000-4000-8000-000000000003")!,
         position: 0,
         key: "advocate",
         name: "方案派"
     )
-    private let skeptic = TurnFixture(
+    let skeptic = TurnFixture(
         id: UUID(uuidString: "A11CE000-0000-4000-8000-000000000012")!,
         agentID: UUID(uuidString: "E00E0000-0000-4000-8000-000000000005")!,
         position: 1,
@@ -264,8 +176,8 @@ final class RealTurnTests: XCTestCase {
 
 }
 
-private extension RealTurnTests {
-    private func makeModel(
+extension RealTurnTests {
+    func makeModel(
         deltasByAttempt: [[String]],
         statusCodes: [Int] = [200],
         errorAfterDeltas: Error? = nil,
@@ -276,15 +188,17 @@ private extension RealTurnTests {
             secrets: secrets,
             storage: UserDefaultsProviderStorage(defaults: defaults)
         )
+        let stream = TurnLineStream(
+            deltasByAttempt: deltasByAttempt,
+            statusCodes: statusCodes,
+            errorAfterDeltas: errorAfterDeltas
+        )
+        lastStream = stream
         let model = AppModel(
             defaults: defaults,
             providerStore: store,
             chatClient: ProviderChatClient(
-                streaming: TurnLineStream(
-                    deltasByAttempt: deltasByAttempt,
-                    statusCodes: statusCodes,
-                    errorAfterDeltas: errorAfterDeltas
-                )
+                streaming: stream
             ),
             api: APIClient(
                 baseURL: URL(string: "http://127.0.0.1:8000")!,
@@ -295,7 +209,7 @@ private extension RealTurnTests {
         return (model, transport)
     }
 
-    private func snapshot() -> RoundtableSnapshot {
+    func snapshot() -> RoundtableSnapshot {
         let participants = [advocate, skeptic, experience].map { turn in
             Participant(
                 id: turn.agentID,
@@ -333,7 +247,7 @@ private extension RealTurnTests {
         )
     }
 
-    private func enableProvider(on model: AppModel) {
+    func enableProvider(on model: AppModel) {
         model.saveProvider(
             ProviderDraft(
                 kind: .deepseek,
@@ -370,10 +284,83 @@ private extension RealTurnTests {
         ]
     }
 
+    func secondRoundResponses(skepticMessageID: UUID) -> [HTTPResponse] {
+        let proposal = ReplyFixture(
+            messageType: "proposal",
+            stance: nil,
+            claim: "先做两周实验",
+            body: "先做两周实验。",
+            sequence: 3
+        )
+        let challenge = ReplyFixture(
+            messageType: "challenge",
+            stance: "challenge",
+            claim: "必须先定义停止条件",
+            body: "必须先定义停止条件。",
+            sequence: 5,
+            messageID: skepticMessageID
+        )
+        let review = ReplyFixture(
+            messageType: "challenge",
+            stance: "challenge",
+            claim: "验证成本仍然被低估",
+            body: "我质疑这个观点，因为团队注意力也是成本。",
+            sequence: 11,
+            roundNumber: 2,
+            references: [skepticMessageID],
+            challengeTargetAgentID: skeptic.agentID
+        )
+        return [
+            nextResponse(advocate, sequence: 1, startsRound: true),
+            completedResponse(advocate, reply: proposal),
+            nextResponse(skeptic, sequence: 4),
+            completedResponse(skeptic, reply: challenge),
+            nextResponse(experience, sequence: 6),
+            passResponse(experience, sequence: 7),
+            roundTwoNextResponse(),
+            completedResponse(advocate, reply: review),
+            roundCompletedResponse(sequence: 12, round: 2)
+        ]
+    }
+
+    private func roundTwoNextResponse() -> HTTPResponse {
+        let thinking = event(
+            "agent.thinking",
+            sequence: 10,
+            payload: [
+                "turn_id": advocate.id.uuidString,
+                "round": 2,
+                "agent_id": advocate.agentID.uuidString,
+                "agent_name": advocate.name
+            ]
+        )
+        return jsonResponse(
+            [
+                "round": 2,
+                "turn": advocate.wire(round: 2),
+                "events": [
+                    event(
+                        "round.completed",
+                        sequence: 8,
+                        payload: ["round": 1]
+                    ),
+                    event(
+                        "round.started",
+                        sequence: 9,
+                        payload: ["round": 2, "max_rounds": 2, "topic": "议题"]
+                    ),
+                    thinking
+                ]
+            ],
+            statusCode: 200
+        )
+    }
+
     private func nextResponse(
         _ turn: TurnFixture,
         sequence: Int,
-        startsRound: Bool = false
+        startsRound: Bool = false,
+        round: Int = 1
     ) -> HTTPResponse {
         var events: [[String: Any]] = []
         if startsRound {
@@ -381,7 +368,7 @@ private extension RealTurnTests {
                 event(
                     "round.started",
                     sequence: sequence,
-                    payload: ["round": 1, "max_rounds": 2, "topic": "议题"]
+                    payload: ["round": round, "max_rounds": 2, "topic": "议题"]
                 )
             )
         }
@@ -391,23 +378,23 @@ private extension RealTurnTests {
                 sequence: sequence + (startsRound ? 1 : 0),
                 payload: [
                     "turn_id": turn.id.uuidString,
-                    "round": 1,
+                    "round": round,
                     "agent_id": turn.agentID.uuidString,
                     "agent_name": turn.name
                 ]
             )
         )
         return jsonResponse(
-            ["round": 1, "turn": turn.wire, "events": events],
+            ["round": round, "turn": turn.wire(round: round), "events": events],
             statusCode: 200
         )
     }
 
     private func completedResponse(_ turn: TurnFixture, reply: ReplyFixture) -> HTTPResponse {
         let message: [String: Any] = [
-            "id": UUID().uuidString,
+            "id": reply.messageID.uuidString,
             "turn_id": turn.id.uuidString,
-            "round_number": 1,
+            "round_number": reply.roundNumber,
             "author": [
                 "roundtable_agent_id": turn.agentID.uuidString,
                 "agent_key": turn.key,
@@ -417,7 +404,8 @@ private extension RealTurnTests {
             "claim": reply.claim,
             "body": reply.body,
             "stance": reply.stance ?? NSNull(),
-            "references": [],
+            "references": reply.references.map(\.uuidString),
+            "challenge_target_agent_id": reply.challengeTargetAgentID?.uuidString ?? NSNull(),
             "confidence": 0.6,
             "created_at": "2026-10-26T01:02:04.000Z"
         ]
@@ -443,12 +431,12 @@ private extension RealTurnTests {
         )
     }
 
-    private func roundCompletedResponse(sequence: Int) -> HTTPResponse {
+    private func roundCompletedResponse(sequence: Int, round: Int = 1) -> HTTPResponse {
         jsonResponse(
             [
-                "round": 1,
+                "round": round,
                 "turn": NSNull(),
-                "events": [event("round.completed", sequence: sequence, payload: ["round": 1])]
+                "events": [event("round.completed", sequence: sequence, payload: ["round": round])]
             ],
             statusCode: 200
         )

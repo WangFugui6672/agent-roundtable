@@ -52,6 +52,46 @@ final class EventEnvelopeTests: XCTestCase {
         XCTAssertEqual(message.confidence ?? 0, 0.72, accuracy: 0.0001)
     }
 
+    func testDecodesRoundTwoReferencesAndChallengeTarget() throws {
+        let targetID = UUID(uuidString: "E00E0000-0000-4000-8000-000000000005")!
+        let referenceID = UUID(uuidString: "6F0E0000-0000-4000-8000-000000000004")!
+        let data = Fixtures.envelope(
+            eventType: "message.completed",
+            sequence: 12,
+            payload: """
+            {"message": {
+              "id": "8F0E0000-0000-4000-8000-000000000008",
+              "turn_id": "\(Fixtures.turnID.uuidString)",
+              "round_number": 2,
+              "author": {
+                "type": "agent",
+                "roundtable_agent_id": "\(Fixtures.advocateID.uuidString)",
+                "agent_key": "advocate",
+                "name": "方案派"
+              },
+              "message_type": "challenge",
+              "claim": "验证成本被低估。",
+              "body": "我质疑这个观点。",
+              "stance": "challenge",
+              "references": ["\(referenceID.uuidString)"],
+              "challenge_target_agent_id": "\(targetID.uuidString)",
+              "confidence": 0.74,
+              "mentioned_agent_ids": [],
+              "created_at": "2026-10-26T01:02:04.000Z"
+            }}
+            """
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .messageCompleted(message) = envelope.payload else {
+            return XCTFail("expected a completed message, got \(envelope.payload)")
+        }
+        XCTAssertEqual(message.roundNumber, 2)
+        XCTAssertEqual(message.references, [referenceID])
+        XCTAssertEqual(message.challengeTargetAgentId, targetID)
+    }
+
     func testDecodesUserAuthoredMessageWithoutAnAgentIdentity() throws {
         let data = Fixtures.envelope(
             eventType: "message.completed",
