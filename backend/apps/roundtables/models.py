@@ -127,6 +127,45 @@ class RoundtableAgent(models.Model):
         return f"{self.agent_profile.name}@{self.position}"
 
 
+class Message(models.Model):
+    """One structured agent utterance (GLOSSARY: 结构化发言)."""
+
+    class Type(models.TextChoices):
+        PROPOSAL = "proposal", "提出方案"
+        SUPPORT = "support", "支持观点"
+        CHALLENGE = "challenge", "质疑观点"
+        SUPPLEMENT = "supplement", "补充观点"
+        QUESTION = "question", "提出问题"
+        PASS = "pass", "选择沉默"
+        SUMMARY = "summary", "总结"
+
+    class Stance(models.TextChoices):
+        SUPPORT = "support", "支持"
+        CHALLENGE = "challenge", "质疑"
+        SUPPLEMENT = "supplement", "补充"
+        QUESTION = "question", "提问"
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="messages")
+    roundtable_agent = models.ForeignKey(
+        RoundtableAgent, on_delete=models.PROTECT, related_name="messages"
+    )
+    message_type = models.CharField(max_length=16, choices=Type.choices)
+    claim = models.CharField(max_length=80)
+    body = models.TextField(blank=True, default="")
+    stance = models.CharField(max_length=16, choices=Stance.choices, blank=True, default="")
+    references = models.ManyToManyField("self", symmetrical=False, related_name="referenced_by")
+    confidence = models.FloatField(default=0.6)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "message"
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.message_type}: {self.claim[:20]}"
+
+
 class RoomEvent(models.Model):
     """Persisted WebSocket event, used for cursor replay (GLOSSARY: Event)."""
 

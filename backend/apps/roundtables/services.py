@@ -10,8 +10,8 @@ from django.db import transaction
 
 from apps.roundtables import mock
 from apps.roundtables import protocol as p
-from apps.roundtables.models import RoomEvent, Roundtable, RoundtableAgent
-from apps.roundtables.serializers import RoundtableSerializer
+from apps.roundtables.models import Message, RoomEvent, Roundtable, RoundtableAgent
+from apps.roundtables.serializers import MessageSerializer, RoundtableSerializer
 
 
 def _event_envelope(event: RoomEvent) -> dict[str, Any]:
@@ -35,13 +35,26 @@ def _room_for_session(roundtable_id: str, guest_session_id: str) -> Roundtable |
 
 def build_join_envelope(room: Roundtable) -> dict[str, Any]:
     """``room.joined`` is an ephemeral snapshot, so its sequence stays 0."""
+    messages = (
+        room.messages.select_related("roundtable_agent__agent_profile")
+        .prefetch_related("references")
+        .all()
+    )
     return p.make_envelope(
         event_id=p.new_event_id(),
         room_id=str(room.id),
         sequence=p.EPHEMERAL_SEQUENCE,
         event_type=p.ROOM_JOINED,
-        payload={"roundtable": RoundtableSerializer(room).data, "messages": []},
+        payload={
+            "roundtable": RoundtableSerializer(room).data,
+            "messages": MessageSerializer(messages, many=True).data,
+        },
     )
+
+
+def room_group_name(roundtable_id: object) -> str:
+    """Channel-layer group for one room; REST writes fan out through it."""
+    return f"room.{roundtable_id}"
 
 
 def _join_snapshot(roundtable_id: str, guest_session_id: str) -> dict[str, Any] | None:
@@ -111,6 +124,56 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
         room.save(update_fields=["current_round", "status", "event_sequence", "updated_at"])
 
         return [_event_envelope(event) for event in created]
+
+
+def create_message(
+    roundtable_id: str, guest_session_id: str, validated: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Persist one structured utterance and the matching ``message.completed`` event.
+
+    Returns the event envelope, or ``None`` when the room does not belong to the
+    guest session (the view turns that into 404).
+    """
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+
+        agent = RoundtableAgent.objects.select_related("agent_profile").get(
+            id=validated["roundtable_agent_id"]
+        )
+        message = Message.objects.create(
+            id=uuid.uuid4(),
+            roundtable=room,
+            roundtable_agent=agent,
+            message_type=validated["message_type"],
+            claim=validated["claim"],
+            body=validated.get("body", ""),
+            stance=validated.get("stance") or "",
+            confidence=validated.get("confidence", 0.6),
+        )
+        message.references.set(validated.get("references") or [])
+
+        agent.state = RoundtableAgent.State.COMPLETED
+        agent.save(update_fields=["state"])
+
+        if room.status in {Roundtable.Status.READY, Roundtable.Status.PAUSED}:
+            room.status = Roundtable.Status.RUNNING
+        room.event_sequence += 1
+        room.save(update_fields=["status", "event_sequence", "updated_at"])
+
+        event = RoomEvent.objects.create(
+            id=uuid.uuid4(),
+            roundtable=room,
+            sequence=room.event_sequence,
+            event_type=p.MESSAGE_COMPLETED,
+            payload={"message": MessageSerializer(message).data},
+        )
+        return _event_envelope(event)
 
 
 join_snapshot = database_sync_to_async(_join_snapshot)

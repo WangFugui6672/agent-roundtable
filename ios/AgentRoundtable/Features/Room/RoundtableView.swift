@@ -11,6 +11,7 @@ struct RoundtableView: View {
             Divider()
             participantsStrip
             Divider()
+            turnStatus
             messageList
             Divider()
             footer
@@ -47,10 +48,19 @@ struct RoundtableView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(room.participants) { participant in
-                    ParticipantChip(
-                        participant: participant,
-                        isActive: room.activeParticipantId == participant.id
-                    )
+                    Button {
+                        Task { await model.runRealTurn(participant: participant) }
+                    } label: {
+                        ParticipantChip(
+                            participant: participant,
+                            isActive: room.activeParticipantId == participant.id
+                                || isTurnAgent(participant.id)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.turnState.isBusy)
+                    .accessibilityIdentifier("room.speak.\(participant.position)")
+                    .accessibilityHint("让 \(participant.agent.name) 使用真实模型发言")
                 }
             }
             .padding(.horizontal, 16)
@@ -58,16 +68,113 @@ struct RoundtableView: View {
         }
     }
 
+    @ViewBuilder
+    private var turnStatus: some View {
+        switch model.turnState {
+        case .idle:
+            EmptyView()
+        case let .thinking(agentID):
+            turnBanner(
+                text: "\(name(of: agentID)) 正在思考…",
+                icon: "brain",
+                tint: .orange,
+                identifier: "room.turn.thinking"
+            )
+        case let .submitting(agentID):
+            turnBanner(
+                text: "正在提交 \(name(of: agentID)) 的发言…",
+                icon: "arrow.up.circle",
+                tint: .secondary,
+                identifier: "room.turn.submitting"
+            )
+        case let .failed(_, message):
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("room.turnError")
+                Spacer(minLength: 8)
+                Button("重试") { model.resetTurn() }
+                    .font(.footnote)
+                    .accessibilityIdentifier("room.turn.retry")
+            }
+            .padding(12)
+            .background(Color.red.opacity(0.08))
+        case .typing:
+            turnBanner(
+                text: "\(name(of: draftAgentID)) 正在输入…",
+                icon: "ellipsis.bubble",
+                tint: .accentColor,
+                identifier: "room.turn.typing"
+            )
+        }
+    }
+
+    private func turnBanner(
+        text: String,
+        icon: String,
+        tint: Color,
+        identifier: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(identifier)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var draftAgentID: UUID? {
+        if case let .typing(agentID, _) = model.turnState { return agentID }
+        return nil
+    }
+
+    private var draftText: String? {
+        if case let .typing(_, text) = model.turnState { return text }
+        return nil
+    }
+
+    private func isTurnAgent(_ id: UUID) -> Bool {
+        switch model.turnState {
+        case let .thinking(agentID), let .typing(agentID, _), let .submitting(agentID),
+             let .failed(agentID, _):
+            return agentID == id
+        case .idle:
+            return false
+        }
+    }
+
+    private func name(of id: UUID?) -> String {
+        guard let id, let participant = room.participants.first(where: { $0.id == id }) else {
+            return "Agent"
+        }
+        return participant.agent.name
+    }
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if room.messages.isEmpty {
+                    if room.messages.isEmpty && draftText == nil {
                         emptyState
                     } else {
                         ForEach(room.messages) { message in
                             MessageRow(message: message)
                                 .id(message.id)
+                        }
+                        if let draftText {
+                            StreamingMessageRow(
+                                name: name(of: draftAgentID),
+                                text: draftText
+                            )
+                            .id("room.turn.draft")
                         }
                     }
                 }
@@ -77,6 +184,12 @@ struct RoundtableView: View {
                 guard let last = room.messages.last else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
+            .onChange(of: draftText ?? "") { _, _ in
+                guard draftText != nil else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo("room.turn.draft", anchor: .bottom)
                 }
             }
         }
@@ -90,7 +203,7 @@ struct RoundtableView: View {
             Text("圆桌已经建好，还没有发言")
                 .font(.headline)
                 .accessibilityIdentifier("room.empty")
-            Text("这是 Mock 切片：点击下方按钮，可以看到一轮完整的实时事件往返。")
+            Text("点上方任意参与者，可以让 TA 用已配置的 Provider 真实发言；也可以先播放 Mock 事件。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -296,5 +409,34 @@ private struct StanceBadge: View {
         case .question: return ("提问", .secondary)
         default: return ("发言", .secondary)
         }
+    }
+}
+
+private struct StreamingMessageRow: View {
+    let name: String
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(name)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(alignment: .bottom, spacing: 4) {
+                Text(text)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 2, height: 16)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("room.turn.draft")
     }
 }

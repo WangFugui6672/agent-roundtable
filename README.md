@@ -2,7 +2,7 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #3「BYOK Provider 与 Keychain」—— 仍用 Mock 驱动讨论，但已支持配置 Qwen / DeepSeek / 自定义 OpenAI-compatible Provider，API Key 保存在 iOS Keychain、不上传后端。
+**当前阶段：** Issue #4「单个真实 Agent 流式发言」—— 已可以用自己的 Key 调用真实 Provider，流式显示一个 Agent 的发言，完成后把结构化消息提交给 Django 校验并持久化。
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -21,9 +21,13 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - Provider 设置页：三个预设、BaseURL / Model / API Key、验证连接、删除配置。
 - API Key 只写入 Keychain（`WhenUnlockedThisDeviceOnly`）；非秘密配置存 `UserDefaults`。
 - 创建圆桌时提交 Provider 元数据快照，后端拒绝任何携带 API Key 的请求。
-- 后端单元/集成测试、iOS 解码/状态机/Provider 测试、Keychain 集成测试、最小 GitHub Actions。
+- 真实 Agent 发言：iOS 直连 Provider 的 `/chat/completions`（SSE 流式），点参与者即可让 TA 说话。
+- 流式状态：思考 → 输入（逐字渲染）→ 提交 → 完成；失败时显示 Provider 原因，不自动换模型。
+- 结构化消息提交：`POST /roundtables/{id}/messages`，后端校验类型、长度、引用归属后落库并广播 `message.completed`。
+- 重新进入圆桌时，`room.joined` 会带回已持久化的发言。
+- 后端单元/集成测试、iOS 解码/状态机/Provider/流式客户端测试、Keychain 集成测试、最小 GitHub Actions。
 
-真实模型调用、流式输出、轮次调度器、总结、结论卡、断线重连见后续 Issue。
+轮次调度器、第二轮互评、总结、结论卡、断线重连见后续 Issue。
 
 ## 目录结构
 
@@ -36,7 +40,7 @@ ios/
   AgentRoundtable/        SwiftUI App（创建页、Provider 设置、圆桌页、AppModel）
   AgentRoundtableTests/   App 单元测试（Keychain 集成）
   AgentRoundtableUITests/ 端到端 UI 测试
-  RoundtableCore/         SwiftPM 包：模型、事件解码、REST/WS 客户端、圆桌状态机、Provider 与测试
+  RoundtableCore/         SwiftPM 包：模型、事件解码、REST/WS 客户端、圆桌状态机、Provider 与流式客户端
 docs/
   PRD.md                  产品需求
   protocol.md             REST + WebSocket 协议（唯一接口契约）
@@ -77,14 +81,16 @@ open ios/AgentRoundtable.xcodeproj
 
 创建页的「模型 Provider」可以打开 Provider 设置：选 Qwen / DeepSeek / 自定义，填写 BaseURL、Model 与 API Key。API Key 只写入 Keychain，不会出现在 `UserDefaults`、日志或后端请求里；「验证连接」会调用该服务的 `GET /models` 判断 Key 与地址是否可用（不消耗 Token）。未配置 Provider 时仍可用 Mock 演示。
 
+进入圆桌后，点任意参与者，iOS 会用已配置的 Provider 发起一次真实流式发言：思考 → 逐字输入 → 提交后端。模型不可达、Key 失效、限流等情况会直接显示原因，不会自动切换到 Mock 或其他模型。
+
 ## 测试与检查
 
 ```bash
 make verify       # ruff + pytest + RoundtableCore 编译 + SwiftLint
-make backend-test # 44 个后端测试（含 WebSocket 集成测试与 Provider 快照校验）
-make ios-test     # 47 个 RoundtableCore 测试（需要 Xcode 提供 XCTest）
+make backend-test # 58 个后端测试（WebSocket、Provider 快照、消息校验与广播）
+make ios-test     # 62 个 RoundtableCore 测试（需要 Xcode 提供 XCTest）
 make ios-lint     # SwiftLint --strict（首次需 brew install swiftlint）
-make ios-app-test # 16 个 App 单元测试（Keychain 与 Provider 状态，需模拟器签名）
+make ios-app-test # 21 个 App 单元测试（Keychain、Provider、真实发言编排，需模拟器签名）
 ```
 
 UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8000`。先启动后端，再运行：
@@ -113,13 +119,16 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - **核心逻辑独立成包**：解码、去重、游标与 REST 客户端可在 macOS 上快速测试，SwiftUI 只做展示（[ADR 0003](docs/adr/0003-xcodegen-project-and-core-package.md)）。
 - **密钥不进后端**：BYOK 的 API Key 只存 iOS Keychain、请求由 iOS 直连 Provider（[ADR 0001](docs/adr/0001-byok-keychain-direct-provider.md)）。后端收到任何 `api_key` 字段会直接返回 400，避免误上传被静默忽略。
 - **Provider 逻辑与 Keychain 分离**：`SecretStore` 协议让 Provider 生命周期可以在没有 Keychain 的 CI 机器上测试；真实 Keychain 行为由模拟器上的集成测试覆盖。
+- **流式在客户端、校验在服务端**：模型输出由 iOS 逐字渲染，协议信封（类型、立场、claim、conﬁdence）由 `MessageComposer` 组装；Django 只做校验与持久化，所以模型返回纯文本也不会破坏协议。
 
 ## 已知边界
 
 - `mock.run` 由客户端触发，是切片阶段的临时驱动；Issue #5 的调度器落地后改由服务端自动推进。
 - Redis 与 Celery 尚未接入：当前切片没有跨进程广播与异步任务的需要，等调度器/总结阶段再引入。
 - iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
-- Provider 目前只保存配置与连通性校验，真实补全/流式调用由 Issue #4 实现；同一圆桌的所有 Agent 共用一套 Provider 配置。
+- 真实发言目前是「点谁谁说一句」，三个 Agent 的顺序调度、`pass` 与暂停由 Issue #5 实现；同一圆桌的所有 Agent 共用一套 Provider 配置。
+- `agent.thinking` / `agent.typing` 是客户端本地状态，本切片不落库；`message.completed` 才是持久化事件。
+- 引用关系（`references`）后端已支持校验，客户端暂未自动填写，随第二轮互评（Issue #7）一起做。
 - SwiftLint 已接入（`ios/.swiftlint.yml`，`make verify` 与 CI 都执行 `--strict`）；UI 测试仍未在 CI 执行（需要本地后端），CI 只做 `build-for-testing`。
 - Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
 - AppModel 暂时直接持有 `APIClient`、`ProviderStore` 与 `ProviderProbe`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。

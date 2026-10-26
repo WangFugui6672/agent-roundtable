@@ -7,6 +7,7 @@ from apps.roundtables.views import (
     GuestSessionCreateView,
     RoundtableDetailView,
     RoundtableListCreateView,
+    RoundtableMessageView,
 )
 
 urlpatterns = [
@@ -17,5 +18,10 @@ urlpatterns = [
         "roundtables/<uuid:roundtable_id>",
         RoundtableDetailView.as_view(),
         name="roundtable-detail",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/messages",
+        RoundtableMessageView.as_view(),
+        name="roundtable-message-create",
     ),
 ]

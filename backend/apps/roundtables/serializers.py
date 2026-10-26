@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 
 from rest_framework import serializers
 
-from apps.roundtables.models import AgentProfile, Roundtable, RoundtableAgent
+from apps.roundtables.models import AgentProfile, Message, Roundtable, RoundtableAgent
 from apps.roundtables.protocol import iso8601_millis
 
 MVP_AGENT_COUNT = 3
@@ -137,3 +137,99 @@ class RoundtableCreateSerializer(serializers.Serializer):
         if found != MVP_AGENT_COUNT:
             raise serializers.ValidationError("Agent 不存在。")
         return value
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    """Wire shape of one persisted utterance (docs/protocol.md 3.4 ``Message``)."""
+
+    author = serializers.SerializerMethodField()
+    references = serializers.SerializerMethodField()
+    created_at = serializers.SerializerMethodField()
+    stance = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Message
+        fields = [
+            "id",
+            "author",
+            "message_type",
+            "claim",
+            "body",
+            "stance",
+            "references",
+            "confidence",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_author(self, obj: Message) -> dict[str, str]:
+        agent = obj.roundtable_agent
+        return {
+            "roundtable_agent_id": str(agent.id),
+            "agent_key": agent.agent_profile.key,
+            "name": agent.agent_profile.name,
+        }
+
+    def get_references(self, obj: Message) -> list[str]:
+        return [str(reference.id) for reference in obj.references.all()]
+
+    def get_stance(self, obj: Message) -> str | None:
+        return obj.stance or None
+
+    def get_created_at(self, obj: Message) -> str:
+        return iso8601_millis(obj.created_at)
+
+
+class MessageCreateSerializer(serializers.Serializer):
+    """Request body of ``POST /api/v1/roundtables/{id}/messages``.
+
+    Validation mirrors PRD 7.7: type, claim, body length, stance, references
+    and confidence. ``max_reply_chars`` comes from the agent's profile so the
+    client and the server agree on the cap.
+    """
+
+    roundtable_agent_id = serializers.UUIDField()
+    message_type = serializers.ChoiceField(choices=Message.Type.choices)
+    claim = serializers.CharField(max_length=80, trim_whitespace=True)
+    body = serializers.CharField(
+        max_length=2000, trim_whitespace=True, required=False, allow_blank=True, default=""
+    )
+    stance = serializers.ChoiceField(
+        choices=Message.Stance.choices, required=False, allow_null=True, allow_blank=True
+    )
+    references = serializers.ListField(
+        child=serializers.UUIDField(), required=False, max_length=3, default=list
+    )
+    confidence = serializers.FloatField(min_value=0, max_value=1, required=False, default=0.6)
+
+    def validate(self, attrs: dict) -> dict:
+        if contains_secret(self.initial_data):
+            raise serializers.ValidationError({"provider": "不得向后端提交 API Key。"})
+
+        roundtable: Roundtable = self.context["roundtable"]
+        agent = (
+            RoundtableAgent.objects.filter(id=attrs["roundtable_agent_id"], roundtable=roundtable)
+            .select_related("agent_profile")
+            .first()
+        )
+        if agent is None:
+            raise serializers.ValidationError({"roundtable_agent_id": "该 Agent 不属于此圆桌。"})
+        attrs["agent"] = agent
+
+        body = attrs.get("body", "")
+        limit = agent.agent_profile.max_reply_chars
+        if len(body) > limit:
+            raise serializers.ValidationError({"body": f"正文超过 {limit} 字上限。"})
+        if attrs["message_type"] != Message.Type.PASS and not body:
+            raise serializers.ValidationError({"body": "正文不能为空。"})
+
+        references = attrs.get("references") or []
+        if len(set(references)) != len(references):
+            raise serializers.ValidationError({"references": "引用消息不能重复。"})
+        if references:
+            found = Message.objects.filter(id__in=references, roundtable=roundtable).count()
+            if found != len(references):
+                raise serializers.ValidationError(
+                    {"references": "引用的消息不存在或不属于此圆桌。"}
+                )
+        return attrs
