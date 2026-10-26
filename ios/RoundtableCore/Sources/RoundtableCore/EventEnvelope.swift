@@ -28,17 +28,20 @@ public struct JoinedRoom: Codable, Equatable, Sendable {
     public let roundtable: RoundtableSnapshot
     public let messages: [Message]
     public let failures: [TurnFailure]
+    public let summary: RoundSummary?
     public let replay: ReplayMetadata?
 
     public init(
         roundtable: RoundtableSnapshot,
         messages: [Message],
         failures: [TurnFailure] = [],
+        summary: RoundSummary? = nil,
         replay: ReplayMetadata? = nil
     ) {
         self.roundtable = roundtable
         self.messages = messages
         self.failures = failures
+        self.summary = summary
         self.replay = replay
     }
 
@@ -46,6 +49,7 @@ public struct JoinedRoom: Codable, Equatable, Sendable {
         case roundtable
         case messages
         case failures
+        case summary
         case replay
     }
 
@@ -54,6 +58,7 @@ public struct JoinedRoom: Codable, Equatable, Sendable {
         roundtable = try container.decode(RoundtableSnapshot.self, forKey: .roundtable)
         messages = try container.decode([Message].self, forKey: .messages)
         failures = try container.decodeIfPresent([TurnFailure].self, forKey: .failures) ?? []
+        summary = try container.decodeIfPresent(RoundSummary.self, forKey: .summary)
         replay = try container.decodeIfPresent(ReplayMetadata.self, forKey: .replay)
     }
 }
@@ -101,6 +106,22 @@ public struct RoundCompleted: Codable, Equatable, Sendable {
     }
 }
 
+public struct SummaryStarted: Codable, Equatable, Sendable {
+    public let round: Int
+
+    public init(round: Int) {
+        self.round = round
+    }
+}
+
+public struct SummaryCompleted: Codable, Equatable, Sendable {
+    public let summary: RoundSummary
+
+    public init(summary: RoundSummary) {
+        self.summary = summary
+    }
+}
+
 public struct RoomPausePending: Codable, Equatable, Sendable {
     public let turnId: UUID
 
@@ -134,6 +155,8 @@ public enum EventPayload: Equatable, Sendable {
     case agentFailed(TurnFailure)
     case messageCompleted(Message)
     case roundCompleted(RoundCompleted)
+    case summaryStarted(SummaryStarted)
+    case summaryCompleted(SummaryCompleted)
     case budgetExhausted(BudgetExhaustion)
     case pausePending(RoomPausePending)
     case paused(RoomStateChanged)
@@ -214,6 +237,14 @@ extension EventEnvelope: Decodable {
         case "budget.exhausted":
             return .budgetExhausted(
                 try container.decode(BudgetExhaustion.self, forKey: .payload)
+            )
+        case "summary.started":
+            return .summaryStarted(
+                try container.decode(SummaryStarted.self, forKey: .payload)
+            )
+        case "summary.completed":
+            return .summaryCompleted(
+                try container.decode(SummaryCompleted.self, forKey: .payload)
             )
         default:
             // Unknown events must not break the stream: the server may ship

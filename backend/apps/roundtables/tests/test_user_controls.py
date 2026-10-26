@@ -216,12 +216,15 @@ def test_end_cancels_the_pending_turn_and_blocks_late_reports(api_client):
     repeated = control(api_client, room, "end")
 
     assert first.status_code == 200
-    assert first.json()["roundtable"]["status"] == "completed"
+    assert first.json()["roundtable"]["status"] == "summarizing"
     assert first.json()["roundtable"]["active_turn"] is None
     assert first.json()["roundtable"]["participants"][0]["state"] == "waiting"
-    assert [event["event_type"] for event in first.json()["events"]] == ["room.ended"]
+    assert [event["event_type"] for event in first.json()["events"]] == [
+        "room.ended",
+        "summary.started",
+    ]
     assert first.json()["events"][0]["payload"] == {
-        "status": "completed",
+        "status": "summarizing",
         "cancelled_turn_id": turn["turn_id"],
         "cancelled_agent_id": turn["roundtable_agent_id"],
     }

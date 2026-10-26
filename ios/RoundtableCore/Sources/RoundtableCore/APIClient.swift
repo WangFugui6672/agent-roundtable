@@ -97,6 +97,24 @@ public struct APIClient: Sendable {
         )
     }
 
+    public func createFollowUp(
+        parentRoundtableID: UUID,
+        topic: String
+    ) async throws -> RoundtableSnapshot {
+        struct Body: Encodable {
+            let topic: String
+        }
+        let body = try JSONEncoder.roundtable.encode(Body(topic: topic))
+        return try await send(
+            makeRequest(
+                path:
+                    "api/v1/roundtables/\(parentRoundtableID.uuidString.lowercased())/follow-ups",
+                method: "POST",
+                body: body
+            )
+        )
+    }
+
     /// Persists one structured utterance and returns the ``message.completed``
     /// envelope, which the client applies locally and the server broadcasts.
     public func submitMessage(
@@ -155,6 +173,20 @@ public struct APIClient: Sendable {
         return try await send(
             makeRequest(
                 path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/turns/fail",
+                method: "POST",
+                body: body
+            )
+        )
+    }
+
+    public func submitSummary(
+        roundtableID: UUID,
+        submission: RoundSummarySubmission
+    ) async throws -> RoundSummaryResponse {
+        let body = try JSONEncoder.roundtable.encode(submission)
+        return try await send(
+            makeRequest(
+                path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/summary",
                 method: "POST",
                 body: body
             )

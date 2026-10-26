@@ -15,7 +15,11 @@ struct RoundtableView: View {
             turnStatus
             messageList
             Divider()
-            UserControlBar(room: room)
+            if room.status == .completed {
+                CompletedRoomBar(room: room)
+            } else if room.status != .summarizing {
+                UserControlBar(room: room)
+            }
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("圆桌")
@@ -24,6 +28,9 @@ struct RoundtableView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("离开") { model.leaveRoom() }
             }
+        }
+        .onAppear {
+            model.startSummaryGenerationIfNeeded()
         }
     }
 
@@ -257,7 +264,11 @@ struct RoundtableView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if room.messages.isEmpty && room.failures.isEmpty && turn.draft == nil {
+                    if room.messages.isEmpty,
+                       room.failures.isEmpty,
+                       turn.draft == nil,
+                       room.summary == nil,
+                       room.status != .summarizing {
                         emptyState
                     } else {
                         ForEach(room.messages) { message in
@@ -271,6 +282,10 @@ struct RoundtableView: View {
                         ForEach(room.failures) { failure in
                             TurnFailureRow(failure: failure)
                                 .id("room.failure.\(failure.turnId)")
+                        }
+                        if room.summary != nil || room.status == .summarizing {
+                            RoundSummaryPanel(room: room)
+                                .id("room.summary")
                         }
                         if let draft = turn.draft {
                             StreamingMessageRow(name: draft.agentName, text: draft.text)

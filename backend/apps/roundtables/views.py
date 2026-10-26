@@ -16,11 +16,20 @@ from apps.roundtables.budget import (
     MAX_MOCK_ROUNDTABLES_PER_DAY,
     utc_day_bounds,
 )
-from apps.roundtables.models import AgentProfile, GuestSession, Roundtable, RoundtableAgent
+from apps.roundtables.models import (
+    AgentProfile,
+    GuestSession,
+    RoundSummary,
+    Roundtable,
+    RoundtableAgent,
+)
 from apps.roundtables.protocol import iso8601_millis
 from apps.roundtables.serializers import (
     AgentProfileSerializer,
+    FollowUpCreateSerializer,
     MessageCreateSerializer,
+    RoundSummaryCreateSerializer,
+    RoundSummarySerializer,
     RoundtableCreateSerializer,
     RoundtableSerializer,
     TurnFailSerializer,
@@ -28,6 +37,7 @@ from apps.roundtables.serializers import (
     UserMessageCreateSerializer,
 )
 from apps.roundtables.services import (
+    create_follow_up,
     create_message,
     create_user_message,
     end_room,
@@ -36,6 +46,7 @@ from apps.roundtables.services import (
     pass_turn,
     pause_room,
     resume_room,
+    submit_summary,
 )
 from roundtable.exceptions import (
     ActiveRoundtableLimit,
@@ -145,6 +156,72 @@ class RoundtableDetailView(APIView):
         if roundtable is None:
             raise RoundtableNotFound()
         return Response(RoundtableSerializer(roundtable).data)
+
+
+class RoundtableSummaryView(APIView):
+    """Read or create/regenerate the structured conclusion."""
+
+    def get(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        roundtable = Roundtable.objects.filter(
+            id=roundtable_id,
+            guest_session=session,
+        ).first()
+        if roundtable is None:
+            raise RoundtableNotFound()
+        summary = RoundSummary.objects.filter(roundtable=roundtable).first()
+        return Response({"summary": RoundSummarySerializer(summary).data if summary else None})
+
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        roundtable = Roundtable.objects.filter(
+            id=roundtable_id,
+            guest_session=session,
+        ).first()
+        if roundtable is None:
+            raise RoundtableNotFound()
+
+        body = RoundSummaryCreateSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        result = submit_summary(
+            str(roundtable.id),
+            str(session.id),
+            body.validated_data,
+        )
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(
+            {
+                "roundtable": RoundtableSerializer(result.room).data,
+                "summary": RoundSummarySerializer(result.summary).data,
+                "events": result.events,
+            },
+            status=(status.HTTP_201_CREATED if result.created else status.HTTP_200_OK),
+        )
+
+
+class RoundtableFollowUpView(APIView):
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        parent = Roundtable.objects.filter(
+            id=roundtable_id,
+            guest_session=session,
+        ).first()
+        if parent is None:
+            raise RoundtableNotFound()
+        body = FollowUpCreateSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        follow_up = create_follow_up(
+            str(parent.id),
+            str(session.id),
+            body.validated_data["topic"],
+        )
+        if follow_up is None:
+            raise RoundtableNotFound()
+        return Response(
+            RoundtableSerializer(follow_up).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class RoundtableMessageView(APIView):
