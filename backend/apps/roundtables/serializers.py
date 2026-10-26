@@ -324,6 +324,10 @@ class MessageCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"message_type": "沉默必须通过 turns/pass 提交，不能作为普通发言。"}
             )
+        if attrs["message_type"] == Message.Type.USER_MESSAGE:
+            raise serializers.ValidationError(
+                {"message_type": "用户消息必须通过 user-messages 提交，不能伪装成 Agent 发言。"}
+            )
 
         body = attrs.get("body", "")
         limit = agent.agent_profile.max_reply_chars
