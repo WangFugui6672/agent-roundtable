@@ -82,6 +82,29 @@ def test_user_can_send_an_ordinary_group_message(api_client):
     assert stored.body == "先补充一个约束：团队只有两个人。"
 
 
+def test_agent_message_endpoint_rejects_user_message_type(api_client):
+    room = make_room()
+    turn = start_next_turn(api_client, room)
+
+    response = api_client.post(
+        f"/api/v1/roundtables/{room.id}/messages",
+        {
+            "turn_id": turn["turn_id"],
+            "roundtable_agent_id": turn["roundtable_agent_id"],
+            "message_type": "user_message",
+            "claim": "普通 Agent 接口不能伪造用户消息。",
+            "body": "这条消息不应被写入。",
+        },
+        format="json",
+        HTTP_X_GUEST_SESSION=str(room.guest_session_id),
+    )
+
+    assert response.status_code == 400
+    assert "message_type" in response.json()["error"]["details"]
+    assert Message.objects.filter(roundtable=room).count() == 0
+    assert Turn.objects.get(id=turn["turn_id"]).status == Turn.Status.PENDING
+
+
 def test_interjection_pauses_after_the_current_turn_finishes(api_client):
     room = make_room()
     turn = start_next_turn(api_client, room)
