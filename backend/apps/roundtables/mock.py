@@ -31,6 +31,7 @@ def _message(
             "turn_id": None,
             "round_number": round_number,
             "author": {
+                "type": "agent",
                 "roundtable_agent_id": str(agent.id),
                 "agent_key": agent.agent_profile.key,
                 "name": agent.agent_profile.name,
@@ -41,6 +42,7 @@ def _message(
             "stance": stance,
             "references": references or [],
             "confidence": confidence,
+            "mentioned_agent_ids": [],
             "created_at": p.now_iso(),
         }
     }

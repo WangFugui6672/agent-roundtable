@@ -76,6 +76,7 @@ class Roundtable(models.Model):
     max_rounds = models.PositiveSmallIntegerField(default=2)
     current_round = models.PositiveSmallIntegerField(default=0)
     event_sequence = models.BigIntegerField(default=0)
+    pause_pending = models.BooleanField(default=False)
     # Provider metadata snapshot (Issue #3). Only non-secret fields are stored:
     # the API key lives in the iOS Keychain and must never reach Django.
     provider_kind = models.CharField(
@@ -135,6 +136,7 @@ class Turn(models.Model):
         COMPLETED = "completed", "已完成"
         PASSED = "passed", "已沉默"
         FAILED = "failed", "失败"
+        CANCELLED = "cancelled", "已取消"
 
     id = models.UUIDField(primary_key=True, editable=False)
     roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="turns")
@@ -176,6 +178,11 @@ class Message(models.Model):
         QUESTION = "question", "提出问题"
         PASS = "pass", "选择沉默"
         SUMMARY = "summary", "总结"
+        USER_MESSAGE = "user_message", "用户消息"
+
+    class AuthorType(models.TextChoices):
+        AGENT = "agent", "Agent"
+        USER = "user", "用户"
 
     class Stance(models.TextChoices):
         SUPPORT = "support", "支持"
@@ -185,19 +192,27 @@ class Message(models.Model):
 
     id = models.UUIDField(primary_key=True, editable=False)
     roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="messages")
+    author_type = models.CharField(
+        max_length=16, choices=AuthorType.choices, default=AuthorType.AGENT
+    )
     roundtable_agent = models.ForeignKey(
-        RoundtableAgent, on_delete=models.PROTECT, related_name="messages"
+        RoundtableAgent,
+        on_delete=models.PROTECT,
+        related_name="messages",
+        null=True,
+        blank=True,
     )
     turn = models.ForeignKey(
         Turn, on_delete=models.PROTECT, related_name="messages", null=True, blank=True
     )
     round_number = models.PositiveSmallIntegerField(default=0)
-    message_type = models.CharField(max_length=16, choices=Type.choices)
-    claim = models.CharField(max_length=80)
+    message_type = models.CharField(max_length=16, choices=Type.choices, blank=True, default="")
+    claim = models.CharField(max_length=80, blank=True, default="")
     body = models.TextField(blank=True, default="")
     stance = models.CharField(max_length=16, choices=Stance.choices, blank=True, default="")
     references = models.ManyToManyField("self", symmetrical=False, related_name="referenced_by")
-    confidence = models.FloatField(default=0.6)
+    confidence = models.FloatField(default=0.6, null=True, blank=True)
+    mentioned_agent_ids = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -1,6 +1,6 @@
 # Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #5）
+**状态：** 实现中（Issue #6）
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -128,6 +128,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
   "max_rounds": 2,
   "current_round": 0,
   "last_sequence": 0,
+  "pause_pending": false,
   "active_turn": null,
   "provider": {
     "kind": "deepseek",
@@ -150,6 +151,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 `status`：`draft | ready | running | paused | summarizing | completed | failed | archived`
 `state`：`waiting | thinking | typing | passed | completed | failed`
 `last_sequence`：该圆桌已持久化的最大事件序号，客户端用它初始化游标。
+`pause_pending`：用户要求在安全边界暂停，但仍有在途 turn。仅在 `status = running` 时可能为 `true`。
 `active_turn`：当前待执行的 turn；没有在途 turn 时为 `null`。字段形状见 2.8，重连客户端用 `turn_id` 继续或拒绝过期回报。
 `provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
 
@@ -239,6 +241,14 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
         "agent_id": "d00d...",
         "agent_name": "方案派"
       }
+    },
+    {
+      "event_id": "0f9e...",
+      "room_id": "c0de...",
+      "sequence": 4,
+      "created_at": "2026-10-26T01:02:03.457Z",
+      "event_type": "room.pause_pending",
+      "payload": {"turn_id": "a11c..."}
     }
   ]
 }
@@ -280,6 +290,97 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 ```
 
 `pass` 只关闭 turn 并改变参与者状态，**不会创建普通 `Message`**，也不会被当作有效观点参与引用或后续调度。重复 pass 返回 `400 validation_error`，不会重复产生事件。
+
+### 2.10 发送用户消息
+
+`POST /api/v1/roundtables/{id}/user-messages`，需要 `X-Guest-Session`，且必须是创建者：
+
+```json
+{
+  "body": "先补充一个约束：团队只有两个人。",
+  "mentioned_agent_ids": ["d00d..."]
+}
+```
+
+- `body`：必填，去除首尾空白后 1-2000 字符。
+- `mentioned_agent_ids`：可选，最多 3 个、互不重复，且每个 ID 都必须是当前圆桌的参与者。
+- 点名的唯一依据是 `mentioned_agent_ids`；正文里的 `@名字` 只用于展示，服务端不解析。
+- 用户消息使用独立的 `author.type = "user"`，不会伪装成 Agent，也不要求 `turn_id`、`claim` 或结构化立场。
+
+成功时 `201`：
+
+```json
+{
+  "roundtable": {"status": "running", "pause_pending": true, "...": "..."},
+  "events": [
+    {
+      "event_id": "0f9d...",
+      "room_id": "c0de...",
+      "sequence": 3,
+      "created_at": "2026-10-26T01:02:03.456Z",
+      "event_type": "message.completed",
+      "payload": {
+        "message": {
+          "id": "7f0e...",
+          "turn_id": null,
+          "round_number": 1,
+          "author": {"type": "user", "name": "用户"},
+          "message_type": "user_message",
+          "claim": null,
+          "body": "先补充一个约束：团队只有两个人。",
+          "stance": null,
+          "references": [],
+          "confidence": null,
+          "mentioned_agent_ids": ["d00d..."],
+          "created_at": "2026-10-26T01:02:03.456Z"
+        }
+      }
+    }
+  ]
+}
+```
+
+用户消息一定持久化并广播。暂停边界规则：
+
+- 无在途 turn：消息后直接进入 `paused`，追加唯一的 `room.paused` 事件。
+- 有在途 turn：消息后设置 `pause_pending = true`，追加唯一的 `room.pause_pending` 事件；当前 Agent 的 `message.completed` 或 `agent.passed` 完成后，服务端才进入 `paused` 并追加 `room.paused`。
+- 用户插话不会取消当前 Provider 生成；只有 `end` 或离开圆桌会由客户端取消本地生成 Task。
+- 重复插话可以继续追加用户消息，但不会重复产生 `room.pause_pending`。
+
+### 2.11 暂停
+
+`POST /api/v1/roundtables/{id}/pause`，无请求体。
+
+- 没有在途 turn 时立即进入 `paused`，产生 `room.paused`。
+- 有在途 turn 时只设置 `pause_pending`，产生 `room.pause_pending`；当前 turn 完成后才进入 `paused`。
+- 已暂停或已处于 `pause_pending` 时重复调用返回当前快照和空 `events`，不会重复产生事件。
+- `completed | failed | archived | summarizing` 状态返回 `400 validation_error`。
+
+### 2.12 继续
+
+`POST /api/v1/roundtables/{id}/resume`，无请求体。
+
+- `paused` 恢复为 `running`，产生 `room.resumed`。
+- 尚未消费的 `pause_pending` 会被清除，并产生 `room.resumed`。
+- 已处于正常运行状态时重复调用返回当前快照和空 `events`。
+- 重复调用只用于幂等；客户端仍只启动一条自动 turn 流程。
+
+### 2.13 提前结束
+
+`POST /api/v1/roundtables/{id}/end`，无请求体。
+
+- 圆桌进入 `completed`，清除 `pause_pending`，产生 `room.ended`。
+- 如有在途 turn，其状态改为 `cancelled`，此后使用该 `turn_id` 提交 message 或 pass 都返回 `400`。
+- 重复调用返回当前快照和空 `events`。
+- 结束后禁止写入用户消息、Agent 消息或签发新 turn。总结生成入口由 Issue #9 扩展，本切片不提前实现。
+
+以上三个控制命令与用户消息命令统一返回：
+
+```json
+{"roundtable": {"...": "..."}, "events": [<EventEnvelope>]}
+```
+
+即使命令是幂等空操作，客户端也应以 `roundtable` 快照校正本地状态。
 
 ## 3. WebSocket
 
@@ -332,6 +433,10 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 | `message.delta` | `{"message_id": "...", "delta": "..."}` | 流式片段（Mock 切片暂不产生） |
 | `message.completed` | `{"message": <Message>}` | 一条结构化发言完成 |
 | `round.completed` | `{"round": 1}` | 一轮结束 |
+| `room.pause_pending` | `{"turn_id": "<Turn.id>"}` | 已请求暂停，等待当前 turn 完成 |
+| `room.paused` | `{"status": "paused"}` | 圆桌已暂停 |
+| `room.resumed` | `{"status": "running"}` | 圆桌已继续 |
+| `room.ended` | `{"status": "completed", "cancelled_turn_id": "<Turn.id>", "cancelled_agent_id": "<RoundtableAgent.id>"}` | 用户提前结束圆桌；无在途 turn 时两个取消字段为 `null` |
 | `summary.started` / `summary.delta` / `summary.completed` | 预留 | 结论阶段（Issue #9） |
 | `room.failed` | `{"reason": "..."}` | 圆桌级失败（预留） |
 
@@ -342,21 +447,29 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
   "id": "6f0e...",
   "turn_id": "a11c...",
   "round_number": 1,
-  "author": {"roundtable_agent_id": "d00d...", "agent_key": "skeptic", "name": "质疑派"},
+  "author": {
+    "type": "agent",
+    "roundtable_agent_id": "d00d...",
+    "agent_key": "skeptic",
+    "name": "质疑派"
+  },
   "message_type": "challenge",
   "claim": "一句话主张",
   "body": "正文",
   "stance": "challenge",
   "references": ["<message.id>"],
   "confidence": 0.64,
+  "mentioned_agent_ids": [],
   "created_at": "2026-10-26T01:02:03.456Z"
 }
 ```
 
-`message_type`：`proposal | support | challenge | supplement | question | summary`
+`message_type`：`proposal | support | challenge | supplement | question | summary | user_message`
 `stance`：`support | challenge | supplement | question | null`
+`author.type`：`agent | user`
 
 真实 Agent 的普通消息必须带服务端签发的 `turn_id`；Mock 消息的 `turn_id` 为 `null`，但仍带 `round_number`。
+`author.type = user` 时，`roundtable_agent_id`、`agent_key`、`turn_id`、`claim`、`stance` 和 `confidence` 均为 `null`，`message_type` 为 `user_message`。
 
 ### 3.5 客户端命令与第一轮流程
 
@@ -368,6 +481,13 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 4. iOS 再次调用 `POST /turns/next`，直到返回 `turn: null` 和 `round.completed`。
 
 客户端在任一时刻只执行一个 turn。Provider 失败时保留待处理 turn，用户重试后重新请求 `turns/next`，服务端返回同一个 `turn_id`。
+
+用户控制补充：
+
+1. 用户消息通过 REST 提交并持久化；消息中的 mention ID 是下一 turn 的调度输入。
+2. 用户插话后，客户端允许当前 Provider 流完成并提交，但收到 `pause_pending` 后不得自动请求下一 turn。
+3. `room.paused` 到达后，只有用户显式 `resume` 才能重新启动一条自动流程。
+4. `end` 先取消客户端生成 Task，再调用服务端结束；服务端取消当前 turn 作为兜底。
 
 Mock 演示仍支持一条 WebSocket 命令：
 

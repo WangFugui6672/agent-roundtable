@@ -49,7 +49,77 @@ final class EventEnvelopeTests: XCTestCase {
         XCTAssertEqual(message.messageType, .proposal)
         XCTAssertNil(message.stance)
         XCTAssertEqual(message.references, [])
-        XCTAssertEqual(message.confidence, 0.72, accuracy: 0.0001)
+        XCTAssertEqual(message.confidence ?? 0, 0.72, accuracy: 0.0001)
+    }
+
+    func testDecodesUserAuthoredMessageWithoutAnAgentIdentity() throws {
+        let data = Fixtures.envelope(
+            eventType: "message.completed",
+            sequence: 4,
+            payload: "{\"message\": \(Fixtures.userMessageJSON)}"
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .messageCompleted(message) = envelope.payload else {
+            return XCTFail("expected a completed message, got \(envelope.payload)")
+        }
+        XCTAssertEqual(message.author.type, .user)
+        XCTAssertNil(message.author.roundtableAgentId)
+        XCTAssertNil(message.author.agentKey)
+        XCTAssertEqual(message.messageType, .userMessage)
+        XCTAssertNil(message.claim)
+        XCTAssertNil(message.confidence)
+        XCTAssertEqual(message.mentionedAgentIds, [Fixtures.advocateID])
+    }
+
+    func testDecodesPausePendingTurnIdentity() throws {
+        let data = Fixtures.envelope(
+            eventType: "room.pause_pending",
+            sequence: 4,
+            payload: "{\"turn_id\": \"\(Fixtures.turnID.uuidString)\"}"
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .pausePending(pending) = envelope.payload else {
+            return XCTFail("expected room.pause_pending, got \(envelope.payload)")
+        }
+        XCTAssertEqual(pending.turnId, Fixtures.turnID)
+    }
+
+    func testDecodesRoomControlStateEvents() throws {
+        let paused = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "room.paused",
+                sequence: 5,
+                payload: "{\"status\": \"paused\"}"
+            )
+        )
+        let resumed = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "room.resumed",
+                sequence: 6,
+                payload: "{\"status\": \"running\"}"
+            )
+        )
+        let ended = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "room.ended",
+                sequence: 7,
+                payload: "{\"status\": \"completed\"}"
+            )
+        )
+
+        guard case let .paused(pausedState) = paused.payload,
+              case let .resumed(resumedState) = resumed.payload,
+              case let .ended(endedState) = ended.payload
+        else {
+            return XCTFail("expected room control events")
+        }
+        XCTAssertEqual(pausedState.status, .paused)
+        XCTAssertEqual(resumedState.status, .running)
+        XCTAssertEqual(endedState.status, .completed)
     }
 
     func testKeepsUnknownEventTypesForForwardCompatibility() throws {

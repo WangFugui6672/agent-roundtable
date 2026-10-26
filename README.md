@@ -2,7 +2,7 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #5「三 Agent 第一轮讨论」—— 服务端签发可恢复 turn，iOS 按调度顺序直连 Provider，三位 Agent 完成第一轮发言或明确 `pass`。
+**当前阶段：** Issue #6「用户插话、点名与暂停」—— 用户可发送消息、显式点名 Agent，并在当前 Agent 完成后暂停、继续或提前结束讨论。
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -13,7 +13,7 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 ## 已完成的能力（切片）
 
 - iOS 输入议题，选择固定的三个预设 Agent（方案派 / 质疑派 / 体验派）。
-- Django 提供匿名会话、预设 Agent、创建圆桌、读取圆桌四个 REST 接口。
+- Django 提供匿名会话、预设 Agent、圆桌、turn 和用户控制 REST 接口。
 - PostgreSQL 持久化圆桌、参与者与事件日志。
 - iOS 通过 WebSocket 进入空圆桌，展示参与者与连接状态。
 - `mock.run` 触发一轮 11 个事件的 Mock 讨论，客户端解码并渲染。
@@ -28,9 +28,14 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - 流式状态：思考 → 输入（逐字渲染）→ 提交 → 完成；失败时显示 Provider 原因，不自动换模型。
 - 结构化消息提交：`POST /roundtables/{id}/messages`，后端校验类型、长度、引用归属后落库并广播 `message.completed`。
 - 重新进入圆桌时，`room.joined` 会带回已持久化的发言。
+- 用户消息使用独立 `user` 作者持久化，不再伪装成 Agent；`room.joined` 会恢复完整消息流。
+- 用户可通过显式 `mentioned_agent_ids` 点名最多 3 个 Agent；正文中的 `@名字` 仅作展示，调度器优先选择有效被点名人。
+- 用户插话后当前 Provider turn 会完成，服务端在安全边界进入 `paused`；暂停、继续和结束命令均可重复调用而不重复产生事件。
+- 提前结束会取消服务端 pending turn，并取消 iOS 本地 Provider Task，结束后的消息和 turn 写入被拒绝。
+- 圆桌页提供用户输入、mention 选择、暂停/继续/结束控件。
 - 后端单元/集成测试、iOS 解码/状态机/Provider/流式客户端测试、Keychain 集成测试、最小 GitHub Actions。
 
-用户控制、第二轮互评、总结、结论卡、完整断线重连见后续 Issue。
+第二轮互评、总结、结论卡、完整断线重连见后续 Issue。
 
 ## 目录结构
 
@@ -80,17 +85,17 @@ open ios/AgentRoundtable.xcodeproj
 
 后端地址默认 `http://localhost:8000`，可在 scheme 的环境变量 `RT_API_BASE_URL` 覆盖（真机调试时填局域网地址）。Info.plist 只对 `localhost` / `127.0.0.1` 放开 HTTP（`NSExceptionDomains`），上线前必须移除；生产环境要求 HTTPS/WSS。
 
-进入 App 后：输入议题 → 确认三个参与者 → 开始讨论 → 配置 Provider 后点击「开始第一轮」，或点击「Mock」查看确定性演示事件。
+进入 App 后：输入议题 → 确认三个参与者 → 开始讨论 → 配置 Provider 后启动自动讨论，或点击 Mock 查看确定性演示事件。圆桌页底部可以发送普通消息、点名 Agent、暂停、继续或提前结束。
 
 创建页的「模型 Provider」可以打开 Provider 设置：选 Qwen / DeepSeek / 自定义，填写 BaseURL、Model 与 API Key。API Key 只写入 Keychain，不会出现在 `UserDefaults`、日志或后端请求里；「验证连接」会调用该服务的 `GET /models` 判断 Key 与地址是否可用（不消耗 Token）。未配置 Provider 时仍可用 Mock 演示。
 
-进入圆桌后，点「开始第一轮」，iOS 会向服务端获取下一位发言人并用已配置的 Provider 发起真实流式发言：思考 → 逐字输入 → 提交 turn → 获取下一位。模型不可达、Key 失效、限流等情况会直接显示原因并停止自动推进，不会自动切换到 Mock 或其他模型。
+进入圆桌后，iOS 会向服务端获取下一位发言人并用已配置的 Provider 发起真实流式发言：思考 → 逐字输入 → 提交 turn → 获取下一位。用户插话或暂停不会中断正在生成的这一条消息，但完成后会停在暂停边界；继续只重新启动一条自动流程。模型不可达、Key 失效、限流等情况会直接显示原因并停止自动推进，不会自动切换到 Mock 或其他模型。
 
 ## 测试与检查
 
 ```bash
 make verify       # ruff + pytest + RoundtableCore 编译 + SwiftLint
-make backend-test # 后端测试（turn 调度、WebSocket、Provider 快照、消息校验与广播）
+make backend-test # 后端测试（turn 调度、用户控制、WebSocket、Provider 快照、消息校验与广播）
 make ios-test     # RoundtableCore 测试（需要 Xcode 提供 XCTest）
 make ios-lint     # SwiftLint --strict（首次需 brew install swiftlint）
 make ios-app-test # App 单元测试（Keychain、Provider、三 Agent turn 编排，需模拟器签名）
@@ -118,6 +123,7 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - `room.joined` 的序号为 0、不推进游标的约定。
 - 创建圆桌时的 Provider 元数据快照，以及后端拒绝 `api_key` 字段的约定。
 - turn 握手、`active_turn` 恢复、消息/pass 的 turn 校验。
+- 用户消息、显式 mention、pause_pending、暂停/继续/结束和幂等语义。
 - `mock.run` 确定性演示命令与一轮 Mock 的事件顺序。
 
 ## 设计要点
@@ -133,7 +139,7 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - `mock.run` 保留为确定性演示与 UI 测试入口；真实第一轮由 turn REST 握手驱动。
 - Redis 与 Celery 尚未接入：事件广播暂时使用 Channels 的 `InMemoryChannelLayer`，只在单进程内有效。
 - iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
-- 第一轮由服务端顺序签发 turn；用户插话、点名、暂停与继续由 Issue #6 实现。
+- 第一轮由服务端顺序签发 turn；用户插话、点名、暂停、继续和提前结束已由 Issue #6 接入。
 - `agent.thinking` 由服务端持久化；`agent.typing` 与逐字文本仍是客户端本地临时状态。
 - 引用关系（`references`）后端已支持校验，客户端暂未自动填写；「挑战对象」字段尚未建模，二者随第二轮互评（Issue #7）一起处理。
 - 消息的 `message_type` / `stance` 由预设角色推导（方案派→proposal、质疑派→challenge、体验派→supplement），`confidence` 固定 0.6；让模型自己产出结构化字段与真实置信度随 #7 评估阶段再做。

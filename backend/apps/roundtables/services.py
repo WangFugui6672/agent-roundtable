@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from asgiref.sync import async_to_sync
@@ -17,6 +18,12 @@ from apps.roundtables import protocol as p
 from apps.roundtables.models import Message, RoomEvent, Roundtable, RoundtableAgent, Turn
 from apps.roundtables.scheduler import select_next_speaker
 from apps.roundtables.serializers import MessageSerializer, RoundtableSerializer, TurnSerializer
+
+
+@dataclass(frozen=True)
+class RoomCommandResult:
+    room: Roundtable
+    events: list[dict[str, Any]]
 
 
 def _event_envelope(event: RoomEvent) -> dict[str, Any]:
@@ -112,6 +119,24 @@ def _events_after(roundtable_id: str, guest_session_id: str, cursor: int) -> lis
     return [_event_envelope(event) for event in events]
 
 
+def _preferred_agent_ids(room: Roundtable, agents: list[RoundtableAgent]) -> list[str]:
+    waiting_ids = {
+        str(agent.id) for agent in agents if agent.state == RoundtableAgent.State.WAITING
+    }
+    if not waiting_ids:
+        return []
+    user_messages = room.messages.filter(author_type=Message.AuthorType.USER).order_by(
+        "-created_at", "-id"
+    )
+    for message in user_messages:
+        mentioned = [
+            agent_id for agent_id in message.mentioned_agent_ids if agent_id in waiting_ids
+        ]
+        if mentioned:
+            return mentioned
+    return []
+
+
 def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str, Any]]:
     """Persist and return the next scripted mock round, if the budget allows it."""
     with transaction.atomic():
@@ -120,7 +145,11 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
             .filter(id=roundtable_id, guest_session_id=guest_session_id)
             .first()
         )
-        if room is None or room.current_round >= room.max_rounds:
+        if (
+            room is None
+            or room.status not in {Roundtable.Status.READY, Roundtable.Status.RUNNING}
+            or room.current_round >= room.max_rounds
+        ):
             return []
 
         agents = list(room.agents.select_related("agent_profile").order_by("position"))
@@ -156,6 +185,219 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
         return [_event_envelope(event) for event in created]
 
 
+def create_user_message(
+    roundtable_id: str,
+    guest_session_id: str,
+    body: str,
+    mentioned_agent_ids: list[str],
+) -> RoomCommandResult | None:
+    """Persist a user utterance and pause automatic discussion at a safe boundary."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .prefetch_related("agents__agent_profile")
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+        if room.status in {
+            Roundtable.Status.SUMMARIZING,
+            Roundtable.Status.COMPLETED,
+            Roundtable.Status.FAILED,
+            Roundtable.Status.ARCHIVED,
+        }:
+            raise ValidationError({"status": "圆桌当前状态不允许发送消息。"})
+
+        pending_turn = (
+            Turn.objects.select_for_update()
+            .filter(roundtable=room, status=Turn.Status.PENDING)
+            .first()
+        )
+        message = Message.objects.create(
+            id=uuid.uuid4(),
+            roundtable=room,
+            author_type=Message.AuthorType.USER,
+            roundtable_agent=None,
+            turn=None,
+            round_number=room.current_round,
+            message_type=Message.Type.USER_MESSAGE,
+            claim="",
+            body=body,
+            stance="",
+            confidence=None,
+            mentioned_agent_ids=mentioned_agent_ids,
+        )
+
+        created = [
+            _append_room_event(
+                room,
+                p.MESSAGE_COMPLETED,
+                {"message": MessageSerializer(message).data},
+            )
+        ]
+        if pending_turn is not None:
+            if not room.pause_pending:
+                room.pause_pending = True
+                created.append(
+                    _append_room_event(
+                        room,
+                        p.ROOM_PAUSE_PENDING,
+                        {"turn_id": str(pending_turn.id)},
+                    )
+                )
+        elif room.status != Roundtable.Status.PAUSED:
+            room.status = Roundtable.Status.PAUSED
+            room.pause_pending = False
+            created.append(
+                _append_room_event(
+                    room,
+                    p.ROOM_PAUSED,
+                    {"status": Roundtable.Status.PAUSED},
+                )
+            )
+
+        room.save(update_fields=["status", "pause_pending", "event_sequence", "updated_at"])
+        envelopes = [_event_envelope(event) for event in created]
+        _broadcast_after_commit(room.id, envelopes)
+        return RoomCommandResult(room=room, events=envelopes)
+
+
+def pause_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult | None:
+    """Pause now, or at the current turn boundary when one is in flight."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .prefetch_related("agents__agent_profile")
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+        if room.status == Roundtable.Status.PAUSED:
+            return RoomCommandResult(room=room, events=[])
+        if room.status in {
+            Roundtable.Status.SUMMARIZING,
+            Roundtable.Status.COMPLETED,
+            Roundtable.Status.FAILED,
+            Roundtable.Status.ARCHIVED,
+        }:
+            raise ValidationError({"status": "圆桌当前状态不允许暂停。"})
+
+        pending_turn = (
+            Turn.objects.select_for_update()
+            .filter(roundtable=room, status=Turn.Status.PENDING)
+            .first()
+        )
+        if pending_turn is not None:
+            if room.pause_pending:
+                return RoomCommandResult(room=room, events=[])
+            room.pause_pending = True
+            event = _append_room_event(
+                room,
+                p.ROOM_PAUSE_PENDING,
+                {"turn_id": str(pending_turn.id)},
+            )
+        else:
+            room.status = Roundtable.Status.PAUSED
+            room.pause_pending = False
+            event = _append_room_event(
+                room,
+                p.ROOM_PAUSED,
+                {"status": Roundtable.Status.PAUSED},
+            )
+
+        room.save(update_fields=["status", "pause_pending", "event_sequence", "updated_at"])
+        envelope = _event_envelope(event)
+        _broadcast_after_commit(room.id, [envelope])
+        return RoomCommandResult(room=room, events=[envelope])
+
+
+def resume_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult | None:
+    """Resume a paused room, or cancel an unconsumed pause-pending flag."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .prefetch_related("agents__agent_profile")
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+        if room.status in {
+            Roundtable.Status.SUMMARIZING,
+            Roundtable.Status.COMPLETED,
+            Roundtable.Status.FAILED,
+            Roundtable.Status.ARCHIVED,
+        }:
+            raise ValidationError({"status": "圆桌当前状态不允许继续。"})
+        if room.status != Roundtable.Status.PAUSED and not room.pause_pending:
+            return RoomCommandResult(room=room, events=[])
+
+        room.status = Roundtable.Status.RUNNING
+        room.pause_pending = False
+        event = _append_room_event(
+            room,
+            p.ROOM_RESUMED,
+            {"status": Roundtable.Status.RUNNING},
+        )
+        room.save(update_fields=["status", "pause_pending", "event_sequence", "updated_at"])
+        envelope = _event_envelope(event)
+        _broadcast_after_commit(room.id, [envelope])
+        return RoomCommandResult(room=room, events=[envelope])
+
+
+def end_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult | None:
+    """End the room and invalidate any in-flight turn exactly once."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .prefetch_related("agents__agent_profile")
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+        if room.status == Roundtable.Status.COMPLETED:
+            return RoomCommandResult(room=room, events=[])
+
+        pending_turn = (
+            Turn.objects.select_for_update()
+            .filter(roundtable=room, status=Turn.Status.PENDING)
+            .first()
+        )
+        cancelled_turn_id = None
+        cancelled_agent_id = None
+        if pending_turn is not None:
+            cancelled_turn_id = str(pending_turn.id)
+            cancelled_agent_id = str(pending_turn.roundtable_agent_id)
+            pending_turn.status = Turn.Status.CANCELLED
+            pending_turn.completed_at = timezone.now()
+            pending_turn.save(update_fields=["status", "completed_at"])
+            agent = next(
+                agent for agent in room.agents.all() if agent.id == pending_turn.roundtable_agent_id
+            )
+            agent.state = RoundtableAgent.State.WAITING
+            agent.save(update_fields=["state"])
+
+        # Issue #9 can route this boundary through summarizing before completion.
+        room.status = Roundtable.Status.COMPLETED
+        room.pause_pending = False
+        event = _append_room_event(
+            room,
+            p.ROOM_ENDED,
+            {
+                "status": Roundtable.Status.COMPLETED,
+                "cancelled_turn_id": cancelled_turn_id,
+                "cancelled_agent_id": cancelled_agent_id,
+            },
+        )
+        room.save(update_fields=["status", "pause_pending", "event_sequence", "updated_at"])
+        envelope = _event_envelope(event)
+        _broadcast_after_commit(room.id, [envelope])
+        return RoomCommandResult(room=room, events=[envelope])
+
+
 def create_message(
     roundtable_id: str, guest_session_id: str, validated: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -172,6 +414,8 @@ def create_message(
         )
         if room is None:
             return None
+        if room.status not in {Roundtable.Status.READY, Roundtable.Status.RUNNING}:
+            raise ValidationError({"status": "圆桌当前状态不能提交 Agent 消息。"})
 
         agent = (
             RoundtableAgent.objects.select_for_update()
@@ -207,16 +451,26 @@ def create_message(
         agent.state = RoundtableAgent.State.COMPLETED
         agent.save(update_fields=["state"])
 
-        if room.status in {Roundtable.Status.READY, Roundtable.Status.PAUSED}:
-            room.status = Roundtable.Status.RUNNING
-        event = _append_room_event(
+        message_event = _append_room_event(
             room,
             p.MESSAGE_COMPLETED,
             {"message": MessageSerializer(message).data},
         )
-        room.save(update_fields=["status", "event_sequence", "updated_at"])
-        envelope = _event_envelope(event)
-        _broadcast_after_commit(room.id, [envelope])
+        events = [message_event]
+        if room.pause_pending:
+            room.status = Roundtable.Status.PAUSED
+            room.pause_pending = False
+            events.append(
+                _append_room_event(
+                    room,
+                    p.ROOM_PAUSED,
+                    {"status": Roundtable.Status.PAUSED},
+                )
+            )
+        room.save(update_fields=["status", "pause_pending", "event_sequence", "updated_at"])
+        envelopes = [_event_envelope(event) for event in events]
+        _broadcast_after_commit(room.id, envelopes)
+        envelope = envelopes[0]
         return envelope
 
 
@@ -232,6 +486,14 @@ def next_turn(
         )
         if room is None:
             return None
+        if room.status in {
+            Roundtable.Status.PAUSED,
+            Roundtable.Status.SUMMARIZING,
+            Roundtable.Status.COMPLETED,
+            Roundtable.Status.FAILED,
+            Roundtable.Status.ARCHIVED,
+        }:
+            raise ValidationError({"status": "圆桌当前状态不能签发新的 turn。"})
 
         agents = list(
             RoundtableAgent.objects.select_for_update()
@@ -239,12 +501,13 @@ def next_turn(
             .select_related("agent_profile")
             .order_by("position")
         )
+        preferred_ids = _preferred_agent_ids(room, agents)
         if room.current_round == 0:
             room.current_round = 1
             room.status = Roundtable.Status.RUNNING
             for agent in agents:
                 agent.state = RoundtableAgent.State.WAITING
-            speaker = select_next_speaker(agents)
+            speaker = select_next_speaker(agents, preferred_ids)
             if speaker is None:
                 raise RuntimeError("A roundtable must have a participant.")
             speaker.state = RoundtableAgent.State.THINKING
@@ -288,7 +551,7 @@ def next_turn(
         if active_turn is not None:
             return room.current_round, TurnSerializer(active_turn).data, []
 
-        speaker = select_next_speaker(agents)
+        speaker = select_next_speaker(agents, preferred_ids)
         if speaker is not None:
             speaker.state = RoundtableAgent.State.THINKING
             speaker.save(update_fields=["state"])
@@ -348,6 +611,8 @@ def pass_turn(
         )
         if room is None:
             return None
+        if room.status not in {Roundtable.Status.READY, Roundtable.Status.RUNNING}:
+            raise ValidationError({"status": "圆桌当前状态不能提交 pass。"})
         turn = (
             Turn.objects.select_for_update()
             .select_related("roundtable_agent__agent_profile")
@@ -365,7 +630,7 @@ def pass_turn(
         turn.save(update_fields=["status", "completed_at"])
         agent.state = RoundtableAgent.State.PASSED
         agent.save(update_fields=["state"])
-        event = _append_room_event(
+        pass_event = _append_room_event(
             room,
             p.AGENT_PASSED,
             {
@@ -375,10 +640,21 @@ def pass_turn(
                 "agent_name": agent.agent_profile.name,
             },
         )
-        room.save(update_fields=["event_sequence", "updated_at"])
-        envelope = _event_envelope(event)
-        _broadcast_after_commit(room.id, [envelope])
-        return envelope
+        events = [pass_event]
+        if room.pause_pending:
+            room.status = Roundtable.Status.PAUSED
+            room.pause_pending = False
+            events.append(
+                _append_room_event(
+                    room,
+                    p.ROOM_PAUSED,
+                    {"status": Roundtable.Status.PAUSED},
+                )
+            )
+        room.save(update_fields=["status", "pause_pending", "event_sequence", "updated_at"])
+        envelopes = [_event_envelope(event) for event in events]
+        _broadcast_after_commit(room.id, envelopes)
+        return envelopes[0]
 
 
 join_snapshot = database_sync_to_async(_join_snapshot)

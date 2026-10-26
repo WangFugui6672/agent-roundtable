@@ -128,4 +128,83 @@ final class RoundtableRoomModelTests: XCTestCase {
         XCTAssertEqual(model.lastSequence, 3, "an ignored event must still move the cursor")
         XCTAssertTrue(model.messages.isEmpty)
     }
+
+    func testPauseTakesEffectOnlyAfterTheCurrentTurnCompletes() throws {
+        let model = RoundtableRoomModel()
+        model.apply(try EventEnvelope.decode(from: Fixtures.activeTurnJoinedEnvelope))
+
+        model.apply(
+            try envelope(
+                "room.pause_pending",
+                3,
+                "{\"turn_id\": \"\(Fixtures.turnID.uuidString)\"}"
+            )
+        )
+
+        XCTAssertTrue(model.pausePending)
+        XCTAssertEqual(model.status, .ready)
+        XCTAssertEqual(model.activeTurn?.turnId, Fixtures.turnID)
+
+        model.apply(
+            try envelope("message.completed", 4, "{\"message\": \(Fixtures.messageJSON)}")
+        )
+        XCTAssertNil(model.activeTurn)
+        XCTAssertTrue(model.pausePending)
+
+        model.apply(try envelope("room.paused", 5, "{\"status\": \"paused\"}"))
+        XCTAssertFalse(model.pausePending)
+        XCTAssertEqual(model.status, .paused)
+    }
+
+    func testUserMessageAppendsWithoutChangingAgentState() throws {
+        let model = RoundtableRoomModel()
+        model.apply(try joinedEnvelope())
+
+        model.apply(
+            try envelope("message.completed", 1, "{\"message\": \(Fixtures.userMessageJSON)}")
+        )
+
+        XCTAssertEqual(model.messages.count, 1)
+        XCTAssertEqual(model.messages[0].author.type, .user)
+        XCTAssertEqual(model.participants.map(\.state), [.waiting, .waiting, .waiting])
+    }
+
+    func testEndClearsCancelledAgentActivity() throws {
+        let model = RoundtableRoomModel()
+        model.apply(try EventEnvelope.decode(from: Fixtures.activeTurnJoinedEnvelope))
+        XCTAssertEqual(model.participants[0].state, .waiting)
+        model.apply(
+            try envelope(
+                "agent.thinking",
+                3,
+                """
+                {
+                  "turn_id": "\(Fixtures.turnID.uuidString)",
+                  "round": 1,
+                  "agent_id": "\(Fixtures.advocateID.uuidString)",
+                  "agent_name": "方案派"
+                }
+                """
+            )
+        )
+        XCTAssertEqual(model.participants[0].state, .thinking)
+
+        model.apply(
+            try envelope(
+                "room.ended",
+                4,
+                """
+                {
+                  "status": "completed",
+                  "cancelled_turn_id": "\(Fixtures.turnID.uuidString)",
+                  "cancelled_agent_id": "\(Fixtures.advocateID.uuidString)"
+                }
+                """
+            )
+        )
+
+        XCTAssertEqual(model.status, .completed)
+        XCTAssertEqual(model.participants[0].state, .waiting)
+        XCTAssertNil(model.activeTurn)
+    }
 }

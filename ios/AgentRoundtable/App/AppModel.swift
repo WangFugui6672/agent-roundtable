@@ -30,7 +30,10 @@ final class AppModel {
     private(set) var isMockRunning = false
     var isFirstRoundRunning = false
     private(set) var createError: String?
+    var controlError: String?
     var scheduledTurn: ScheduledTurn?
+    var isSendingUserMessage = false
+    var isChangingDiscussion = false
 
     /// One real-provider turn at a time (Issue #4). Scheduling three agents in
     /// order is Issue #5's job.
@@ -42,6 +45,8 @@ final class AppModel {
         case completed(agentID: UUID)
         case passed(agentID: UUID)
         case roundCompleted(round: Int)
+        case paused
+        case ended
         /// `partial` keeps the streamed text so a failed turn is retryable
         /// without losing what the model already produced (PRD 7.12).
         case failed(agentID: UUID, message: String, partial: String?)
@@ -49,7 +54,8 @@ final class AppModel {
         var isBusy: Bool {
             switch self {
             case .thinking, .typing, .submitting: return true
-            case .idle, .completed, .passed, .roundCompleted, .failed: return false
+            case .idle, .completed, .passed, .roundCompleted, .paused, .ended, .failed:
+                return false
             }
         }
     }
@@ -69,6 +75,9 @@ final class AppModel {
     private var guestSessionID: UUID?
     private var stream: RoundtableStream?
     private var streamTask: Task<Void, Never>?
+    var generationTask: Task<Void, Never>?
+    var generationID: UUID?
+    var isEnding = false
     let defaults: UserDefaults
     let providerStore: ProviderStore
     let probe: ProviderProbe
@@ -261,6 +270,10 @@ final class AppModel {
     }
 
     func leaveRoom() {
+        generationTask?.cancel()
+        generationTask = nil
+        generationID = nil
+        isEnding = false
         streamTask?.cancel()
         streamTask = nil
         stream?.close()
@@ -270,6 +283,7 @@ final class AppModel {
         turnState = .idle
         scheduledTurn = nil
         isFirstRoundRunning = false
+        controlError = nil
     }
 
     // MARK: - Helpers

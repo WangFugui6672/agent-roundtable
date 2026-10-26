@@ -81,19 +81,39 @@ struct MessageRow: View {
             HStack(spacing: 8) {
                 Text(message.author.name)
                     .font(.subheadline.weight(.semibold))
-                StanceBadge(messageType: message.messageType, stance: message.stance)
+                if message.author.type == .user {
+                    Text("用户")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                        .foregroundStyle(Color.accentColor)
+                } else {
+                    StanceBadge(messageType: message.messageType, stance: message.stance)
+                }
                 Spacer()
                 Text(message.createdAt, format: .dateTime.hour().minute())
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
-            Text(message.claim)
-                .font(.body.weight(.medium))
+            if let claim = message.claim, !claim.isEmpty {
+                Text(claim)
+                    .font(.body.weight(.medium))
+            }
 
             Text(message.body)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+
+            if !message.mentionedAgentIds.isEmpty {
+                Label(
+                    "点名 \(message.mentionedAgentIds.count) 位 Agent",
+                    systemImage: "at"
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
 
             if !message.references.isEmpty {
                 Label(
@@ -108,10 +128,16 @@ struct MessageRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+                .fill(
+                    message.author.type == .user
+                        ? Color.accentColor.opacity(0.08)
+                        : Color(.secondarySystemGroupedBackground)
+                )
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(message.author.name)：\(message.claim)。\(message.body)")
+        .accessibilityLabel(
+            "\(message.author.name)：\(message.claim ?? message.body)。\(message.body)"
+        )
     }
 }
 
@@ -143,6 +169,7 @@ struct StanceBadge: View {
         case .summary: return ("总结", .secondary)
         case .pass: return ("沉默", .secondary)
         case .question: return ("提问", .secondary)
+        case .userMessage: return ("用户", .secondary)
         default: return ("发言", .secondary)
         }
     }
