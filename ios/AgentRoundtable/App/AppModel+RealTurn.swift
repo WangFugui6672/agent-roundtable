@@ -63,7 +63,9 @@ extension AppModel {
 
             guard let turn = response.turn else {
                 scheduledTurn = nil
-                turnState = .roundCompleted(round: response.round)
+                turnState = room.status == .paused
+                    ? .paused
+                    : .roundCompleted(round: response.round)
                 return
             }
 

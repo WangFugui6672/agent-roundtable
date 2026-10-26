@@ -732,6 +732,27 @@ def next_turn(
                     if agent.id == active_turn.roundtable_agent_id:
                         agent.state = RoundtableAgent.State.FAILED
                         break
+                if room.pause_pending:
+                    room.status = Roundtable.Status.PAUSED
+                    room.pause_pending = False
+                    pending_events.append(
+                        _append_room_event(
+                            room,
+                            p.ROOM_PAUSED,
+                            {"status": Roundtable.Status.PAUSED},
+                        )
+                    )
+                    room.save(
+                        update_fields=[
+                            "status",
+                            "pause_pending",
+                            "event_sequence",
+                            "updated_at",
+                        ]
+                    )
+                    envelopes = [_event_envelope(event) for event in pending_events]
+                    _broadcast_after_commit(room.id, envelopes)
+                    return room.current_round, None, envelopes
             else:
                 return room.current_round, TurnSerializer(active_turn).data, []
 
@@ -873,9 +894,9 @@ def next_turn(
 
             room.status = Roundtable.Status.COMPLETED
             room.save(update_fields=["status", "event_sequence", "updated_at"])
-            envelope = _event_envelope(created[0])
-            _broadcast_after_commit(room.id, [envelope])
-            return completed_round, None, [envelope]
+            envelopes = [_event_envelope(event) for event in created]
+            _broadcast_after_commit(room.id, envelopes)
+            return completed_round, None, envelopes
 
         return room.current_round, None, []
 
