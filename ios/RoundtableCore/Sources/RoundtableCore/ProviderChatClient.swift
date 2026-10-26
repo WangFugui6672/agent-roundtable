@@ -53,6 +53,33 @@ public enum ProviderError: Error, Equatable, Sendable {
     case timeout
     case transport(String)
 
+    public var failureCode: String {
+        switch self {
+        case let .http(status, _):
+            switch status {
+            case 401, 403: return "provider_unauthorized"
+            case 402: return "provider_insufficient_balance"
+            case 404: return "provider_model_not_found"
+            case 429: return "provider_rate_limited"
+            case 500...: return "provider_server_error"
+            default: return "provider_error"
+            }
+        case .invalidResponse: return "provider_invalid_response"
+        case .emptyReply: return "provider_empty_reply"
+        case .timeout: return "provider_timeout"
+        case .transport: return "provider_network"
+        }
+    }
+
+    public var retryable: Bool {
+        switch self {
+        case let .http(status, _):
+            return status == 429 || status >= 500
+        case .invalidResponse, .emptyReply, .timeout, .transport:
+            return true
+        }
+    }
+
     public var message: String {
         switch self {
         case let .http(status, detail):
@@ -83,6 +110,24 @@ public enum ProviderError: Error, Equatable, Sendable {
     }
 }
 
+public struct ProviderUsage: Codable, Equatable, Sendable {
+    public let inputTokens: Int?
+    public let outputTokens: Int?
+    public let totalTokens: Int?
+
+    public init(inputTokens: Int?, outputTokens: Int?, totalTokens: Int?) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.totalTokens = totalTokens
+    }
+}
+
+public enum ProviderStreamEvent: Equatable, Sendable {
+    case delta(String)
+    case usage(ProviderUsage)
+    case completed(finishReason: String?)
+}
+
 /// OpenAI-compatible chat client with SSE streaming.
 public struct ProviderChatClient: Sendable {
     private let streaming: LineStreaming
@@ -100,6 +145,34 @@ public struct ProviderChatClient: Sendable {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    for try await event in streamEvents(
+                        configuration: configuration,
+                        apiKey: apiKey,
+                        messages: messages,
+                        maxTokens: maxTokens
+                    ) {
+                        if case let .delta(delta) = event {
+                            continuation.yield(delta)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    public func streamEvents(
+        configuration: ProviderConfiguration,
+        apiKey: String,
+        messages: [ChatMessage],
+        maxTokens: Int = 400
+    ) -> AsyncThrowingStream<ProviderStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
                     let request = try Self.makeRequest(
                         configuration: configuration,
                         apiKey: apiKey,
@@ -111,14 +184,29 @@ public struct ProviderChatClient: Sendable {
                         let detail = await Self.collectText(response.lines)
                         throw ProviderError.http(status: response.statusCode, detail: detail)
                     }
+                    var finishReason: String?
                     for try await line in response.lines {
                         if SSE.isDone(line) {
                             break
                         }
-                        if let delta = SSE.delta(from: line) {
-                            continuation.yield(delta)
+                        guard let chunk = SSE.chunk(from: line) else { continue }
+                        if let delta = chunk.choices.first?.delta?.content, !delta.isEmpty {
+                            continuation.yield(.delta(delta))
+                        }
+                        finishReason = chunk.choices.first?.finishReason ?? finishReason
+                        if let usage = chunk.usage {
+                            continuation.yield(
+                                .usage(
+                                    ProviderUsage(
+                                        inputTokens: usage.promptTokens,
+                                        outputTokens: usage.completionTokens,
+                                        totalTokens: usage.totalTokens
+                                    )
+                                )
+                            )
                         }
                     }
+                    continuation.yield(.completed(finishReason: finishReason))
                     continuation.finish()
                 } catch let error as ProviderError {
                     continuation.finish(throwing: error)
@@ -161,7 +249,8 @@ public struct ProviderChatClient: Sendable {
             messages: messages,
             stream: true,
             temperature: 0.7,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            streamOptions: ChatStreamOptions(includeUsage: true)
         )
         request.httpBody = try JSONEncoder().encode(body)
         return request
@@ -211,11 +300,13 @@ enum SSE {
     }
 
     static func delta(from line: String) -> String? {
+        chunk(from: line)?.choices.first?.delta?.content.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    fileprivate static func chunk(from line: String) -> SSEChunk? {
         guard let payload = payload(line), payload != "[DONE]" else { return nil }
         guard let data = payload.data(using: .utf8) else { return nil }
-        guard let chunk = try? JSONDecoder().decode(SSEChunk.self, from: data) else { return nil }
-        guard let content = chunk.choices.first?.delta.content, !content.isEmpty else { return nil }
-        return content
+        return try? JSONDecoder().decode(SSEChunk.self, from: data)
     }
 
     static func payload(_ line: String) -> String? {
@@ -232,21 +323,50 @@ private struct ChatRequestBody: Encodable {
     let stream: Bool
     let temperature: Double
     let maxTokens: Int
+    let streamOptions: ChatStreamOptions
 
     private enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature
         case maxTokens = "max_tokens"
+        case streamOptions = "stream_options"
     }
 }
 
-private struct SSEChunk: Decodable {
+private struct ChatStreamOptions: Encodable {
+    let includeUsage: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case includeUsage = "include_usage"
+    }
+}
+
+fileprivate struct SSEChunk: Decodable {
     let choices: [SSEChoice]
+    let usage: SSEUsage?
 }
 
-private struct SSEChoice: Decodable {
-    let delta: SSEDelta
+fileprivate struct SSEChoice: Decodable {
+    let delta: SSEDelta?
+    let finishReason: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case delta
+        case finishReason = "finish_reason"
+    }
 }
 
-private struct SSEDelta: Decodable {
+fileprivate struct SSEDelta: Decodable {
     let content: String?
+}
+
+fileprivate struct SSEUsage: Decodable {
+    let promptTokens: Int?
+    let completionTokens: Int?
+    let totalTokens: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
+    }
 }

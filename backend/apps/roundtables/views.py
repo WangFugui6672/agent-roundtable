@@ -10,6 +10,12 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.roundtables.budget import (
+    ACTIVE_STATUSES,
+    MAX_ACTIVE_ROUNDTABLES,
+    MAX_MOCK_ROUNDTABLES_PER_DAY,
+    utc_day_bounds,
+)
 from apps.roundtables.models import AgentProfile, GuestSession, Roundtable, RoundtableAgent
 from apps.roundtables.protocol import iso8601_millis
 from apps.roundtables.serializers import (
@@ -17,6 +23,7 @@ from apps.roundtables.serializers import (
     MessageCreateSerializer,
     RoundtableCreateSerializer,
     RoundtableSerializer,
+    TurnFailSerializer,
     TurnPassSerializer,
     UserMessageCreateSerializer,
 )
@@ -24,12 +31,18 @@ from apps.roundtables.services import (
     create_message,
     create_user_message,
     end_room,
+    fail_turn,
     next_turn,
     pass_turn,
     pause_room,
     resume_room,
 )
-from roundtable.exceptions import GuestSessionRequired, RoundtableNotFound
+from roundtable.exceptions import (
+    ActiveRoundtableLimit,
+    GuestSessionRequired,
+    MockDailyLimit,
+    RoundtableNotFound,
+)
 
 GUEST_SESSION_HEADER = "X-Guest-Session"
 
@@ -82,6 +95,25 @@ class RoundtableListCreateView(APIView):
         provider = body.validated_data.get("provider") or {}
 
         with transaction.atomic():
+            session = GuestSession.objects.select_for_update().get(id=session.id)
+            active_count = Roundtable.objects.filter(
+                guest_session=session,
+                status__in=ACTIVE_STATUSES,
+            ).count()
+            if active_count >= MAX_ACTIVE_ROUNDTABLES:
+                raise ActiveRoundtableLimit()
+
+            if not provider:
+                day_start, day_end = utc_day_bounds()
+                mock_count = Roundtable.objects.filter(
+                    guest_session=session,
+                    provider_kind="",
+                    created_at__gte=day_start,
+                    created_at__lt=day_end,
+                ).count()
+                if mock_count >= MAX_MOCK_ROUNDTABLES_PER_DAY:
+                    raise MockDailyLimit()
+
             roundtable = Roundtable.objects.create(
                 id=uuid.uuid4(),
                 guest_session=session,
@@ -227,6 +259,30 @@ class RoundtableTurnPassView(APIView):
             str(session.id),
             str(body.validated_data["turn_id"]),
             str(body.validated_data["roundtable_agent_id"]),
+            body.validated_data.get("usage"),
+        )
+        if envelope is None:
+            raise RoundtableNotFound()
+        return Response(envelope, status=status.HTTP_201_CREATED)
+
+
+class RoundtableTurnFailView(APIView):
+    """Persist the scheduled Agent's Provider failure exactly once."""
+
+    def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        body = TurnFailSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        envelope = fail_turn(
+            str(roundtable_id),
+            str(session.id),
+            str(body.validated_data["turn_id"]),
+            str(body.validated_data["roundtable_agent_id"]),
+            body.validated_data["failure_code"],
+            body.validated_data["message"],
+            body.validated_data["retryable"],
+            body.validated_data["partial"],
+            body.validated_data.get("usage"),
         )
         if envelope is None:
             raise RoundtableNotFound()

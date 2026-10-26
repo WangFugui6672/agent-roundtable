@@ -143,6 +143,62 @@ public struct RoomCommandResponse: Decodable, Equatable, Sendable {
     }
 }
 
+public struct ProviderUsageReport: Codable, Equatable, Sendable {
+    public let inputTokens: Int?
+    public let outputTokens: Int?
+    public let latencyMs: Int?
+    public let retryCount: Int
+
+    public init(
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        latencyMs: Int? = nil,
+        retryCount: Int = 0
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.latencyMs = latencyMs
+        self.retryCount = retryCount
+    }
+}
+
+public struct BudgetSnapshot: Codable, Equatable, Sendable {
+    public let maxRounds: Int
+    public let maxAgentMessages: Int
+    public let agentMessagesUsed: Int
+    public let maxReportedTokens: Int
+    public let reportedTokens: Int
+    public let maxDurationSeconds: Int
+    public let startedAt: Date?
+    public let elapsedSeconds: Int
+    public let exhaustedReason: String?
+    public let tokenSource: String
+
+    public init(
+        maxRounds: Int,
+        maxAgentMessages: Int,
+        agentMessagesUsed: Int,
+        maxReportedTokens: Int,
+        reportedTokens: Int,
+        maxDurationSeconds: Int,
+        startedAt: Date? = nil,
+        elapsedSeconds: Int = 0,
+        exhaustedReason: String? = nil,
+        tokenSource: String = "client_reported"
+    ) {
+        self.maxRounds = maxRounds
+        self.maxAgentMessages = maxAgentMessages
+        self.agentMessagesUsed = agentMessagesUsed
+        self.maxReportedTokens = maxReportedTokens
+        self.reportedTokens = reportedTokens
+        self.maxDurationSeconds = maxDurationSeconds
+        self.startedAt = startedAt
+        self.elapsedSeconds = elapsedSeconds
+        self.exhaustedReason = exhaustedReason
+        self.tokenSource = tokenSource
+    }
+}
+
 public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let topic: String
@@ -154,6 +210,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let pausePending: Bool?
     public let activeTurn: ScheduledTurn?
     public let provider: ProviderMetadata?
+    public let budget: BudgetSnapshot?
     public let createdAt: Date
     public let updatedAt: Date
     public var participants: [Participant]
@@ -169,6 +226,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         pausePending: Bool? = nil,
         activeTurn: ScheduledTurn? = nil,
         provider: ProviderMetadata? = nil,
+        budget: BudgetSnapshot? = nil,
         createdAt: Date,
         updatedAt: Date,
         participants: [Participant]
@@ -183,9 +241,95 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         self.pausePending = pausePending
         self.activeTurn = activeTurn
         self.provider = provider
+        self.budget = budget
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.participants = participants
+    }
+}
+
+public struct TurnFailureSubmission: Codable, Equatable, Sendable {
+    public let turnId: UUID
+    public let roundtableAgentId: UUID
+    public let failureCode: String
+    public let message: String
+    public let retryable: Bool
+    public let partial: String?
+    public let usage: ProviderUsageReport?
+
+    public init(
+        turnId: UUID,
+        roundtableAgentId: UUID,
+        failureCode: String,
+        message: String,
+        retryable: Bool,
+        partial: String? = nil,
+        usage: ProviderUsageReport? = nil
+    ) {
+        self.turnId = turnId
+        self.roundtableAgentId = roundtableAgentId
+        self.failureCode = failureCode
+        self.message = message
+        self.retryable = retryable
+        self.partial = partial
+        self.usage = usage
+    }
+}
+
+public struct TurnFailure: Codable, Equatable, Sendable, Identifiable {
+    public let turnId: UUID
+    public let round: Int
+    public let agentId: UUID
+    public let agentName: String
+    public let failureCode: String
+    public let message: String
+    public let retryable: Bool
+    public let partial: String?
+
+    public var id: UUID { turnId }
+
+    public init(
+        turnId: UUID,
+        round: Int,
+        agentId: UUID,
+        agentName: String,
+        failureCode: String,
+        message: String,
+        retryable: Bool,
+        partial: String? = nil
+    ) {
+        self.turnId = turnId
+        self.round = round
+        self.agentId = agentId
+        self.agentName = agentName
+        self.failureCode = failureCode
+        self.message = message
+        self.retryable = retryable
+        self.partial = partial
+    }
+}
+
+public enum BudgetExhaustionReason: String, Codable, Sendable {
+    case duration
+    case agentMessages = "agent_messages"
+    case reportedTokens = "reported_tokens"
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = BudgetExhaustionReason(rawValue: raw) ?? .unknown
+    }
+}
+
+public struct BudgetExhaustion: Codable, Equatable, Sendable {
+    public let reason: BudgetExhaustionReason
+    public let message: String
+    public let round: Int
+
+    public init(reason: BudgetExhaustionReason, message: String, round: Int) {
+        self.reason = reason
+        self.message = message
+        self.round = round
     }
 }
 

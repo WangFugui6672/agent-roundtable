@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.roundtables.message_validation import validate_agent_message
@@ -10,6 +11,7 @@ from apps.roundtables.protocol import (
     BODY_HARD_MAX_CHARS,
     CLAIM_MAX_CHARS,
     DEFAULT_CONFIDENCE,
+    FAILURE_CODES,
     MAX_REFERENCES,
     iso8601_millis,
 )
@@ -31,6 +33,19 @@ def contains_secret(data: object) -> bool:
     elif isinstance(data, (list, tuple)):
         return any(contains_secret(item) for item in data)
     return False
+
+
+class UsageInputSerializer(serializers.Serializer):
+    input_tokens = serializers.IntegerField(
+        min_value=0, max_value=1_000_000, allow_null=True, required=False
+    )
+    output_tokens = serializers.IntegerField(
+        min_value=0, max_value=1_000_000, allow_null=True, required=False
+    )
+    latency_ms = serializers.IntegerField(
+        min_value=0, max_value=600_000, allow_null=True, required=False
+    )
+    retry_count = serializers.IntegerField(min_value=0, max_value=10, default=0)
 
 
 class AgentProfileSerializer(serializers.ModelSerializer):
@@ -58,6 +73,33 @@ class ParticipantSerializer(serializers.ModelSerializer):
         model = RoundtableAgent
         fields = ["id", "position", "state", "agent"]
         read_only_fields = fields
+
+
+class BudgetSerializer(serializers.Serializer):
+    max_rounds = serializers.IntegerField()
+    max_agent_messages = serializers.IntegerField()
+    agent_messages_used = serializers.SerializerMethodField()
+    max_reported_tokens = serializers.IntegerField()
+    reported_tokens = serializers.IntegerField()
+    max_duration_seconds = serializers.IntegerField()
+    started_at = serializers.SerializerMethodField()
+    elapsed_seconds = serializers.SerializerMethodField()
+    exhausted_reason = serializers.CharField(source="budget_exhausted_reason")
+    token_source = serializers.SerializerMethodField()
+
+    def get_agent_messages_used(self, obj: Roundtable) -> int:
+        return obj.messages.filter(author_type=Message.AuthorType.AGENT).count()
+
+    def get_started_at(self, obj: Roundtable) -> str | None:
+        return iso8601_millis(obj.started_at) if obj.started_at else None
+
+    def get_elapsed_seconds(self, obj: Roundtable) -> int:
+        if obj.started_at is None:
+            return 0
+        return max(0, int((timezone.now() - obj.started_at).total_seconds()))
+
+    def get_token_source(self, obj: Roundtable) -> str:
+        return "client_reported"
 
 
 class TurnSerializer(serializers.ModelSerializer):
@@ -105,6 +147,7 @@ class RoundtableSerializer(serializers.ModelSerializer):
     participants = ParticipantSerializer(source="agents", many=True, read_only=True)
     last_sequence = serializers.IntegerField(source="event_sequence", read_only=True)
     provider = serializers.SerializerMethodField()
+    budget = serializers.SerializerMethodField()
     active_turn = serializers.SerializerMethodField()
     created_at = serializers.SerializerMethodField()
     updated_at = serializers.SerializerMethodField()
@@ -122,6 +165,7 @@ class RoundtableSerializer(serializers.ModelSerializer):
             "pause_pending",
             "active_turn",
             "provider",
+            "budget",
             "created_at",
             "updated_at",
             "participants",
@@ -136,6 +180,9 @@ class RoundtableSerializer(serializers.ModelSerializer):
             "base_url": obj.provider_base_url,
             "model": obj.provider_model,
         }
+
+    def get_budget(self, obj: Roundtable) -> dict:
+        return BudgetSerializer(obj).data
 
     def get_active_turn(self, obj: Roundtable) -> dict | None:
         turn = (
@@ -312,6 +359,7 @@ class MessageCreateSerializer(serializers.Serializer):
     confidence = serializers.FloatField(
         min_value=0, max_value=1, required=False, default=DEFAULT_CONFIDENCE
     )
+    usage = UsageInputSerializer(required=False, allow_null=True)
 
     def validate(self, attrs: dict) -> dict:
         if contains_secret(self.initial_data):
@@ -372,3 +420,30 @@ class MessageCreateSerializer(serializers.Serializer):
 class TurnPassSerializer(serializers.Serializer):
     turn_id = serializers.UUIDField()
     roundtable_agent_id = serializers.UUIDField()
+    usage = UsageInputSerializer(required=False, allow_null=True)
+
+    def validate(self, attrs: dict) -> dict:
+        if contains_secret(self.initial_data):
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
+        return attrs
+
+
+class TurnFailSerializer(serializers.Serializer):
+    turn_id = serializers.UUIDField()
+    roundtable_agent_id = serializers.UUIDField()
+    failure_code = serializers.ChoiceField(choices=sorted(FAILURE_CODES))
+    message = serializers.CharField(max_length=500, trim_whitespace=True, allow_blank=False)
+    retryable = serializers.BooleanField()
+    partial = serializers.CharField(
+        max_length=BODY_HARD_MAX_CHARS,
+        trim_whitespace=True,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    usage = UsageInputSerializer(required=False, allow_null=True)
+
+    def validate(self, attrs: dict) -> dict:
+        if contains_secret(self.initial_data):
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
+        return attrs

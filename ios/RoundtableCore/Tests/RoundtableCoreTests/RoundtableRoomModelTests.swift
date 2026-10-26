@@ -207,4 +207,81 @@ final class RoundtableRoomModelTests: XCTestCase {
         XCTAssertEqual(model.participants[0].state, .waiting)
         XCTAssertNil(model.activeTurn)
     }
+
+    func testFailureIsAppliedOnceAndKeepsCompletedMessages() throws {
+        let model = RoundtableRoomModel()
+        model.apply(try EventEnvelope.decode(from: Fixtures.activeTurnJoinedEnvelope))
+        model.apply(
+            try envelope("message.completed", 3, "{\"message\": \(Fixtures.messageJSON)}")
+        )
+        let failure = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "agent.failed",
+                sequence: 4,
+                payload: """
+                {
+                  "turn_id": "\(Fixtures.turnID.uuidString)",
+                  "round": 1,
+                  "agent_id": "\(Fixtures.advocateID.uuidString)",
+                  "agent_name": "方案派",
+                  "failure_code": "provider_network",
+                  "message": "网络请求失败。",
+                  "retryable": true,
+                  "partial": "已生成的半段"
+                }
+                """,
+                eventID: UUID()
+            )
+        )
+        let duplicate = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "agent.failed",
+                sequence: 5,
+                payload: """
+                {
+                  "turn_id": "\(Fixtures.turnID.uuidString)",
+                  "round": 1,
+                  "agent_id": "\(Fixtures.advocateID.uuidString)",
+                  "agent_name": "方案派",
+                  "failure_code": "provider_network",
+                  "message": "网络请求失败。",
+                  "retryable": true,
+                  "partial": "已生成的半段"
+                }
+                """,
+                eventID: UUID()
+            )
+        )
+
+        model.apply(failure)
+        model.apply(duplicate)
+
+        XCTAssertEqual(model.messages.count, 1)
+        XCTAssertEqual(model.failures.count, 1)
+        XCTAssertEqual(model.failures[0].partial, "已生成的半段")
+        XCTAssertEqual(model.participants[0].state, .failed)
+        XCTAssertNil(model.activeTurn)
+    }
+
+    func testBudgetExhaustionCompletesTheRoomOnce() throws {
+        let model = RoundtableRoomModel()
+        model.apply(try joinedEnvelope())
+        let budget = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "budget.exhausted",
+                sequence: 3,
+                payload: """
+                {"reason": "duration", "message": "讨论已达到 90 秒时间上限。", "round": 1}
+                """,
+                eventID: UUID()
+            )
+        )
+
+        model.apply(budget)
+        model.apply(budget)
+
+        XCTAssertEqual(model.status, .completed)
+        XCTAssertEqual(model.budgetExhaustion?.reason, .duration)
+        XCTAssertEqual(model.lastSequence, 3)
+    }
 }

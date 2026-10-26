@@ -28,6 +28,9 @@ extension RealTurnTests {
                 [invalidJSON],
                 [validJSON]
             ],
+            usageByAttempt: [
+                ProviderUsage(inputTokens: 10, outputTokens: 2, totalTokens: 12)
+            ],
             responses: secondRoundResponses(skepticMessageID: skepticMessageID)
         )
         enableProvider(on: model)
@@ -60,11 +63,26 @@ extension RealTurnTests {
             messageBodies.last?["challenge_target_agent_id"] as? String,
             skeptic.agentID.uuidString
         )
+        let usage = try XCTUnwrap(messageBodies.last?["usage"] as? [String: Any])
+        XCTAssertEqual(usage["input_tokens"] as? Int, 20)
+        XCTAssertEqual(usage["output_tokens"] as? Int, 4)
+        XCTAssertEqual(usage["retry_count"] as? Int, 1)
     }
 
     func testSecondRoundStopsAfterOneStructuredRetry() async throws {
         let invalidJSON = #"{"message_type":"challenge"}"#
         let skepticMessageID = UUID(uuidString: "6F0E0000-0000-4000-8000-0000000000AA")!
+        var responses = secondRoundResponses(skepticMessageID: skepticMessageID)
+        responses.insert(
+            failureResponse(
+                advocate,
+                code: "provider_invalid_response",
+                retryable: true,
+                sequence: 11,
+                round: 2
+            ),
+            at: 7
+        )
         let (model, _) = makeModel(
             deltasByAttempt: [
                 ["先做两周实验。"],
@@ -73,7 +91,7 @@ extension RealTurnTests {
                 [invalidJSON],
                 [invalidJSON]
             ],
-            responses: secondRoundResponses(skepticMessageID: skepticMessageID)
+            responses: responses
         )
         enableProvider(on: model)
         model.present(snapshot())
@@ -85,8 +103,11 @@ extension RealTurnTests {
         }
         XCTAssertEqual(agentID, advocate.agentID)
         XCTAssertTrue(message.contains("已重试一次"))
+        XCTAssertEqual(model.failureCode, "provider_invalid_response")
+        XCTAssertTrue(model.failureRetryable)
         let recordedAttempts = await lastStream?.recordedAttemptCount()
         XCTAssertEqual(recordedAttempts, 5)
         XCTAssertEqual(model.room?.messages.count, 2)
+        XCTAssertEqual(model.room?.failures.count, 1)
     }
 }

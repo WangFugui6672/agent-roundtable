@@ -10,6 +10,7 @@ final class CreateRoundtableUITests: XCTestCase {
     func testCreateRoundtableAndPlayMockRound() throws {
         let app = XCUIApplication()
         app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
+        app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launch()
 
         let topic = app.descendants(matching: .any).matching(identifier: "create.topic").firstMatch
@@ -30,6 +31,9 @@ final class CreateRoundtableUITests: XCTestCase {
             emptyRoom.waitForExistence(timeout: 25),
             "没有进入空圆桌：\(app.debugDescription)"
         )
+        let budget = app.descendants(matching: .any).matching(identifier: "room.budget").firstMatch
+        XCTAssertTrue(budget.waitForExistence(timeout: 5))
+        XCTAssertTrue(budget.label.contains("0/6"))
         attachScreenshot(of: app, named: "01-empty-roundtable")
 
         let mock = app.buttons["room.mock"]

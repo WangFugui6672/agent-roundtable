@@ -40,6 +40,17 @@ struct RoundtableView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+
+            if let budget = room.snapshot?.budget {
+                Text(
+                    "\(budget.agentMessagesUsed)/\(budget.maxAgentMessages) 条 · "
+                        + "\(budget.reportedTokens)/\(budget.maxReportedTokens) Token（本机上报） · "
+                        + "\(budget.elapsedSeconds)/\(budget.maxDurationSeconds) 秒"
+                )
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("room.budget")
+            }
         }
         .padding(16)
     }
@@ -177,7 +188,19 @@ struct RoundtableView: View {
 
     @ViewBuilder
     private var turnStatus: some View {
-        if let failure = turn.failure {
+        if let exhaustion = room.budgetExhaustion {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "gauge.with.dots.needle.100percent")
+                    .foregroundStyle(.orange)
+                Text(exhaustion.message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("room.budget.exhausted")
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        } else if let failure = turn.failure {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -187,11 +210,13 @@ struct RoundtableView: View {
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("room.turn.error")
                     Spacer(minLength: 8)
-                    Button("重试") {
-                        Task { await model.retryTurn() }
+                    if model.failureRetryable {
+                        Button("继续") {
+                            Task { await model.retryTurn() }
+                        }
+                        .font(.footnote)
+                        .accessibilityIdentifier("room.turn.retry")
                     }
-                    .font(.footnote)
-                    .accessibilityIdentifier("room.turn.retry")
                 }
                 if let partial = failure.partial {
                     Text(partial)
@@ -231,7 +256,7 @@ struct RoundtableView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if room.messages.isEmpty && turn.draft == nil {
+                    if room.messages.isEmpty && room.failures.isEmpty && turn.draft == nil {
                         emptyState
                     } else {
                         ForEach(room.messages) { message in
@@ -241,6 +266,10 @@ struct RoundtableView: View {
                                 participants: room.participants
                             )
                                 .id(message.id)
+                        }
+                        ForEach(room.failures) { failure in
+                            TurnFailureRow(failure: failure)
+                                .id("room.failure.\(failure.turnId)")
                         }
                         if let draft = turn.draft {
                             StreamingMessageRow(name: draft.agentName, text: draft.text)
@@ -254,6 +283,12 @@ struct RoundtableView: View {
                 guard let last = room.messages.last else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
+            .onChange(of: room.failures.count) { _, _ in
+                guard let last = room.failures.last else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("room.failure.\(last.turnId)", anchor: .bottom)
                 }
             }
             .onChange(of: turn.draft?.text ?? "") { _, _ in
@@ -284,6 +319,9 @@ struct RoundtableView: View {
 
     private var statusBadge: (text: String, tint: Color) {
         guard let status = room.status else { return ("准备中", .secondary) }
+        if room.budgetExhaustion != nil {
+            return ("预算用尽", .orange)
+        }
         if room.pausePending {
             return ("将在当前发言后暂停", .orange)
         }
@@ -308,5 +346,60 @@ struct RoundtableView: View {
         case .closed: return ("已断开", .secondary)
         case .failed: return ("连接失败", .red)
         }
+    }
+}
+
+private struct TurnFailureRow: View {
+    let failure: TurnFailure
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.octagon.fill")
+                    .foregroundStyle(.red)
+                Text("\(failure.agentName) 未能完成本轮")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(failure.retryable ? "可重试" : "不可重试")
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule().fill(
+                            failure.retryable ? Color.orange.opacity(0.14) : Color.red.opacity(0.12)
+                        )
+                    )
+                    .foregroundStyle(failure.retryable ? .orange : .red)
+            }
+            Text(failure.message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let partial = failure.partial, !partial.isEmpty {
+                Text(partial)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(5)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.tertiarySystemGroupedBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            Text(failure.failureCode)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .background(Color.red.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.red.opacity(0.16))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityIdentifier("room.failure.\(failure.turnId.uuidString)")
+        .accessibilityLabel(
+            "\(failure.agentName) 失败，\(failure.failureCode)，"
+                + (failure.retryable ? "可重试" : "不可重试")
+        )
     }
 }
