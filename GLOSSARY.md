@@ -8,6 +8,10 @@
 
 不要与“聊天室”混用。聊天室强调自由聊天，圆桌强调一个议题和收敛结果。
 
+## 房间（Room）
+
+圆桌在实时协议中的连接上下文。`room_id` 始终等于圆桌 ID，事件名沿用 PRD 的 `room.*` 前缀（如 `room.joined`）；产品和界面文案仍统一称“圆桌”，不把房间当成第二个实体。
+
 ## 议题（Topic）
 
 用户希望 Agent 讨论的核心问题或决策。议题必须在创建圆桌时确定，并在讨论过程中保持可追溯。
@@ -25,6 +29,10 @@
 ## RoundtableAgent
 
 AgentProfile 在某个圆桌中的实例。它保存该圆桌内的当前目标和状态。
+
+## 参与者（Participant）
+
+圆桌快照与界面中对 RoundtableAgent 的称呼。`participants` 数组就是该圆桌的 RoundtableAgent 列表，顺序由 `position` 决定。
 
 ## 主持人（Host）
 
