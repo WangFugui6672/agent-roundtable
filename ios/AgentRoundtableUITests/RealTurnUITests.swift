@@ -48,7 +48,7 @@ final class RealTurnUITests: XCTestCase {
         XCTAssertTrue(speak.waitForExistence(timeout: 5))
         speak.tap()
 
-        let error = app.descendants(matching: .any).matching(identifier: "room.turnError").firstMatch
+        let error = app.descendants(matching: .any).matching(identifier: "room.turn.error").firstMatch
         XCTAssertTrue(
             error.waitForExistence(timeout: 30),
             "Provider 失败后没有显示错误：\(app.debugDescription)"

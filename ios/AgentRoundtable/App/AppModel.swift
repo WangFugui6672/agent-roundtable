@@ -37,12 +37,15 @@ final class AppModel {
         case thinking(agentID: UUID)
         case typing(agentID: UUID, text: String)
         case submitting(agentID: UUID)
-        case failed(agentID: UUID, message: String)
+        case completed(agentID: UUID)
+        /// `partial` keeps the streamed text so a failed turn is retryable
+        /// without losing what the model already produced (PRD 7.12).
+        case failed(agentID: UUID, message: String, partial: String?)
 
         var isBusy: Bool {
             switch self {
             case .thinking, .typing, .submitting: return true
-            case .idle, .failed: return false
+            case .idle, .completed, .failed: return false
             }
         }
     }
@@ -108,10 +111,10 @@ final class AppModel {
             do {
                 try await loadInitialState()
             } catch {
-                phase = .failed(Self.message(for: error))
+                phase = .failed(Self.userMessage(for: error))
             }
         } catch {
-            phase = .failed(Self.message(for: error))
+            phase = .failed(Self.userMessage(for: error))
         }
     }
 
@@ -186,19 +189,24 @@ final class AppModel {
             )
             open(snapshot)
         } catch {
-            createError = Self.message(for: error)
+            createError = Self.userMessage(for: error)
         }
     }
 
     // MARK: - Room
 
-    func open(_ snapshot: RoundtableSnapshot, connectStream: Bool = true) {
+    /// Projects a snapshot into the room without opening the socket; `open`
+    /// adds the stream. Splitting the two keeps the projection testable
+    /// without a boolean flag.
+    func present(_ snapshot: RoundtableSnapshot) {
         let room = RoundtableRoomModel()
         room.seed(snapshot)
         self.room = room
-        if connectStream {
-            connect(roomID: snapshot.id, cursor: snapshot.lastSequence)
-        }
+    }
+
+    func open(_ snapshot: RoundtableSnapshot) {
+        present(snapshot)
+        connect(roomID: snapshot.id, cursor: snapshot.lastSequence)
     }
 
     private func connect(roomID: UUID, cursor: Int) {
@@ -232,7 +240,7 @@ final class AppModel {
                 }
                 self?.streamState = .closed
             } catch {
-                self?.streamState = .failed(Self.message(for: error))
+                self?.streamState = .failed(Self.userMessage(for: error))
             }
         }
     }
@@ -244,7 +252,7 @@ final class AppModel {
         do {
             try await stream.runMockRound()
         } catch {
-            streamState = .failed(Self.message(for: error))
+            streamState = .failed(Self.userMessage(for: error))
         }
     }
 
@@ -272,7 +280,18 @@ final class AppModel {
         return URL(string: "http://localhost:8000")!
     }
 
-    static func message(for error: Error) -> String {
+    /// Single mapping from any error to copy shown in the UI. Provider errors
+    /// already carry actionable text (PRD 7.13), so they win over the fallback.
+    static func userMessage(for error: Error) -> String {
+        if let providerError = error as? ProviderError {
+            return providerError.message
+        }
+        if let validation = error as? ProviderValidationError {
+            return validation.message
+        }
+        if let keychain = error as? KeychainError {
+            return keychain.message
+        }
         if let apiError = error as? APIError {
             return apiError.message
         }

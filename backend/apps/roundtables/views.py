@@ -119,6 +119,8 @@ class RoundtableMessageView(APIView):
         body = MessageCreateSerializer(data=request.data, context={"roundtable": roundtable})
         body.is_valid(raise_exception=True)
         envelope = create_message(str(roundtable.id), str(session.id), body.validated_data)
+        if envelope is None:
+            raise RoundtableNotFound()
 
         channel_layer = get_channel_layer()
         if channel_layer is not None:

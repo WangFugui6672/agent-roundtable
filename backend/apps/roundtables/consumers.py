@@ -65,6 +65,9 @@ class RoundtableConsumer(AsyncJsonWebsocketConsumer):
             return
 
         await self.accept()
+        # Subscribe before replaying: anything submitted from now on either
+        # arrives as a broadcast or as a replayed event, and the client
+        # dedupes by event_id.
         await self.channel_layer.group_add(room_group_name(self.roundtable_id), self.channel_name)
         await self.send_json(snapshot)
 

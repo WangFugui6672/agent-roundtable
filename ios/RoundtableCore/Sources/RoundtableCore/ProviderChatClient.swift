@@ -50,6 +50,7 @@ public enum ProviderError: Error, Equatable, Sendable {
     case http(status: Int, detail: String)
     case invalidResponse(String)
     case emptyReply
+    case timeout
     case transport(String)
 
     public var message: String {
@@ -74,6 +75,8 @@ public enum ProviderError: Error, Equatable, Sendable {
             return "Provider 响应格式不正确：\(reason)"
         case .emptyReply:
             return "Provider 返回了空内容。"
+        case .timeout:
+            return "请求超时（60 秒），Provider 可能繁忙或网络不稳定。"
         case let .transport(reason):
             return "网络请求失败：\(reason)"
         }
@@ -121,7 +124,9 @@ public struct ProviderChatClient: Sendable {
                     continuation.finish(throwing: error)
                 } catch {
                     let nsError = error as NSError
-                    if nsError.domain == NSURLErrorDomain {
+                    if nsError.code == NSURLErrorTimedOut {
+                        continuation.finish(throwing: ProviderError.timeout)
+                    } else if nsError.domain == NSURLErrorDomain {
                         continuation.finish(
                             throwing: ProviderError.transport(nsError.localizedDescription)
                         )

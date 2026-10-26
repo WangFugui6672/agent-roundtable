@@ -54,7 +54,7 @@ struct RoundtableView: View {
                         ParticipantChip(
                             participant: participant,
                             isActive: room.activeParticipantId == participant.id
-                                || isTurnAgent(participant.id)
+                                || turn.agentID == participant.id
                         )
                     }
                     .buttonStyle(.plain)
@@ -68,113 +68,146 @@ struct RoundtableView: View {
         }
     }
 
-    @ViewBuilder
-    private var turnStatus: some View {
+    private struct TurnFailure {
+        let message: String
+        let partial: String?
+    }
+
+    private struct TurnBanner {
+        let text: String
+        let icon: String
+        let tint: Color
+        let identifier: String
+    }
+
+    private struct TurnPresentation {
+        var banner: TurnBanner?
+        var failure: TurnFailure?
+        var draft: (agentName: String, text: String)?
+        var agentID: UUID?
+    }
+
+    /// One switch over `turnState`; everything else in the view reads this.
+    private var turn: TurnPresentation {
+        func name(_ id: UUID) -> String {
+            room.participants.first(where: { $0.id == id })?.agent.name ?? "Agent"
+        }
+
         switch model.turnState {
         case .idle:
-            EmptyView()
+            return TurnPresentation()
         case let .thinking(agentID):
-            turnBanner(
-                text: "\(name(of: agentID)) 正在思考…",
-                icon: "brain",
-                tint: .orange,
-                identifier: "room.turn.thinking"
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "\(name(agentID)) 正在思考…",
+                    icon: "brain",
+                    tint: .orange,
+                    identifier: "room.turn.thinking"
+                ),
+                agentID: agentID
+            )
+        case let .typing(agentID, text):
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "\(name(agentID)) 正在输入…",
+                    icon: "ellipsis.bubble",
+                    tint: .accentColor,
+                    identifier: "room.turn.typing"
+                ),
+                draft: (name(agentID), text),
+                agentID: agentID
             )
         case let .submitting(agentID):
-            turnBanner(
-                text: "正在提交 \(name(of: agentID)) 的发言…",
-                icon: "arrow.up.circle",
-                tint: .secondary,
-                identifier: "room.turn.submitting"
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "正在提交 \(name(agentID)) 的发言…",
+                    icon: "arrow.up.circle",
+                    tint: .secondary,
+                    identifier: "room.turn.submitting"
+                ),
+                agentID: agentID
             )
-        case let .failed(_, message):
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .accessibilityIdentifier("room.turnError")
-                Spacer(minLength: 8)
-                Button("重试") { model.resetTurn() }
+        case let .completed(agentID):
+            return TurnPresentation(
+                banner: TurnBanner(
+                    text: "\(name(agentID)) 的发言已提交",
+                    icon: "checkmark.circle",
+                    tint: .green,
+                    identifier: "room.turn.completed"
+                ),
+                agentID: agentID
+            )
+        case let .failed(agentID, message, partial):
+            return TurnPresentation(
+                failure: TurnFailure(message: message, partial: partial),
+                agentID: agentID
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var turnStatus: some View {
+        if let failure = turn.failure {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    Text(failure.message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("room.turn.error")
+                    Spacer(minLength: 8)
+                    Button("重试") {
+                        Task { await model.retryTurn() }
+                    }
                     .font(.footnote)
                     .accessibilityIdentifier("room.turn.retry")
+                }
+                if let partial = failure.partial {
+                    Text(partial)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                        .accessibilityIdentifier("room.turn.partial")
+                }
             }
             .padding(12)
             .background(Color.red.opacity(0.08))
-        case .typing:
-            turnBanner(
-                text: "\(name(of: draftAgentID)) 正在输入…",
-                icon: "ellipsis.bubble",
-                tint: .accentColor,
-                identifier: "room.turn.typing"
-            )
+        } else if let banner = turn.banner {
+            HStack(spacing: 8) {
+                Image(systemName: banner.icon)
+                    .foregroundStyle(banner.tint)
+                Text(banner.text)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(banner.identifier)
+                Spacer()
+                if case .completed = model.turnState {
+                    Button("关闭") { model.dismissTurnError() }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("room.turn.dismiss")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-    }
-
-    private func turnBanner(
-        text: String,
-        icon: String,
-        tint: Color,
-        identifier: String
-    ) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(tint)
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier(identifier)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-    }
-
-    private var draftAgentID: UUID? {
-        if case let .typing(agentID, _) = model.turnState { return agentID }
-        return nil
-    }
-
-    private var draftText: String? {
-        if case let .typing(_, text) = model.turnState { return text }
-        return nil
-    }
-
-    private func isTurnAgent(_ id: UUID) -> Bool {
-        switch model.turnState {
-        case let .thinking(agentID), let .typing(agentID, _), let .submitting(agentID),
-             let .failed(agentID, _):
-            return agentID == id
-        case .idle:
-            return false
-        }
-    }
-
-    private func name(of id: UUID?) -> String {
-        guard let id, let participant = room.participants.first(where: { $0.id == id }) else {
-            return "Agent"
-        }
-        return participant.agent.name
     }
 
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if room.messages.isEmpty && draftText == nil {
+                    if room.messages.isEmpty && turn.draft == nil {
                         emptyState
                     } else {
                         ForEach(room.messages) { message in
                             MessageRow(message: message)
                                 .id(message.id)
                         }
-                        if let draftText {
-                            StreamingMessageRow(
-                                name: name(of: draftAgentID),
-                                text: draftText
-                            )
-                            .id("room.turn.draft")
+                        if let draft = turn.draft {
+                            StreamingMessageRow(name: draft.agentName, text: draft.text)
+                                .id("room.turn.draft")
                         }
                     }
                 }
@@ -186,8 +219,8 @@ struct RoundtableView: View {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
-            .onChange(of: draftText ?? "") { _, _ in
-                guard draftText != nil else { return }
+            .onChange(of: turn.draft?.text ?? "") { _, _ in
+                guard turn.draft != nil else { return }
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo("room.turn.draft", anchor: .bottom)
                 }
