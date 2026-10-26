@@ -49,13 +49,23 @@ final class ProviderProbeTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
     }
 
-    func testSuccessfulProbeWithoutModelListStillSucceeds() async throws {
+    func testSuccessfulProbeWithoutModelListStillSucceeds() async {
         let (probe, _) = probe(.success(.init(data: Data("{}".utf8), statusCode: 200)))
 
         let outcome = await probe.check(configuration: configuration, apiKey: "sk-test")
 
         XCTAssertEqual(outcome, .ok(modelCount: nil))
-        XCTAssertTrue(outcome.isSuccess)
+    }
+
+    func testModelMissingFromProviderListIsReported() async {
+        let body = #"{"data":[{"id":"some-other-model"}]}"#
+        let (probe, _) = probe(.success(.init(data: Data(body.utf8), statusCode: 200)))
+
+        let outcome = await probe.check(configuration: configuration, apiKey: "sk-test")
+
+        XCTAssertEqual(outcome, .modelMissing("deepseek-chat"))
+        XCTAssertTrue(outcome.message.contains("deepseek-chat"))
+        XCTAssertTrue(outcome.message.contains("不在"))
     }
 
     func testUnauthorizedKeyIsReported() async {
@@ -66,7 +76,6 @@ final class ProviderProbeTests: XCTestCase {
 
             XCTAssertEqual(outcome, .invalidKey, "status \(status)")
             XCTAssertTrue(outcome.message.contains("API Key"))
-            XCTAssertFalse(outcome.isSuccess)
         }
     }
 
@@ -76,7 +85,16 @@ final class ProviderProbeTests: XCTestCase {
         let outcome = await probe.check(configuration: configuration, apiKey: "sk-test")
 
         XCTAssertTrue(outcome.message.contains("BaseURL"))
-        XCTAssertFalse(outcome.isSuccess)
+    }
+
+    func testBillingAndRateLimitHaveSpecificMessages() async {
+        for (status, keyword) in [(402, "余额"), (429, "频繁")] {
+            let (probe, _) = probe(.success(.init(data: Data(), statusCode: status)))
+
+            let outcome = await probe.check(configuration: configuration, apiKey: "sk-test")
+
+            XCTAssertTrue(outcome.message.contains(keyword), "status \(status): \(outcome.message)")
+        }
     }
 
     func testServerErrorIsReportedWithStatus() async {
@@ -85,7 +103,6 @@ final class ProviderProbeTests: XCTestCase {
         let outcome = await probe.check(configuration: configuration, apiKey: "sk-test")
 
         XCTAssertTrue(outcome.message.contains("500"))
-        XCTAssertFalse(outcome.isSuccess)
     }
 
     func testNetworkFailureIsReportedAsUnreachable() async {
@@ -99,18 +116,9 @@ final class ProviderProbeTests: XCTestCase {
         XCTAssertTrue(outcome.message.contains("网络"))
     }
 
-    func testBaseURLTrailingSlashDoesNotDuplicateSeparator() async {
-        let transport = ProbeTransport(result: .success(.init(data: Data("{}".utf8), statusCode: 200)))
-        let probe = ProviderProbe(transport: transport)
-        let withSlash = ProviderConfiguration(
-            kind: .custom,
-            baseURL: "https://example.com/v1/",
-            model: "m"
-        )
+    func testBaseURLTrailingSlashDoesNotDuplicateSeparator() {
+        let withSlash = ProviderURL.modelsEndpoint(baseURL: "https://example.com/v1/")
 
-        _ = await probe.check(configuration: withSlash, apiKey: "k")
-
-        let request = await transport.recordedRequests().first
-        XCTAssertEqual(request?.url?.absoluteString, "https://example.com/v1/models")
+        XCTAssertEqual(withSlash?.absoluteString, "https://example.com/v1/models")
     }
 }

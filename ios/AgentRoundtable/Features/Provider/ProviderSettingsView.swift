@@ -29,6 +29,12 @@ struct ProviderSettingsView: View {
         app.isProviderConfigured(kind)
     }
 
+    /// A leftover configuration may exist without its key (device restore), and
+    /// it must still be deletable so the user can return to the Mock demo.
+    private var hasConfiguration: Bool {
+        app.providerConfiguration(for: kind) != nil
+    }
+
     private var canSave: Bool {
         !app.isSavingProvider
             && !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -106,55 +112,47 @@ struct ProviderSettingsView: View {
 
     private var fields: some View {
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("BaseURL")
-                    .font(.subheadline.weight(.medium))
+            fieldGroup("BaseURL") {
                 TextField("https://…/v1", text: $baseURL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .focused($focusedField, equals: .baseURL)
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(.secondarySystemGroupedBackground))
-                    )
+                    .providerFieldStyle()
                     .accessibilityIdentifier("provider.baseURL")
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Model")
-                    .font(.subheadline.weight(.medium))
+            fieldGroup("Model") {
                 TextField("例如 qwen-plus", text: $modelName)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .model)
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(.secondarySystemGroupedBackground))
-                    )
+                    .providerFieldStyle()
                     .accessibilityIdentifier("provider.model")
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("API Key")
-                    .font(.subheadline.weight(.medium))
+            fieldGroup("API Key") {
                 SecureField(isConfigured ? "已保存在 Keychain，留空则不修改" : "sk-…", text: $apiKey)
-                    .textContentType(.password)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .apiKey)
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(.secondarySystemGroupedBackground))
-                    )
+                    .providerFieldStyle()
                     .accessibilityIdentifier("provider.apiKey")
                 Text("Key 只保存在本机 Keychain，不会上传到圆桌后端。")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+        }
+    }
+
+    private func fieldGroup<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+            content()
         }
     }
 
@@ -178,6 +176,11 @@ struct ProviderSettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.green)
                     .accessibilityIdentifier("provider.status")
+            } else if hasConfiguration {
+                Label("API Key 已丢失，请重新输入后保存。", systemImage: "key.slash")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("provider.missingKey")
             }
         }
     }
@@ -185,7 +188,9 @@ struct ProviderSettingsView: View {
     private var actions: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                if app.saveProvider(kind: kind, baseURL: baseURL, model: modelName, apiKey: apiKey) {
+                if app.saveProvider(
+                    ProviderDraft(kind: kind, baseURL: baseURL, model: modelName, apiKey: apiKey)
+                ) {
                     apiKey = ""
                 }
             } label: {
@@ -201,10 +206,7 @@ struct ProviderSettingsView: View {
             Button {
                 Task {
                     await app.checkProvider(
-                        kind: kind,
-                        baseURL: baseURL,
-                        model: modelName,
-                        apiKey: apiKey
+                        ProviderDraft(kind: kind, baseURL: baseURL, model: modelName, apiKey: apiKey)
                     )
                 }
             } label: {
@@ -221,7 +223,7 @@ struct ProviderSettingsView: View {
             .disabled(app.isCheckingProvider || !canSave)
             .accessibilityIdentifier("provider.check")
 
-            if isConfigured {
+            if hasConfiguration {
                 Button(role: .destructive) {
                     showDeleteConfirmation = true
                 } label: {
@@ -256,4 +258,15 @@ struct ProviderSettingsView: View {
 #Preview {
     ProviderSettingsView(initialKind: .deepseek)
         .environment(AppModel())
+}
+
+private extension View {
+    /// Shared look for the three provider inputs.
+    func providerFieldStyle() -> some View {
+        padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
+    }
 }

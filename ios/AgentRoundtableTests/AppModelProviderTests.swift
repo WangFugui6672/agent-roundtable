@@ -20,6 +20,18 @@ private final class FakeSecretStore: SecretStore {
     }
 }
 
+private actor StubTransport: HTTPTransport {
+    private let statusCode: Int
+
+    init(statusCode: Int) {
+        self.statusCode = statusCode
+    }
+
+    func send(_ request: URLRequest) async throws -> HTTPResponse {
+        HTTPResponse(data: Data(), statusCode: statusCode)
+    }
+}
+
 @MainActor
 final class AppModelProviderTests: XCTestCase {
     private var suiteName = ""
@@ -38,103 +50,138 @@ final class AppModelProviderTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeModel() -> AppModel {
+    private func makeModel(probe: ProviderProbe = ProviderProbe()) -> AppModel {
         let store = ProviderStore(
             secrets: secrets,
             storage: UserDefaultsProviderStorage(defaults: defaults)
         )
-        return AppModel(defaults: defaults, providerStore: store)
+        return AppModel(defaults: defaults, providerStore: store, probe: probe)
+    }
+
+    private func deepseekDraft(apiKey: String = "sk-test") -> ProviderDraft {
+        ProviderDraft(
+            kind: .deepseek,
+            baseURL: "https://api.deepseek.com/v1",
+            model: "deepseek-chat",
+            apiKey: apiKey
+        )
     }
 
     func testProviderMetadataIsNilWithoutConfiguration() {
         let model = makeModel()
 
-        XCTAssertNil(model.providerMetadata())
+        XCTAssertNil(model.providerMetadata)
         XCTAssertFalse(model.hasConfiguredProvider)
         XCTAssertTrue(model.providerSummary.contains("Mock"))
+        XCTAssertNil(model.providerIncompleteMessage)
     }
 
-    func testSavingProviderExposesMetadata() throws {
+    func testSavingProviderExposesMetadata() {
         let model = makeModel()
 
-        let saved = model.saveProvider(
-            kind: .deepseek,
-            baseURL: "https://api.deepseek.com/v1",
-            model: "deepseek-chat",
-            apiKey: "sk-test"
-        )
+        let saved = model.saveProvider(deepseekDraft())
 
         XCTAssertTrue(saved)
         XCTAssertNil(model.providerError)
-        XCTAssertEqual(model.providerMetadata()?.kind, .deepseek)
-        XCTAssertEqual(model.providerMetadata()?.model, "deepseek-chat")
+        XCTAssertEqual(model.providerMetadata?.kind, .deepseek)
+        XCTAssertEqual(model.providerMetadata?.model, "deepseek-chat")
         XCTAssertTrue(model.providerSummary.contains("DeepSeek"))
     }
 
     func testActiveProviderSurvivesRestart() {
         let model = makeModel()
         model.saveProvider(
-            kind: .qwen,
-            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            model: "qwen-plus",
-            apiKey: "sk-qwen"
+            ProviderDraft(
+                kind: .qwen,
+                baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                model: "qwen-plus",
+                apiKey: "sk-qwen"
+            )
         )
 
         let restarted = makeModel()
 
         XCTAssertEqual(restarted.activeProvider, .qwen)
-        XCTAssertEqual(restarted.providerMetadata()?.kind, .qwen)
+        XCTAssertEqual(restarted.providerMetadata?.kind, .qwen)
     }
 
-    func testSavingWithEmptyKeyKeepsStoredKey() throws {
+    func testSavingWithEmptyKeyKeepsStoredKey() {
         let model = makeModel()
-        model.saveProvider(
-            kind: .custom,
-            baseURL: "https://example.com/v1",
-            model: "m1",
-            apiKey: "sk-kept"
-        )
+        model.saveProvider(deepseekDraft())
 
         model.saveProvider(
-            kind: .custom,
-            baseURL: "https://example.com/v2",
-            model: "m2",
-            apiKey: "   "
+            ProviderDraft(
+                kind: .deepseek,
+                baseURL: "https://api.deepseek.com/v1",
+                model: "deepseek-chat",
+                apiKey: "   "
+            )
         )
 
-        XCTAssertEqual(secrets.values[ProviderStore.account(for: .custom)], "sk-kept")
-        XCTAssertEqual(model.providerMetadata()?.baseURL, "https://example.com/v2")
-        XCTAssertEqual(model.providerMetadata()?.model, "m2")
+        XCTAssertEqual(secrets.values[ProviderStore.account(for: .deepseek)], "sk-test")
+        XCTAssertEqual(model.providerMetadata?.model, "deepseek-chat")
+    }
+
+    func testChangingBaseURLRequiresANewKey() {
+        let model = makeModel()
+        model.saveProvider(deepseekDraft())
+
+        let saved = model.saveProvider(
+            ProviderDraft(
+                kind: .deepseek,
+                baseURL: "https://evil.example.com/v1",
+                model: "deepseek-chat",
+                apiKey: ""
+            )
+        )
+
+        XCTAssertFalse(saved)
+        XCTAssertTrue(model.providerError?.contains("API Key") == true)
+        XCTAssertEqual(secrets.values[ProviderStore.account(for: .deepseek)], "sk-test")
+        XCTAssertEqual(model.providerMetadata?.baseURL, "https://api.deepseek.com/v1")
     }
 
     func testValidationErrorIsSurfaced() {
         let model = makeModel()
 
         let saved = model.saveProvider(
-            kind: .custom,
-            baseURL: "not-a-url",
-            model: "m",
-            apiKey: "sk"
+            ProviderDraft(kind: .custom, baseURL: "not-a-url", model: "m", apiKey: "sk")
         )
 
         XCTAssertFalse(saved)
         XCTAssertTrue(model.providerError?.contains("BaseURL") == true)
-        XCTAssertNil(model.providerMetadata())
+        XCTAssertNil(model.providerMetadata)
     }
 
     func testDeletingActiveProviderClearsMetadataAndSecret() {
         let model = makeModel()
-        model.saveProvider(
-            kind: .deepseek,
-            baseURL: "https://api.deepseek.com/v1",
-            model: "deepseek-chat",
-            apiKey: "sk-test"
-        )
+        model.saveProvider(deepseekDraft())
 
         model.deleteProvider(.deepseek)
 
-        XCTAssertNil(model.providerMetadata())
+        XCTAssertNil(model.providerMetadata)
         XCTAssertNil(model.activeProvider)
         XCTAssertNil(secrets.values[ProviderStore.account(for: .deepseek)])
+    }
+
+    func testMissingKeyIsReportedInsteadOfFallingBackToMock() {
+        let model = makeModel()
+        model.saveProvider(deepseekDraft())
+        secrets.values[ProviderStore.account(for: .deepseek)] = nil
+
+        XCTAssertNil(model.providerMetadata)
+        XCTAssertTrue(model.providerIncompleteMessage?.contains("API Key") == true)
+        XCTAssertTrue(model.providerSummary.contains("不完整"))
+        XCTAssertFalse(model.hasConfiguredProvider)
+    }
+
+    func testCheckProviderReportsInvalidKey() async {
+        let model = makeModel(probe: ProviderProbe(transport: StubTransport(statusCode: 401)))
+
+        await model.checkProvider(deepseekDraft())
+
+        XCTAssertNil(model.providerError)
+        XCTAssertTrue(model.providerCheckMessage?.contains("API Key") == true)
+        XCTAssertFalse(model.isCheckingProvider)
     }
 }

@@ -41,6 +41,20 @@ final class MemoryProviderStorage: ProviderConfigurationStorage {
     }
 }
 
+private final class ThrowingSecretStore: SecretStore {
+    func secret(for account: String) throws -> String? {
+        throw KeychainError(status: -25308) // errSecInteractionNotAllowed
+    }
+
+    func setSecret(_ secret: String, for account: String) throws {
+        throw KeychainError(status: -25308)
+    }
+
+    func removeSecret(for account: String) throws {
+        throw KeychainError(status: -25308)
+    }
+}
+
 final class ProviderTests: XCTestCase {
     private func makeStore(
         secrets: MemorySecretStore = MemorySecretStore(),
@@ -209,6 +223,60 @@ final class ProviderTests: XCTestCase {
 
         XCTAssertNoThrow(try store.delete(.custom))
         XCTAssertNil(store.configuration(for: .custom))
+    }
+
+    func testAvailabilityIsNoneWithoutConfiguration() {
+        let (store, _, _) = makeStore()
+
+        XCTAssertEqual(store.availability(for: .deepseek), .none)
+        XCTAssertEqual(store.availability(for: nil), .none)
+    }
+
+    func testAvailabilityIsReadyWithStoredKey() throws {
+        let (store, _, _) = makeStore()
+        try store.save(
+            ProviderDraft(
+                kind: .deepseek,
+                baseURL: "https://api.deepseek.com/v1",
+                model: "deepseek-chat",
+                apiKey: "sk-test"
+            )
+        )
+
+        XCTAssertEqual(
+            store.availability(for: .deepseek),
+            .ready(
+                ProviderMetadata(
+                    kind: .deepseek,
+                    baseURL: "https://api.deepseek.com/v1",
+                    model: "deepseek-chat"
+                )
+            )
+        )
+    }
+
+    func testAvailabilityIsIncompleteWhenKeyDisappears() {
+        let storage = MemoryProviderStorage(configurations: [
+            ProviderConfiguration(kind: .custom, baseURL: "https://example.com/v1", model: "m")
+        ])
+        let (store, _, _) = makeStore(storage: storage)
+
+        guard case let .incomplete(message) = store.availability(for: .custom) else {
+            return XCTFail("expected .incomplete")
+        }
+        XCTAssertTrue(message.contains("API Key"))
+    }
+
+    func testAvailabilitySurfacesKeychainErrorsInsteadOfMocking() {
+        let storage = MemoryProviderStorage(configurations: [
+            ProviderConfiguration(kind: .deepseek, baseURL: "https://api.deepseek.com/v1", model: "m")
+        ])
+        let store = ProviderStore(secrets: ThrowingSecretStore(), storage: storage)
+
+        guard case let .incomplete(message) = store.availability(for: .deepseek) else {
+            return XCTFail("expected .incomplete")
+        }
+        XCTAssertTrue(message.contains("Keychain"))
     }
 
     func testProviderMetadataMatchesWireShape() throws {

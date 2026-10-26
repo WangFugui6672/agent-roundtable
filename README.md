@@ -81,8 +81,8 @@ open ios/AgentRoundtable.xcodeproj
 ```bash
 make verify       # ruff + pytest + RoundtableCore 编译
 make backend-test # 44 个后端测试（含 WebSocket 集成测试与 Provider 快照校验）
-make ios-test     # 41 个 RoundtableCore 测试（需要 Xcode 提供 XCTest）
-make ios-app-test # 7 个 App 单元测试（Keychain，需模拟器签名）
+make ios-test     # 47 个 RoundtableCore 测试（需要 Xcode 提供 XCTest）
+make ios-app-test # 16 个 App 单元测试（Keychain 与 Provider 状态，需模拟器签名）
 ```
 
 UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8000`。先启动后端，再运行：
@@ -120,7 +120,7 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - Provider 目前只保存配置与连通性校验，真实补全/流式调用由 Issue #4 实现；同一圆桌的所有 Agent 共用一套 Provider 配置。
 - PRD 18.5 要求的 SwiftLint/SwiftFormat 尚未接入：CI 目前覆盖后端检查、RoundtableCore 测试、iOS 编译与测试编译（`build-for-testing`），不执行 UI 测试（需要本地后端）。
 - Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
-- AppModel 暂时直接持有 `APIClient`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。
+- AppModel 暂时直接持有 `APIClient`、`ProviderStore` 与 `ProviderProbe`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。
 - 匿名会话 ID 目前存 `UserDefaults`，它只是能力凭据、不含模型密钥；会话轮换与安全存储随隐私 Issue（#11）处理。
 
 ## 故障排查

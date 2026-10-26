@@ -32,14 +32,14 @@ public struct UserDefaultsProviderStorage: ProviderConfigurationStorage {
 /// Owns the provider lifecycle: non-secret configuration plus the Keychain item
 /// that matches it. One configuration per provider preset in the MVP.
 public final class ProviderStore {
-    public static let keychainService = "com.wangfugui.agentroundtable.provider"
+    public static let keychainService = KeychainStore.defaultService
 
     private let secrets: SecretStore
     private let storage: ProviderConfigurationStorage
     private var configurationsByKind: [ProviderKind: ProviderConfiguration]
 
     public init(
-        secrets: SecretStore = KeychainStore(service: ProviderStore.keychainService),
+        secrets: SecretStore = KeychainStore(),
         storage: ProviderConfigurationStorage = UserDefaultsProviderStorage()
     ) {
         self.secrets = secrets
@@ -70,6 +70,28 @@ public final class ProviderStore {
         guard configurationsByKind[kind] != nil else { return false }
         guard let secret = try? secrets.secret(for: Self.account(for: kind)) else { return false }
         return !secret.isEmpty
+    }
+
+    /// Resolves the selected provider without swallowing Keychain failures:
+    /// an unreadable or missing key becomes `.incomplete`, never a silent Mock
+    /// roundtable (PRD 7.13).
+    public func availability(for kind: ProviderKind?) -> ProviderAvailability {
+        guard let kind, let configuration = configurationsByKind[kind] else {
+            return .none
+        }
+        do {
+            guard let secret = try secrets.secret(for: Self.account(for: kind)) else {
+                return .incomplete("API Key 已不存在，请重新输入。")
+            }
+            guard !secret.isEmpty else {
+                return .incomplete("API Key 为空，请重新输入。")
+            }
+            return .ready(configuration.metadata)
+        } catch let error as KeychainError {
+            return .incomplete("无法读取 Keychain：\(error.message)")
+        } catch {
+            return .incomplete("无法读取 Keychain：\(error.localizedDescription)")
+        }
     }
 
     @discardableResult
