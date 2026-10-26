@@ -96,6 +96,22 @@ struct CreateRoundtableView: View {
         }
     }
 
+    private var providerIcon: String {
+        if model.providerIncompleteMessage != nil {
+            return "exclamationmark.triangle.fill"
+        }
+        return model.hasConfiguredProvider ? "bolt.horizontal.circle.fill" : "bolt.slash"
+    }
+
+    private var providerHint: String {
+        if let incomplete = model.providerIncompleteMessage {
+            return incomplete
+        }
+        return model.hasConfiguredProvider
+            ? "API Key 保存在本机 Keychain，不会上传。"
+            : "配置后可改用你自己的模型 Key。"
+    }
+
     private var providerSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("模型 Provider")
@@ -105,7 +121,7 @@ struct CreateRoundtableView: View {
                 showingProviderSettings = true
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: model.hasConfiguredProvider ? "bolt.horizontal.circle.fill" : "bolt.slash")
+                    Image(systemName: providerIcon)
                         .font(.title3)
                         .foregroundStyle(model.hasConfiguredProvider ? Color.accentColor : .secondary)
 
@@ -114,9 +130,7 @@ struct CreateRoundtableView: View {
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
-                        Text(model.hasConfiguredProvider
-                             ? "API Key 保存在本机 Keychain，不会上传。"
-                             : "配置后可改用你自己的模型 Key。")
+                        Text(providerHint)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.leading)
@@ -169,6 +183,10 @@ struct CreateRoundtableView: View {
                 Text("请选择 3 个参与者。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            } else if let incomplete = model.providerIncompleteMessage {
+                Label("Provider 配置不完整：\(incomplete)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
             }
         }
     }

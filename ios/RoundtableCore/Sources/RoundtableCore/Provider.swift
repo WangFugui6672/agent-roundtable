@@ -55,9 +55,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable, Identifiable 
         self.model = model
     }
 
-    /// Wire snapshot submitted with `POST /api/v1/roundtables`. Explicit
-    /// `baseUrl` key keeps local JSON storage readable while the `.roundtable`
-    /// encoder still produces `base_url` on the wire.
+    /// Non-secret wire snapshot submitted with `POST /api/v1/roundtables`.
     public var metadata: ProviderMetadata {
         ProviderMetadata(kind: kind, baseURL: baseURL, model: model)
     }
@@ -75,11 +73,23 @@ public struct ProviderMetadata: Codable, Equatable, Sendable {
         self.model = model
     }
 
+    // Explicit `baseUrl` key: the local JSON storage stays readable while the
+    // `.roundtable` encoder still produces `base_url` for the wire.
     private enum CodingKeys: String, CodingKey {
         case kind
         case baseURL = "baseUrl"
         case model
     }
+}
+
+/// Whether a roundtable can use the selected provider, and why not when it can't.
+///
+/// `.incomplete` exists so a missing Keychain item never silently degrades a
+/// real roundtable into the Mock demo (PRD 7.13: 缺失时要求用户重新输入).
+public enum ProviderAvailability: Equatable, Sendable {
+    case none
+    case ready(ProviderMetadata)
+    case incomplete(String)
 }
 
 /// What the user typed in the provider form, before validation.
@@ -132,19 +142,32 @@ public struct ProviderDraft: Equatable, Sendable {
         return (
             ProviderConfiguration(
                 kind: kind,
-                baseURL: Self.normalized(baseURL: baseURL),
+                baseURL: ProviderURL.normalized(baseURL: baseURL),
                 model: model
             ),
             apiKey
         )
     }
+}
 
-    static func normalized(baseURL: String) -> String {
-        var trimmed = baseURL
+/// One place that turns a BaseURL into a request URL.
+public enum ProviderURL {
+    public static func normalized(baseURL: String) -> String {
+        var trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while trimmed.hasSuffix("/") {
             trimmed.removeLast()
         }
         return trimmed
+    }
+
+    public static func endpoint(baseURL: String, path: String) -> URL? {
+        let normalized = normalized(baseURL: baseURL)
+        guard !normalized.isEmpty else { return nil }
+        return URL(string: normalized + "/" + path)
+    }
+
+    public static func modelsEndpoint(baseURL: String) -> URL? {
+        endpoint(baseURL: baseURL, path: "models")
     }
 }
 

@@ -30,9 +30,12 @@ public struct KeychainError: Error, Equatable, Sendable {
 /// Items use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`: the key is not
 /// included in device backups and does not migrate to a new device.
 public struct KeychainStore: SecretStore {
+    /// Single source of truth for the service name; `ProviderStore` reuses it.
+    public static let defaultService = "com.wangfugui.agentroundtable.provider"
+
     public let service: String
 
-    public init(service: String = "com.wangfugui.agentroundtable.provider") {
+    public init(service: String = KeychainStore.defaultService) {
         self.service = service
     }
 
