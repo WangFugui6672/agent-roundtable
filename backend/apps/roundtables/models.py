@@ -61,6 +61,11 @@ class Roundtable(models.Model):
     class Mode(models.TextChoices):
         DECISION = "decision", "决策讨论"
 
+    class ProviderKind(models.TextChoices):
+        QWEN = "qwen", "通义千问"
+        DEEPSEEK = "deepseek", "DeepSeek"
+        CUSTOM = "custom", "自定义 OpenAI-compatible"
+
     id = models.UUIDField(primary_key=True, editable=False)
     guest_session = models.ForeignKey(
         GuestSession, on_delete=models.CASCADE, related_name="roundtables"
@@ -71,6 +76,13 @@ class Roundtable(models.Model):
     max_rounds = models.PositiveSmallIntegerField(default=2)
     current_round = models.PositiveSmallIntegerField(default=0)
     event_sequence = models.BigIntegerField(default=0)
+    # Provider metadata snapshot (Issue #3). Only non-secret fields are stored:
+    # the API key lives in the iOS Keychain and must never reach Django.
+    provider_kind = models.CharField(
+        max_length=16, choices=ProviderKind.choices, blank=True, default=""
+    )
+    provider_base_url = models.CharField(max_length=300, blank=True, default="")
+    provider_model = models.CharField(max_length=120, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
