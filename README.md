@@ -4,6 +4,12 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 
 **当前阶段：** Issue #2「Mock 圆桌纵向切片」—— 无真实模型调用，用确定性 Mock 打通「创建圆桌 → 进入圆桌 → 实时事件往返」的完整链路。
 
+| 空圆桌 | Mock 一轮 |
+| --- | --- |
+| ![空圆桌](docs/assets/mock-empty-roundtable.png) | ![Mock 一轮](docs/assets/mock-round-events.png) |
+
+截图来自 iPhone 17 模拟器上的 UI 测试（`AgentRoundtableUITests`），走的是真实本地 Django + WebSocket。
+
 ## 已完成的能力（切片）
 
 - iOS 输入议题，选择固定的三个预设 Agent（方案派 / 质疑派 / 体验派）。
@@ -71,6 +77,14 @@ make backend-test # 30 个后端测试（含 WebSocket 集成测试）
 make ios-test     # RoundtableCore 单元测试（需要 Xcode 提供 XCTest）
 ```
 
+UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8001`（避开本机 8000 上的其它服务）。先在该端口启动后端，再运行：
+
+```bash
+cd backend && DJANGO_DEBUG=1 uv run python manage.py runserver 0.0.0.0:8001
+cd ios && xcodebuild test -project AgentRoundtable.xcodeproj -scheme AgentRoundtable \
+  -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
 iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Command Line Tools 不包含 XCTest）。CI 的 `iOS` job 在 `macos-15` 上执行 `swift test` 与模拟器编译。
 
 ## 协议
@@ -93,7 +107,7 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - `mock.run` 由客户端触发，是切片阶段的临时驱动；Issue #5 的调度器落地后改由服务端自动推进。
 - Redis 与 Celery 尚未接入：当前切片没有跨进程广播与异步任务的需要，等调度器/总结阶段再引入。
 - iOS 端暂未接入 SwiftData 本地缓存与断线重连退避策略（Issue #8）。
-- PRD 18.5 要求的 SwiftLint/SwiftFormat 与关键 UI 测试尚未接入：切片阶段 CI 只覆盖后端检查、核心逻辑测试和 iOS 编译，随 M3/M4 补齐。
+- PRD 18.5 要求的 SwiftLint/SwiftFormat 尚未接入：CI 目前覆盖后端检查、RoundtableCore 测试、iOS 编译与 UI 测试编译（`build-for-testing`），不执行 UI 测试（需要本地后端）。
 - AppModel 暂时直接持有 `APIClient`；PRD 12.3 的 Repository/UseCase 分层随本地缓存与断线恢复（Issue #8）一起引入。
 - 匿名会话 ID 目前存 `UserDefaults`，它只是能力凭据、不含模型密钥；会话轮换与安全存储随隐私 Issue（#11）处理。
 

@@ -70,11 +70,11 @@ jobs:
         run: swift test
       - name: Generate Xcode project
         run: xcodegen generate
-      - name: Build app for simulator
+      - name: Build app and tests for simulator
         run: |
           xcodebuild \
             -project AgentRoundtable.xcodeproj \
             -scheme AgentRoundtable \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build-for-testing
