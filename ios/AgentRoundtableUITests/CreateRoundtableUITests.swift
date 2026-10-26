@@ -9,7 +9,7 @@ final class CreateRoundtableUITests: XCTestCase {
     /// create → empty roundtable → one mock round.
     func testCreateRoundtableAndPlayMockRound() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8001"
+        app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
         app.launch()
 
         let topic = app.descendants(matching: .any).matching(identifier: "create.topic").firstMatch
