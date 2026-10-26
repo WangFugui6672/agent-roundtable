@@ -10,6 +10,7 @@ final class UserControlUITests: XCTestCase {
         app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
         app.launchEnvironment["RT_RESET_PROVIDER_STATE"] = "1"
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
+        app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
 
         let topic = element(in: app, "create.topic")

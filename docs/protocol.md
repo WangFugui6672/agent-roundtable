@@ -1,6 +1,6 @@
 # Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #10）
+**状态：** 实现中（Issue #8）
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -173,7 +173,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 
 `status`：`draft | ready | running | paused | summarizing | completed | failed | archived`
 `state`：`waiting | thinking | typing | passed | completed | failed`
-`last_sequence`：该圆桌已持久化的最大事件序号，客户端用它初始化游标。
+`last_sequence`：该圆桌已持久化的最大事件序号。已有本地缓存时，客户端必须继续使用本地已处理游标；只有没有本地记录或服务端明确要求快照重置时，才用该值建立新游标。
 `pause_pending`：用户要求在安全边界暂停，但仍有在途 turn。仅在 `status = running` 时可能为 `true`。
 `active_turn`：当前待执行的 turn；没有在途 turn 时为 `null`。字段形状见 2.8，重连客户端用 `turn_id` 继续或拒绝过期回报。
 `provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
@@ -536,6 +536,7 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 - `guest_session`：必填，且必须拥有该圆桌。
 - `cursor`：可选，默认 `0`；只补发 `sequence > cursor` 的事件。
+- 可补发窗口由 `ROOM_EVENT_REPLAY_WINDOW_DAYS` 配置，默认 90 天。
 - 未授权或圆桌不存在：服务端在 accept 前关闭，close code `4401`。
 - `cursor` 非法（负数、非整数）：close code `4400`。
 - 收到非 JSON 文本帧：close code `4400`。
@@ -565,11 +566,30 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 2. 若请求带 `cursor`，随后按 `sequence` 升序补发 `sequence > cursor` 的历史事件。
 3. 之后的实时事件沿用同一连接推送。REST 签发 turn、提交发言和 pass 产生的事件都经统一服务入口广播到该连接。
 
+实时广播先进入 replay barrier：服务端先发送 `room.joined` 和补发事件，再发送订阅后产生的 live 事件。客户端仍必须按 `sequence` 缓冲乱序事件，不能只依赖连接顺序。
+
+`room.joined.payload.replay` 明确描述本次补发窗口：
+
+```json
+{
+  "requested_cursor": 12,
+  "oldest_sequence": 40,
+  "latest_sequence": 57,
+  "window_days": 90,
+  "cursor_expired": true
+}
+```
+
+- `oldest_sequence`：窗口内最早可补发事件；窗口为空时为 `null`。
+- `latest_sequence`：请求处理时圆桌的最大持久化序号。
+- `cursor_expired = true`：请求游标与窗口之间存在缺失序号，或游标超前。此时服务端不发送部分 replay。
+- 游标过期时，`room.joined` 的 `roundtable`、`messages`、`failures` 是完整权威快照。客户端必须清空该圆桌的本地投影，把游标重置为 `roundtable.last_sequence`，再接收同一连接上的 live 事件；不得永久保留旧游标并跳过后续消息。
+
 ### 3.4 事件类型
 
 | event_type | payload | 说明 |
 | --- | --- | --- |
-| `room.joined` | `{"roundtable": <快照>, "messages": [<Message>], "failures": [<TurnFailure>]}` | 进入圆桌；恢复完整消息和失败 turn；`failures` 缺失时旧客户端按空数组处理 |
+| `room.joined` | `{"roundtable": <快照>, "messages": [<Message>], "failures": [<TurnFailure>], "replay": <ReplayMetadata>}` | 进入圆桌；恢复完整消息、失败 turn 和补发窗口；`failures`、`replay` 缺失时旧客户端按兼容缺省处理 |
 | `round.started` | `{"round": 1, "max_rounds": 2, "topic": "..."}` | 一轮开始 |
 | `agent.thinking` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | 服务端已签发本轮 turn |
 | `agent.typing` | `{"agent_id": "<RoundtableAgent.id>"}` | Agent 输入中 |
@@ -669,9 +689,12 @@ round.completed
 
 ## 4. 客户端实现要求
 
-- 断线重连时携带最后持久化游标（Issue #8 完整实现，本切片保存游标）。
-- 事件按 `event_id` 去重，按 `sequence` 忽略重复/过期事件。
+- 断线重连时携带本机最后持久化游标；不能用新收到的 `room.joined.roundtable.last_sequence` 覆盖已有本地游标。
+- 本地持久化最近圆桌快照、完整消息、失败、游标、有界事件 ID 去重集合和最近可见消息 ID。
+- 事件按 `event_id` 去重，按 `sequence` 忽略重复/过期事件；高序号先到时先缓冲，只有缺失序号补齐后才投影并推进游标。
 - 即使事件类型未知、payload 未被渲染，游标也要前进到该 `sequence`，否则重连会反复补发同一条事件。
 - 未知 `event_type` 必须被忽略而不是报错，以支持服务端向前演进。
 - `room.joined` 用于渲染参与者与空圆桌状态；`sequence == 0` 不参与游标计算。
+- `replay.cursor_expired = true` 时使用完整 `room.joined` 快照重置本地投影和游标，再继续处理 live 事件。
 - 重连后优先使用快照中的 `active_turn.turn_id` 恢复在途回合，不得自行创建替代 turn。
+- 连接循环使用可取消的指数退避；App 进入后台时停止 Provider Task 和连接，回前台只恢复连接，不自动启动新的自动讨论，等待用户显式继续。

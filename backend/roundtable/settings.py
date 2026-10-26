@@ -70,6 +70,13 @@ CHANNEL_LAYERS = {
 }
 WSGI_APPLICATION = "roundtable.wsgi.application"
 
+# WebSocket clients can replay persisted events inside this window. Older
+# events are represented by the full room snapshot instead of a partial replay.
+ROOM_EVENT_REPLAY_WINDOW_DAYS = max(
+    1,
+    int(env("ROOM_EVENT_REPLAY_WINDOW_DAYS", "90") or "90"),
+)
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 TIME_ZONE = "UTC"
