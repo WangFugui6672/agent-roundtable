@@ -2,7 +2,9 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #11「内容安全、隐私与删除」—— AI 标识、本地内容规则、举报/隐藏、第三方数据提示、90 天保留和级联删除已落地。
+**当前版本：** MVP `v0.1.0`。发布说明见 [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md)。
+
+[观看完整演示](docs/assets/demo-v0.1.0.mp4) · [演示封面（结论卡）](docs/assets/demo-v0.1.0-poster.png) · [三个演示议题与录制脚本](docs/demo.md) · [架构说明](docs/architecture.md)
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -68,7 +70,7 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - 用户可在本机隐藏 AI 消息；隐藏、内容标记和举报状态保存到 SwiftData，不删除或改写服务端消息。
 - `DELETE /roundtables/{id}` 幂等删除圆桌及消息、事件、回合、用量、结论和举报；iOS 同步清理本地缓存、隐藏状态和恢复游标，但保留 Keychain API Key。
 - 圆桌按最后活动保留 90 天，`purge_roundtables` 清理任务支持 dry-run；匿名会话标识使用独立 Keychain item。
-- 后端单元/集成测试、iOS 解码/状态机/Provider/流式客户端测试、Keychain 集成测试、最小 GitHub Actions。
+- GitHub Actions 执行后端全量检查、Compose 冷启动、secret scan、RoundtableCore、App 单测和完整 UI 回归。
 
 ## 目录结构
 
@@ -85,16 +87,38 @@ ios/
 docs/
   PRD.md                  产品需求
   protocol.md             REST + WebSocket 协议（唯一接口契约）
+  architecture.md         信任边界、运行时和数据流
+  demo.md                 三个演示议题与录制脚本
+  content-safety.md       本地内容规则与隐私边界
+  releases/               版本发布说明
   adr/                    架构决策记录
   agents/coding-standards.md  编码与评审判例
-docker-compose.yml        本地 PostgreSQL
+scripts/                  发布、Compose smoke、录制与 artifact 检查
+docker-compose.yml        PostgreSQL + Redis + Django/Channels
 ```
 
 ## 快速开始
 
-### 后端
+### 完整后端（推荐）
 
-需要 Docker 与 [uv](https://docs.astral.sh/uv/)（Python 3.12 由 uv 管理）。
+需要 Docker 与 Docker Compose：
+
+```bash
+cp .env.example .env
+docker compose up --build --detach --wait
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+Compose 会启动 PostgreSQL、Redis 和 Django/Channels，并在 Web 服务启动前执行迁移。默认宿主机端口是 `8000` 和 PostgreSQL `5432`；端口冲突时使用 `BACKEND_PORT` / `POSTGRES_PORT`。90 天清理可按需执行：
+
+```bash
+docker compose --profile ops run --rm purge
+docker compose down
+```
+
+### 本地开发后端
+
+需要 PostgreSQL、Docker 与 [uv](https://docs.astral.sh/uv/)（Python 3.12 由 uv 管理）。不设置 `REDIS_URL` 时使用单进程内存 Channels；多进程或公网部署必须设置 Redis。
 
 ```bash
 cp .env.example .env  # 可选：本地配置（后端启动时会读取）
@@ -125,28 +149,37 @@ open ios/AgentRoundtable.xcodeproj
 
 进入圆桌后，iOS 会向服务端获取下一位发言人并用已配置的 Provider 发起真实流式发言：思考 → 逐字输入 → 提交 turn → 获取下一位。用户插话或暂停不会中断正在生成的这一条消息，但完成后会停在暂停边界；继续只重新启动一条自动流程。模型不可达、Key 失效、限流等情况会直接显示稳定错误码、可重试范围和 partial，并回报一次失败；不会自动切换到 Mock 或其他模型。Provider Token 由 iOS 从 SSE usage 中读取并上报，后端只把它当作客户端观测值，不作为精确计费依据。
 
-## 测试与检查
+## 测试矩阵
 
 ```bash
-make verify       # ruff + pytest + RoundtableCore 编译 + SwiftLint
-make backend-test # 后端测试（turn 调度、用户控制、WebSocket、结论校验/版本/follow-up）
-make ios-test     # RoundtableCore 测试（需要 Xcode 提供 XCTest）
-make ios-lint     # SwiftLint --strict（首次需 brew install swiftlint）
-make ios-app-test # App 单元测试（Keychain、Provider、turn 编排、自动总结与降级，需模拟器签名）
+make verify        # 提交前最小检查
+make backend-check # Ruff、format、Django check、migration check、pytest
+make ios-test      # RoundtableCore XCTest
+make ios-lint      # SwiftLint --strict
+make ios-app-test  # App 单测（Keychain、Provider、turn、总结、安全）
+make ios-ui-test   # 完整 UI 回归（创建、控制、恢复、安全、结论卡与演示流程）
+make docker-smoke  # 隔离 Compose 冷启动 + 迁移 + Redis + health + guest session
+make secret-scan   # 密钥、.env 与生成物扫描
+make release-check # 发布静态、后端、Core、App 与 Compose 门禁
 ```
 
-UI 测试会真实创建圆桌并播放一轮 Mock，默认连 `http://localhost:8000`。先启动后端，再运行：
+完整 UI 回归覆盖创建、第一轮、用户点名、暂停/继续、第二轮引用、结论卡、进程恢复、安全和 Provider 错误路径。它连接 `http://localhost:8000`，所以先启动后端：
 
 ```bash
-cd backend && DJANGO_DEBUG=1 uv run python manage.py runserver 0.0.0.0:8000
-cd ios && xcodebuild test -project AgentRoundtable.xcodeproj -scheme AgentRoundtable \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -collect-test-diagnostics never
+make docker-up
+make ios-ui-test
+make docker-down
 ```
 
-`-collect-test-diagnostics never` 可以避免 Xcode 27 在测试结束后卡在模拟器诊断收集（表现为命令长时间不退出）。
+完整录屏：
 
-iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Command Line Tools 不包含 XCTest）。Keychain 测试需要模拟器的 ad-hoc 签名（`CODE_SIGNING_ALLOWED=NO` 会让 Keychain 返回 `errSecMissingEntitlement`），所以用 `make ios-app-test` 或去掉该参数的 `xcodebuild test`。CI 的 `iOS` job 在 `macos-15` 上执行 SwiftLint、`swift test` 与模拟器编译（`build-for-testing`）。
+```bash
+make docker-up
+make record-demo
+make docker-down
+```
+
+`-collect-test-diagnostics never` 已内置于 Makefile 和 CI，避免 Xcode 在测试结束后卡在诊断收集。Keychain 测试需要模拟器 ad-hoc 签名，不能设置 `CODE_SIGNING_ALLOWED=NO`。GitHub Actions 在 macOS runner 上启动 PostgreSQL、Redis、Django 后端，实际执行 App 单测和完整 `AgentRoundtableUITests` 回归。
 
 ## 协议
 
@@ -169,6 +202,7 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 
 ## 设计要点
 
+- **客户端直连与后端编排分层**：iOS 负责 Provider 调用和本地密钥；Django 负责 turn、顺序、预算、验证和持久化。完整拓扑见 [`docs/architecture.md`](docs/architecture.md)。
 - **事件日志而非纯广播**：实时事件落库，重连按游标补发（[ADR 0002](docs/adr/0002-persisted-event-log-with-resume-cursor.md)）。
 - **核心逻辑独立成包**：解码、去重、游标与 REST 客户端可在 macOS 上快速测试，SwiftUI 只做展示（[ADR 0003](docs/adr/0003-xcodegen-project-and-core-package.md)）。
 - **密钥不进后端**：BYOK 的 API Key 只存 iOS Keychain、请求由 iOS 直连 Provider（[ADR 0001](docs/adr/0001-byok-keychain-direct-provider.md)）。后端收到任何 `api_key` 字段会直接返回 400，避免误上传被静默忽略。
@@ -183,20 +217,29 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 ## 已知边界
 
 - `mock.run` 保留为确定性演示与 UI 测试入口；真实两轮讨论由 turn REST 握手驱动。
-- Redis 与 Celery 尚未接入：事件广播暂时使用 Channels 的 `InMemoryChannelLayer`，只在单进程内有效；事件日志补发本身已持久化。
+- Compose 与生产配置使用 Redis Channel Layer；本地测试和单进程开发默认使用内存层，以保持测试无外部依赖。
+- 90 天清理由部署环境定时调用 `purge_roundtables`，Compose 只提供 `ops` profile，不在仓库内内置 Celery beat 或外部调度器。
 - Provider Token 仍以客户端上报为权威观测值；Provider 未返回 usage 时只记录延迟与重试，不伪造 Token。
 - 事件补发窗口默认 90 天；窗口外只返回完整圆桌快照并标记 `cursor_expired`。
 - 两轮讨论都由服务端顺序签发 turn；第一轮结束时同一响应自动签发第二轮。
 - `agent.thinking` 由服务端持久化；`agent.typing` 与逐字文本仍是客户端本地临时状态。
 - 第一轮消息的 `message_type` / `stance` 由预设角色推导；第二轮由模型返回结构化字段，客户端校验后提交，后端再次校验。
 - 第二轮引用与挑战关系已持久化并可恢复；引用卡展示原观点摘要，不额外加载被引用消息全文的历史版本。
-- SwiftLint 已接入（`ios/.swiftlint.yml`，`make verify` 与 CI 都执行 `--strict`）；UI 测试仍未在 CI 执行（需要本地后端），CI 只做 `build-for-testing`。
-- Keychain 集成测试依赖模拟器 ad-hoc 签名，目前只在本地执行；CI 只编译测试包。
+- CI 的完整 UI 回归主要使用 Mock 事件，不验证外部 Provider 账号、余额、地区限制或真实模型输出质量。
+- Keychain 集成测试依赖模拟器 ad-hoc 签名；CI 在 macOS runner 的模拟器上执行。
 - `RoundtableRepository` 持有圆桌 API、WebSocket、本地存储和游标；`AppModel` 只负责会话、Provider turn 与 UI 状态编排。
 - 后端可以验证结构、引用归属和版本，但无法证明模型生成的自然语言绝对没有隐含新事实；MVP 通过候选范围、强制引用和降级规则降低风险。
 - 结论重新生成保留版本号和新 `summary.completed` 事件，不做公开分享链接、二维码或可导入房间。
 - 匿名会话 ID 存在独立 Keychain service；旧 `UserDefaults` 值会在下次启动时迁移后删除。
 - 本地内容规则是有限第一道过滤，不能覆盖所有语义变体；服务端不做模型审核，举报仅进入人工处理队列。
+- TestFlight 未配置，需要 Apple Developer Program、App Store Connect、签名证书和 Provisioning Profile，不阻塞 MVP。
+
+## 部署与隐私
+
+- API Key 只允许出现在 iOS Keychain 和直连 Provider 的 `Authorization` 请求头中；Django、日志、SwiftData、UserDefaults 和 Git 仓库都不得保存。
+- Compose 默认凭据只用于本地运行。公开部署前必须替换 `DJANGO_SECRET_KEY` 与 PostgreSQL 密码、限制网络入口，并启用 HTTPS/WSS。
+- 服务端以圆桌最后活动为锚点保留 90 天；删除圆桌会级联清理消息、事件、turn、用量、结论和举报。Keychain Key 不受圆桌删除或保留期影响。
+- 内容规则、误报策略和举报语义见 [`docs/content-safety.md`](docs/content-safety.md)。
 
 ## 故障排查
 

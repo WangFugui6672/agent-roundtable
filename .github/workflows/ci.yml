@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -43,7 +46,7 @@ jobs:
           enable-cache: true
       - name: Install dependencies
         run: uv sync --frozen
-      - name: Lint
+      - name: Lint and format
         run: |
           uv run ruff check .
           uv run ruff format --check .
@@ -54,29 +57,120 @@ jobs:
       - name: Tests
         run: uv run pytest -q
 
+  compose:
+    name: Docker Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and smoke full stack
+        run: make docker-smoke
+
+  repository:
+    name: Repository Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release tooling tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Secret and generated artifact scan
+        run: python3 scripts/secret_scan.py
+
   ios:
     name: iOS
     runs-on: macos-15
-    timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: ios
+    timeout-minutes: 60
+    env:
+      DATABASE_URL: postgres://roundtable:roundtable@127.0.0.1:5432/roundtable
+      REDIS_URL: redis://127.0.0.1:6379/0
+      DJANGO_SECRET_KEY: ci-only-secret
+      DJANGO_DEBUG: "0"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
     steps:
       - uses: actions/checkout@v4
-      - name: Install XcodeGen and SwiftLint
-        run: brew install xcodegen swiftlint
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install XcodeGen, SwiftLint, PostgreSQL, and Redis
+        run: |
+          brew install xcodegen swiftlint postgresql@16 redis
+          echo "$(brew --prefix postgresql@16)/bin" >> "$GITHUB_PATH"
+      - name: Start PostgreSQL and Redis
+        run: |
+          POSTGRES_BIN="$(brew --prefix postgresql@16)/bin"
+          "$POSTGRES_BIN/initdb" \
+            --pgdata "$RUNNER_TEMP/postgres" \
+            --username roundtable \
+            --auth trust
+          "$POSTGRES_BIN/pg_ctl" \
+            --pgdata "$RUNNER_TEMP/postgres" \
+            --log "$RUNNER_TEMP/postgres.log" \
+            start
+          "$POSTGRES_BIN/createdb" --host 127.0.0.1 --username roundtable roundtable
+          redis-server --daemonize yes
+          for attempt in {1..30}; do
+            "$POSTGRES_BIN/pg_isready" --host 127.0.0.1 --username roundtable && break
+            sleep 1
+          done
+          redis-cli ping
+      - name: Install backend dependencies and migrate
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run python manage.py migrate --noinput
+      - name: Start backend
+        working-directory: backend
+        run: |
+          nohup uv run daphne -b 127.0.0.1 -p 8000 roundtable.asgi:application \
+            > "$RUNNER_TEMP/backend.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/backend.pid"
+          python3 ../scripts/wait_for_http.py http://127.0.0.1:8000/api/v1/health --timeout 60
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
       - name: Lint Swift
+        working-directory: ios
         run: swiftlint lint --strict
       - name: Test RoundtableCore
         working-directory: ios/RoundtableCore
         run: swift test
-      - name: Generate Xcode project
-        run: xcodegen generate
-      - name: Build app and tests for simulator
+      - name: Select and boot simulator
+        working-directory: ios
+        run: |
+          SIMULATOR_ID="$(python3 ../scripts/select_simulator.py)"
+          echo "SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+      - name: App unit tests
+        working-directory: ios
         run: |
           xcodebuild \
             -project AgentRoundtable.xcodeproj \
             -scheme AgentRoundtable \
-            -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO \
-            build-for-testing
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -only-testing:AgentRoundtableTests \
+            -collect-test-diagnostics never \
+            test
+      - name: Full UI regression
+        working-directory: ios
+        run: |
+          rm -rf "$RUNNER_TEMP/RoundtableUI.xcresult"
+          xcodebuild \
+            -project AgentRoundtable.xcodeproj \
+            -scheme AgentRoundtable \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -only-testing:AgentRoundtableUITests \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/RoundtableUI.xcresult" \
+            -collect-test-diagnostics never \
+            test
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-failure-diagnostics
+          path: |
+            ${{ runner.temp }}/backend.log
+            ${{ runner.temp }}/RoundtableUI.xcresult
+          if-no-files-found: ignore
