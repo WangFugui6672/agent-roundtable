@@ -18,7 +18,7 @@ final class UserControlUITests: XCTestCase {
         XCTAssertTrue(topic.waitForExistence(timeout: 20), app.debugDescription)
         topic.tap()
         topic.typeText("团队只有两个人时该不该压缩验证周期？")
-        app.buttons["create.start"].tap()
+        app.startRoundtable()
 
         XCTAssertTrue(
             element(in: app, "room.empty").waitForExistence(timeout: 25),

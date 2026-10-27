@@ -16,7 +16,7 @@ final class HistoryVersioningUITests: XCTestCase {
             .firstMatch
         topic.tap()
         topic.typeText("历史、关键观点与重新生成")
-        app.buttons["create.start"].tap()
+        app.startRoundtable()
         XCTAssertTrue(app.staticTexts["room.empty"].waitForExistence(timeout: 25))
 
         app.buttons["room.mock"].tap()

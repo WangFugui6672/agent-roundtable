@@ -18,7 +18,7 @@ final class SafetyPrivacyUITests: XCTestCase {
         XCTAssertTrue(topic.waitForExistence(timeout: 20), app.debugDescription)
         topic.tap()
         topic.typeText("隐私设置应该如何影响圆桌讨论？")
-        app.buttons["create.start"].tap()
+        app.startRoundtable()
         XCTAssertTrue(
             element(in: app, "room.empty").waitForExistence(timeout: 25),
             app.debugDescription
@@ -105,7 +105,7 @@ final class SafetyPrivacyUITests: XCTestCase {
         let topic = element(in: app, "create.topic")
         topic.tap()
         topic.typeText("是否应该使用真实模型讨论这个议题？")
-        app.buttons["create.start"].tap()
+        app.startRoundtable()
         XCTAssertTrue(
             element(in: app, "room.empty").waitForExistence(timeout: 25),
             app.debugDescription
