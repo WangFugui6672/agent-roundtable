@@ -24,6 +24,7 @@ from apps.roundtables.budget import (
     MAX_TURN_SECONDS,
 )
 from apps.roundtables.commands import TurnFailureCommand
+from apps.roundtables.deletion import delete_room_data
 from apps.roundtables.message_validation import validate_agent_message
 from apps.roundtables.models import (
     GuestSession,
@@ -756,20 +757,8 @@ def delete_roundtable(roundtable_id: str, guest_session_id: str) -> str | None:
             return "missing"
         if str(room.guest_session_id) != guest_session_id:
             return None
-        _delete_room_data(room)
+        delete_room_data(room)
         return "deleted"
-
-
-def _delete_room_data(room: Roundtable) -> None:
-    """Delete PROTECT-linked children before the room itself."""
-    MessageReport.objects.filter(roundtable=room).delete()
-    UsageRecord.objects.filter(roundtable=room).delete()
-    RoundSummary.objects.filter(roundtable=room).delete()
-    Message.objects.filter(roundtable=room).delete()
-    Turn.objects.filter(roundtable=room).delete()
-    RoomEvent.objects.filter(roundtable=room).delete()
-    RoundtableAgent.objects.filter(roundtable=room).delete()
-    room.delete()
 
 
 def purge_expired_roundtables(now=None) -> int:
@@ -780,7 +769,7 @@ def purge_expired_roundtables(now=None) -> int:
     with transaction.atomic():
         rooms = list(Roundtable.objects.select_for_update().filter(last_activity_at__lte=cutoff))
         for room in rooms:
-            _delete_room_data(room)
+            delete_room_data(room)
             deleted += 1
 
         GuestSession.objects.filter(
