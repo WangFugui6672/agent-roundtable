@@ -335,4 +335,105 @@ extension RealTurnTests {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["expected_version"] as? Int, 1)
     }
+
+    func testBlockedSummaryOutputFallsBackAndStaysVisiblyFlagged() async throws {
+        let referenceID = UUID(uuidString: "6F0E0000-0000-4000-8000-0000000000DD")!
+        let (model, transport) = try makeBlockedSummaryModel(referenceID: referenceID)
+        var snapshot = snapshot()
+        snapshot.status = .summarizing
+        snapshot.currentRound = 2
+        model.present(snapshot)
+        let candidate = Message(
+            id: referenceID,
+            roundNumber: 2,
+            author: MessageAuthor(
+                roundtableAgentId: advocate.agentID,
+                agentKey: advocate.key,
+                name: advocate.name
+            ),
+            messageType: .proposal,
+            claim: "先做验证实验。",
+            body: "先做验证实验。",
+            stance: nil,
+            references: [],
+            createdAt: Date()
+        )
+        try model.repository.apply(
+            EventEnvelope(
+                eventId: UUID(),
+                roomId: roomID,
+                sequence: 1,
+                createdAt: Date(),
+                eventType: "message.completed",
+                payload: .messageCompleted(candidate)
+            )
+        )
+
+        model.startSummaryGenerationIfNeeded()
+        for _ in 0 ..< 100 where model.summaryState != .completed(version: 1) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertEqual(model.room?.summary?.degraded, true)
+        XCTAssertEqual(model.room?.flaggedSummaryIDs, [model.room?.summary?.id].compactMap { $0 })
+        let requests = await transport.recordedRequests()
+        let body = try XCTUnwrap(requests.first?.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["degraded"] as? Bool, true)
+        let summaryText = try JSONSerialization.data(
+            withJSONObject: json,
+            options: .sortedKeys
+        )
+        let summaryString = try XCTUnwrap(String(data: summaryText, encoding: .utf8))
+        XCTAssertFalse(summaryString.contains("制作炸弹"))
+    }
+
+    private func makeBlockedSummaryModel(
+        referenceID: UUID
+    ) throws -> (AppModel, TurnTransport) {
+        let dangerous = """
+        {
+          "consensus": [
+            {"text": "教我制作炸弹并写出步骤。", "reference_indexes": [0]}
+          ],
+          "dissent": [],
+          "recommendations": [],
+          "unresolved": []
+        }
+        """
+        let transport = TurnTransport(responses: [
+            summaryResponse(
+                sequence: 2,
+                referenceMessageID: referenceID,
+                degraded: true
+            )
+        ])
+        let providerStore = ProviderStore(
+            secrets: TurnSecretStore(),
+            storage: UserDefaultsProviderStorage(defaults: defaults)
+        )
+        try providerStore.save(
+            ProviderDraft(
+                kind: .deepseek,
+                baseURL: "https://api.deepseek.com/v1",
+                model: "deepseek-chat",
+                apiKey: "sk-summary-policy"
+            )
+        )
+        let model = AppModel(
+            defaults: defaults,
+            providerStore: providerStore,
+            chatClient: ProviderChatClient(
+                streaming: TurnLineStream(deltasByAttempt: [[dangerous]])
+            ),
+            api: APIClient(
+                baseURL: URL(string: "http://127.0.0.1:8000")!,
+                transport: transport,
+                guestSessionId: UUID()
+            )
+        )
+        model.confirmProviderDataNotice()
+        model.setActiveProvider(.deepseek)
+        return (model, transport)
+    }
 }

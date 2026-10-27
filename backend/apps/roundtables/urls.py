@@ -5,6 +5,7 @@ from django.urls import path
 from apps.roundtables.views import (
     AgentProfileListView,
     GuestSessionCreateView,
+    MessageReportCreateView,
     RoundtableDetailView,
     RoundtableEndView,
     RoundtableFollowUpView,
@@ -47,6 +48,11 @@ urlpatterns = [
         "roundtables/<uuid:roundtable_id>/user-messages",
         RoundtableUserMessageView.as_view(),
         name="roundtable-user-message-create",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/messages/<uuid:message_id>/reports",
+        MessageReportCreateView.as_view(),
+        name="message-report-create",
     ),
     path(
         "roundtables/<uuid:roundtable_id>/pause",

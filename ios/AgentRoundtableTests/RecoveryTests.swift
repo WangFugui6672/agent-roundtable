@@ -136,6 +136,7 @@ final class RecoveryTests: XCTestCase {
         return AppModel(
             defaults: defaults,
             providerStore: providerStore,
+            guestSessionStore: AnonymousSessionStore(secrets: secrets),
             api: APIClient(
                 baseURL: URL(string: "http://127.0.0.1:8000")!,
                 transport: transport

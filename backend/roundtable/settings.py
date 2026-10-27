@@ -76,6 +76,10 @@ ROOM_EVENT_REPLAY_WINDOW_DAYS = max(
     1,
     int(env("ROOM_EVENT_REPLAY_WINDOW_DAYS", "90") or "90"),
 )
+ROUNDTABLE_RETENTION_DAYS = max(
+    1,
+    int(env("ROUNDTABLE_RETENTION_DAYS", "90") or "90"),
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

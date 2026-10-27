@@ -15,6 +15,154 @@ struct StatusPill: View {
     }
 }
 
+struct RoomHeader: View {
+    let room: RoundtableRoomModel
+    let statusText: String
+    let statusTint: Color
+    let streamText: String
+    let streamTint: Color
+    let contentSafetyNotice: String?
+    let contentSafetyError: String?
+    let controlError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(room.snapshot?.topic ?? "")
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                StatusPill(text: statusText, tint: statusTint)
+                StatusPill(text: streamText, tint: streamTint)
+                Spacer()
+                Text("第 \(room.currentRound)/\(room.snapshot?.maxRounds ?? 2) 轮")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            budget
+            notices
+        }
+        .padding(16)
+    }
+
+    @ViewBuilder
+    private var budget: some View {
+        if let budget = room.snapshot?.budget {
+            Text(
+                "\(budget.agentMessagesUsed)/\(budget.maxAgentMessages) 条 · "
+                    + "\(budget.reportedTokens)/\(budget.maxReportedTokens) Token（本机上报） · "
+                    + "\(budget.elapsedSeconds)/\(budget.maxDurationSeconds) 秒"
+            )
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("room.budget")
+        }
+    }
+
+    @ViewBuilder
+    private var notices: some View {
+        if let notice = contentSafetyNotice {
+            Label(notice, systemImage: "flag")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("room.content.notice")
+        } else if let error = contentSafetyError {
+            Label(error, systemImage: "hand.raised.fill")
+                .font(.caption2)
+                .foregroundStyle(.red)
+                .accessibilityIdentifier("room.content.blocked")
+        }
+        if let controlError {
+            Label(controlError, systemImage: "trash.slash")
+                .font(.caption2)
+                .foregroundStyle(.red)
+                .accessibilityIdentifier("room.delete.error")
+        }
+    }
+}
+
+struct RoomParticipantsStrip: View {
+    let participants: [Participant]
+    let activeAgentID: UUID?
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(participants) { participant in
+                    ParticipantChip(
+                        participant: participant,
+                        isActive: activeAgentID == participant.id
+                    )
+                    .accessibilityIdentifier("room.participant.\(participant.position)")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+}
+
+struct RoomEmptyState: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("圆桌已经建好，还没有发言")
+                .font(.headline)
+                .accessibilityIdentifier("room.empty")
+            Text("配置 Provider 后开始第一轮，由系统依次邀请三位 Agent 发言；也可以播放 Mock 事件。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+    }
+}
+
+@MainActor
+enum RoomStatusPresentation {
+    static func status(room: RoundtableRoomModel) -> (text: String, tint: Color) {
+        if room.budgetExhaustion != nil {
+            return ("预算用尽", .orange)
+        }
+        if room.pausePending {
+            return ("将在当前发言后暂停", .orange)
+        }
+        return statusPresentation(room.status)
+    }
+
+    private static func statusPresentation(
+        _ status: RoundtableStatus?
+    ) -> (text: String, tint: Color) {
+        guard let status else { return ("准备中", .secondary) }
+        switch status {
+        case .draft: return ("草稿", .secondary)
+        case .ready: return ("就绪", .secondary)
+        case .running: return ("讨论中", .green)
+        case .paused: return ("已暂停", .orange)
+        case .summarizing: return ("总结中", .orange)
+        case .completed: return ("已结束", .blue)
+        case .failed: return ("失败", .red)
+        case .archived: return ("已归档", .secondary)
+        case .unknown: return ("未知状态", .secondary)
+        }
+    }
+
+    static func stream(_ state: AppModel.StreamState) -> (text: String, tint: Color) {
+        switch state {
+        case .idle: return ("未连接", .secondary)
+        case .connecting: return ("连接中", .orange)
+        case .connected: return ("已连接", .green)
+        case .reconnecting: return ("离线，重试中", .orange)
+        case .closed: return ("已断开", .secondary)
+        case .failed: return ("连接失败", .red)
+        }
+    }
+}
+
 struct ParticipantChip: View {
     let participant: Participant
     let isActive: Bool
@@ -24,6 +172,12 @@ struct ParticipantChip: View {
             stateIndicator
             Text(participant.agent.name)
                 .font(.subheadline.weight(.medium))
+            Text("AI")
+                .font(.caption2.bold())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.blue.opacity(0.12)))
+                .foregroundStyle(.blue)
             Text(stateText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -35,7 +189,7 @@ struct ParticipantChip: View {
             Capsule().strokeBorder(isActive ? Color.accentColor : .clear, lineWidth: 1.5)
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(participant.agent.name)，\(stateText)")
+        .accessibilityLabel("AI 参与者 \(participant.agent.name)，\(stateText)")
     }
 
     @ViewBuilder
@@ -74,9 +228,13 @@ struct ParticipantChip: View {
 }
 
 struct MessageRow: View {
+    @Environment(AppModel.self) private var model
     let message: Message
     let messages: [Message]
     let participants: [Participant]
+    let isHidden: Bool
+    let isFlagged: Bool
+    let isReported: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -91,12 +249,58 @@ struct MessageRow: View {
                         .background(Capsule().fill(Color.accentColor.opacity(0.12)))
                         .foregroundStyle(Color.accentColor)
                 } else {
+                    Text("AI")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.blue.opacity(0.12)))
+                        .foregroundStyle(.blue)
                     StanceBadge(messageType: message.messageType, stance: message.stance)
                 }
                 Spacer()
                 Text(message.createdAt, format: .dateTime.hour().minute())
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
+                if message.author.type == .agent {
+                    Menu {
+                        Menu("举报") {
+                            ForEach(MessageReportReason.allCases, id: \.self) { reason in
+                                Button(reason.displayName) {
+                                    Task {
+                                        await model.reportMessage(message.id, reason: reason)
+                                    }
+                                }
+                            }
+                        }
+                        Button(isHidden ? "取消本地隐藏" : "仅在本机隐藏") {
+                            if isHidden {
+                                model.showMessage(message.id)
+                            } else {
+                                model.hideMessage(message.id)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("消息操作")
+                    .accessibilityIdentifier("room.message.menu")
+                }
+            }
+
+            if isHidden || isFlagged || isReported {
+                HStack(spacing: 6) {
+                    if isHidden {
+                        Label("本地隐藏", systemImage: "eye.slash")
+                    }
+                    if isFlagged {
+                        Label("本地规则标记，未经审核", systemImage: "flag")
+                    }
+                    if isReported {
+                        Label("已举报", systemImage: "checkmark.circle")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.orange)
             }
 
             if let claim = message.claim, !claim.isEmpty {
@@ -130,7 +334,7 @@ struct MessageRow: View {
             ForEach(referencedMessages) { reference in
                 VStack(alignment: .leading, spacing: 4) {
                     Label(
-                        "引用 \(reference.author.name) 的原观点",
+                        "引用 AI · \(reference.author.name) 的原观点",
                         systemImage: "quote.opening"
                     )
                     .font(.caption2.weight(.semibold))
@@ -161,6 +365,7 @@ struct MessageRow: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
+        .accessibilityIdentifier("room.message.\(message.id.uuidString)")
     }
 
     private var referencedMessages: [Message] {
@@ -197,7 +402,9 @@ struct MessageRow: View {
 
     private var accessibilitySummary: String {
         var parts = [
-            "\(message.author.name)，\(stanceLabel)",
+            message.author.type == .agent
+                ? "AI 参与者 \(message.author.name)，\(stanceLabel)"
+                : "\(message.author.name)，\(stanceLabel)",
             message.claim ?? message.body,
             message.body
         ]
@@ -206,7 +413,8 @@ struct MessageRow: View {
         }
         for reference in referencedMessages {
             parts.append(
-                "引用 \(reference.author.name) 的原观点：\(reference.claim ?? reference.body)"
+                "引用 AI 参与者 \(reference.author.name) 的原观点："
+                    + "\(reference.claim ?? reference.body)"
             )
         }
         return parts.joined(separator: "。")
@@ -244,34 +452,5 @@ struct StanceBadge: View {
         case .userMessage: return ("用户", .secondary)
         default: return ("发言", .secondary)
         }
-    }
-}
-
-struct StreamingMessageRow: View {
-    let name: String
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(name)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(alignment: .bottom, spacing: 4) {
-                Text(text)
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 2, height: 16)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("room.turn.draft")
     }
 }

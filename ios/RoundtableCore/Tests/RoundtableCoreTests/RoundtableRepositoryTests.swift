@@ -116,6 +116,87 @@ final class RoundtableRepositoryTests: XCTestCase {
         XCTAssertNil(repository.room?.summary)
     }
 
+    func testHidingAndFlaggingAreLocalProjectionChanges() throws {
+        let repository = makeRepository(store: InMemoryRoomStore())
+        let joined = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+        guard case let .joined(room) = joined.payload else {
+            return XCTFail("expected a joined payload")
+        }
+        try repository.present(room.roundtable, cursor: 0)
+        try repository.apply(
+            try EventEnvelope.decode(
+                from: Fixtures.envelope(
+                    eventType: "message.completed",
+                    sequence: 1,
+                    payload: "{\"message\": \(Fixtures.messageJSON)}"
+                )
+            )
+        )
+
+        try repository.hideMessage(Fixtures.messageID)
+        try repository.flagMessage(Fixtures.messageID)
+
+        XCTAssertEqual(repository.room?.messages.count, 1)
+        XCTAssertEqual(repository.room?.hiddenMessageIDs, [Fixtures.messageID])
+        XCTAssertEqual(repository.room?.flaggedMessageIDs, [Fixtures.messageID])
+    }
+
+    func testDeletingRemoteRoomAlsoRemovesLocalSnapshotAndCursor() async throws {
+        let store = InMemoryRoomStore()
+        let transport = StubTransport(
+            responses: [.init(data: Data(), statusCode: 204)]
+        )
+        let repository = RoundtableRepository(
+            api: APIClient(
+                baseURL: URL(string: "http://127.0.0.1:8000")!,
+                transport: transport,
+                guestSessionId: UUID()
+            ),
+            store: store
+        )
+        let joined = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+        guard case let .joined(room) = joined.payload else {
+            return XCTFail("expected a joined payload")
+        }
+        try repository.present(room.roundtable, cursor: 0)
+
+        try await repository.deleteRoundtable(roomID: room.roundtable.id)
+
+        XCTAssertNil(try store.load(roomID: room.roundtable.id))
+        XCTAssertNil(repository.room)
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.first?.httpMethod, "DELETE")
+    }
+
+    func testDeleteSurfacesLocalCleanupFailureForRetry() async throws {
+        let store = DeleteFailingRoomStore()
+        let repository = RoundtableRepository(
+            api: APIClient(
+                baseURL: URL(string: "http://127.0.0.1:8000")!,
+                transport: StubTransport(
+                    responses: [.init(data: Data(), statusCode: 204)]
+                ),
+                guestSessionId: UUID()
+            ),
+            store: store
+        )
+        let joined = try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
+        guard case let .joined(room) = joined.payload else {
+            return XCTFail("expected a joined payload")
+        }
+        try repository.present(room.roundtable, cursor: 0)
+
+        do {
+            try await repository.deleteRoundtable(roomID: room.roundtable.id)
+            XCTFail("expected local cleanup failure")
+        } catch let error as RoundtableDeletionError {
+            guard case .local = error else {
+                return XCTFail("expected local failure, got \(error)")
+            }
+        }
+        XCTAssertNotNil(repository.room)
+    }
+
     private func makeRepository(store: InMemoryRoomStore) -> RoundtableRepository {
         RoundtableRepository(
             api: APIClient(baseURL: URL(string: "http://127.0.0.1:8000")!),
@@ -142,5 +223,26 @@ private final class InMemoryRoomStore: RoundtableRoomStore {
 
     func delete(roomID: UUID) throws {
         rooms[roomID] = nil
+    }
+}
+
+@MainActor
+private final class DeleteFailingRoomStore: RoundtableRoomStore {
+    private var state: StoredRoomState?
+
+    func save(_ state: StoredRoomState) throws {
+        self.state = state
+    }
+
+    func load(roomID: UUID) throws -> StoredRoomState? {
+        state?.snapshot.id == roomID ? state : nil
+    }
+
+    func loadMostRecent() throws -> StoredRoomState? {
+        state
+    }
+
+    func delete(roomID: UUID) throws {
+        throw CocoaError(.fileWriteUnknown)
     }
 }

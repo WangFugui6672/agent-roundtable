@@ -227,6 +227,7 @@ final class RealTurnFailureTests: XCTestCase {
                 apiKey: "sk-test-turn"
             )
         )
+        model.confirmProviderDataNotice()
     }
 
     private func firstRoundResponses() -> [HTTPResponse] {

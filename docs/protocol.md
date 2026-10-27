@@ -1,6 +1,6 @@
 # Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #9）
+**状态：** 实现中（Issue #11）
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -382,6 +382,7 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 | `provider_invalid_response` | 是 | SSE/结构化输出非法；格式化解析最多重试一次后仍失败 |
 | `provider_server_error` | 是 | Provider 5xx |
 | `provider_not_configured` | 否 | Keychain 中缺少可用 Key |
+| `content_policy_blocked` | 否 | iOS 本地内容规则阻止了模型输出，消息未提交 |
 | `scheduler_invalid_agent` | 否 | 服务端签发了未知参与者，属于契约错误 |
 | `client_request_failed` | 视 HTTP 状态 | iOS 回报服务端时请求失败 |
 | `provider_error` | 是 | 其他未知 Provider 错误 |
@@ -622,6 +623,65 @@ Token 的可信度边界：
 - 原圆桌不被修改；所有后续消息、turn 和控制只作用于新圆桌。
 - 新圆桌仍受活跃圆桌上限约束。
 
+### 2.18 举报 AI 消息
+
+`POST /api/v1/roundtables/{id}/messages/{message_id}/reports`，需要 `X-Guest-Session`：
+
+```json
+{"reason": "harassment", "details": "持续针对用户进行攻击"}
+```
+
+- `reason`：`harassment | hate | dangerous | sexual | impersonation | other`。
+- `details`：可选，去除首尾空白后最多 500 字符。
+- 被举报消息必须是当前会话拥有的圆桌中、`author.type = "agent"` 的消息。
+- 同一个匿名会话对同一条消息只保留一条举报；重复请求不会重复写入。
+- 举报状态固定为 `submitted`，表示用户已提交，不表示内容已被审核或判定违规。
+
+首次成功返回 `201`；幂等重复返回 `200`：
+
+```json
+{
+  "id": "9a0e...",
+  "message_id": "6f0e...",
+  "reason": "harassment",
+  "details": "持续针对用户进行攻击",
+  "state": "submitted",
+  "created_at": "2026-10-26T01:02:03.456Z",
+  "updated_at": "2026-10-26T01:02:03.456Z"
+}
+```
+
+圆桌不属于当前会话时返回 `404 roundtable_not_found`；用户消息或不属于该圆桌的消息返回 `400 validation_error`。请求体任意层级出现 API Key 同样返回 `400`。
+
+本地隐藏不是举报，也不调用服务端接口。隐藏和取消隐藏只修改当前设备的 SwiftData 投影。
+
+### 2.19 删除圆桌
+
+`DELETE /api/v1/roundtables/{id}`，需要 `X-Guest-Session`。
+
+- 首次删除返回 `204`，立即级联删除消息、事件、回合、用量、结论和举报。
+- 同一 URL 的重复删除也返回 `204`，因此客户端网络重试是幂等的。
+- 已删除圆桌的详情、总结、消息、turn、举报和 WebSocket 访问均不可用。
+- 其他匿名会话删除该圆桌返回 `404 roundtable_not_found`，不会删除数据。
+
+客户端必须在服务端成功后清理该圆桌的 SwiftData 记录、消息、结论、本地隐藏/标记/举报状态和恢复游标。服务端已删除但本机清理失败时，应保留明确的可重试状态；不得删除 Keychain 中的 Provider API Key。
+
+### 2.20 数据保留
+
+- 服务端圆桌、消息、事件、回合、用量、结论和举报以圆桌 `last_activity_at` 为唯一 90 天保留锚点。
+- 创建圆桌、打开圆桌 WebSocket、讨论消息、turn、pause/resume/end、举报和结论保存都会续期活动时间。
+- `GuestSession.last_seen_at` 只用于清理已经没有任何圆桌的匿名会话，不作为圆桌内容保留依据。
+- 边界语义为 `last_activity_at <= now - ROUNDTABLE_RETENTION_DAYS` 时到期，默认 `ROUNDTABLE_RETENTION_DAYS=90`。
+- 清理任务逐桌删除全部关联数据，并删除已经没有圆桌且超过保留期的匿名会话。
+- iOS Keychain 中的 API Key 不参与服务端或本地保留清理。
+
+运维命令：
+
+```bash
+cd backend && uv run python manage.py purge_roundtables
+cd backend && uv run python manage.py purge_roundtables --dry-run
+```
+
 ## 3. WebSocket
 
 ### 3.1 连接
@@ -800,3 +860,8 @@ round.completed
 - `room.joined.summary` 与本地 SwiftData 都保留结论；已完成圆桌重启后必须恢复总结和只读状态。
 - 结论卡只渲染议题、三个 Agent、主要观点、共识、分歧和建议，不包含 API Key、内部 ID、Prompt、公开链接、二维码或房间导入信息。
 - 连接循环使用可取消的指数退避；App 进入后台时停止 Provider Task 和连接，回前台只恢复连接，不自动启动新的自动讨论，等待用户显式继续。
+- 所有 Agent 在参与者卡片、消息、生成状态、总结与结论卡中始终显示 AI 标识；不提供自定义公众人物角色。
+- 用户输入和 Provider 输出必须经过 `RoundtableCore.ContentPolicy`。`block` 不得发送到服务端或 Provider；`flag` 保留内容并显示“未经模型或人工审核”。
+- 真实 Provider 首次调用前必须展示第三方数据提示。确认状态可以保存在 UserDefaults，但 API Key 不得进入 UserDefaults。
+- 匿名会话标识使用独立 Keychain item；旧 UserDefaults 值只用于一次性迁移。
+- 本地举报状态、隐藏状态和内容标记随 SwiftData 保存；删除圆桌时全部清除。

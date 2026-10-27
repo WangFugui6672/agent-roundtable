@@ -8,14 +8,6 @@ private struct GenerationContext {
     let configuration: ProviderConfiguration
 }
 
-private struct SecondRoundContext {
-    let participant: Participant
-    let configuration: ProviderConfiguration
-    let apiKey: String
-    let roundtableID: UUID
-    let room: RoundtableRoomModel
-}
-
 private struct TurnSubmissionContext {
     let participant: Participant
     let turn: ScheduledTurn
@@ -28,6 +20,10 @@ extension AppModel {
     // MARK: - First round (Issue #5)
 
     func startGeneration() {
+        if activeConfiguration != nil,
+           !requestProviderDataConsent(for: .startGeneration) {
+            return
+        }
         _ = launchGeneration()
     }
 
@@ -106,6 +102,9 @@ extension AppModel {
                 room: room,
                 message: providerIncompleteMessage ?? "尚未配置 Provider，无法调用真实模型。"
             )
+            return nil
+        }
+        guard requestProviderDataConsent(for: .startGeneration) else {
             return nil
         }
         isFirstRoundRunning = true
@@ -208,7 +207,23 @@ extension AppModel {
                 )
             )
         }
+        return await runFirstRoundTurn(
+            turn,
+            participant: participant,
+            configuration: configuration,
+            apiKey: apiKey,
+            failureContext: failureContext
+        )
+    }
 
+    private func runFirstRoundTurn(
+        _ turn: ScheduledTurn,
+        participant: Participant,
+        configuration: ProviderConfiguration,
+        apiKey: String,
+        failureContext: TurnFailureContext
+    ) async -> Bool {
+        let room = failureContext.room
         let prompt = AgentPrompt.messages(
             topic: room.snapshot?.topic ?? "",
             participant: participant,
@@ -231,6 +246,19 @@ extension AppModel {
 
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
+            let contentAssessment = contentPolicy.evaluate(trimmed)
+            if contentAssessment.decision == .block {
+                await failTurn(
+                    context: failureContext,
+                    report: TurnFailureReport(
+                        code: "content_policy_blocked",
+                        message: contentAssessment.message ?? "本地安全规则已阻止模型输出。",
+                        retryable: false,
+                        usage: metrics.report(retryCount: 0)
+                    )
+                )
+                return false
+            }
 
             turnState = .submitting(agentID: participant.id)
             turnState = try await submit(
@@ -238,10 +266,11 @@ extension AppModel {
                 context: TurnSubmissionContext(
                     participant: participant,
                     turn: turn,
-                    roundtableID: roundtableID,
+                    roundtableID: failureContext.roundtableID,
                     room: room
                 ),
-                usage: metrics.report(retryCount: 0)
+                usage: metrics.report(retryCount: 0),
+                markFlagged: contentAssessment.decision == .flag
             )
             failureCode = nil
             failureRetryable = false
@@ -282,182 +311,11 @@ extension AppModel {
         return stream.collector.text
     }
 
-    private func runSecondRoundTurn(
-        _ turn: ScheduledTurn,
-        context: SecondRoundContext
-    ) async -> Bool {
-        let basePrompt = AgentPrompt.messages(
-            topic: context.room.snapshot?.topic ?? "",
-            participant: context.participant,
-            transcript: context.room.messages,
-            roundNumber: turn.round
-        )
-        let metrics = ProviderRunMetrics()
-
-        for attempt in 0 ..< 2 {
-            if let result = await runSecondRoundAttempt(
-                turn,
-                context: context,
-                attempt: attempt,
-                basePrompt: basePrompt,
-                metrics: metrics
-            ) {
-                return result
-            }
-        }
-        return false
-    }
-
-    private func runSecondRoundAttempt(
-        _ turn: ScheduledTurn,
-        context: SecondRoundContext,
-        attempt: Int,
-        basePrompt: [ChatMessage],
-        metrics: ProviderRunMetrics
-    ) async -> Bool? {
-        let prompt = attempt == 0
-            ? basePrompt
-            : basePrompt + [
-                .user(
-                    """
-                    上一次输出不是合法的互评 JSON。请严格只返回 system 要求的 JSON 对象，
-                    必须包含合法 stance、一条候选引用、可选 challenge_target_agent_id 和 confidence。
-                    """
-                )
-            ]
-        let collector = ProviderTextCollector()
-        do {
-            let text = try await collectSecondRoundText(
-                context: context,
-                stream: ProviderStreamContext(
-                    configuration: context.configuration,
-                    apiKey: context.apiKey,
-                    prompt: prompt,
-                    collector: collector,
-                    metrics: metrics
-                )
-            )
-
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
-            let usage = metrics.report(retryCount: attempt)
-            return try await handleSecondRoundText(
-                trimmed,
-                turn: turn,
-                context: context,
-                attempt: attempt,
-                usage: usage
-            )
-        } catch {
-            if Task.isCancelled || isEnding {
-                return false
-            }
-            let partial = collector.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            await failTurn(
-                context: TurnFailureContext(
-                    turn: turn,
-                    roundtableID: context.roundtableID,
-                    room: context.room
-                ),
-                report: TurnFailureReport(
-                    error: error,
-                    partial: partial.isEmpty ? nil : partial,
-                    usage: metrics.report(retryCount: attempt)
-                )
-            )
-            return false
-        }
-    }
-
-    private func handleSecondRoundText(
-        _ text: String,
-        turn: ScheduledTurn,
-        context: SecondRoundContext,
-        attempt: Int,
-        usage: ProviderUsageReport
-    ) async throws -> Bool? {
-        if MessageComposer.isPass(text) {
-            let envelope = try await repository.passTurn(
-                roundtableID: context.roundtableID,
-                agentID: context.participant.id,
-                turnID: turn.turnId,
-                usage: usage
-            )
-            try repository.apply(envelope)
-            turnState = .passed(agentID: context.participant.id)
-            return true
-        }
-
-        let submission: MessageSubmission
-        do {
-            submission = try StructuredReplyParser.parse(
-                text,
-                participant: context.participant,
-                turn: turn,
-                transcript: context.room.messages
-            )
-        } catch let structuredError as StructuredReplyError {
-            if attempt == 0 {
-                return nil
-            }
-            await failTurn(
-                context: TurnFailureContext(
-                    turn: turn,
-                    roundtableID: context.roundtableID,
-                    room: context.room
-                ),
-                report: TurnFailureReport(
-                    code: "provider_invalid_response",
-                    message:
-                        "模型结构化输出无效，已重试一次。"
-                        + structuredError.localizedDescription,
-                    retryable: true,
-                    usage: usage
-                )
-            )
-            return false
-        }
-
-        turnState = .submitting(agentID: context.participant.id)
-        var submissionWithUsage = submission
-        submissionWithUsage.usage = usage
-        let envelope = try await repository.submitMessage(
-            roundtableID: context.roundtableID,
-            submission: submissionWithUsage
-        )
-        try repository.apply(envelope)
-        turnState = .completed(agentID: context.participant.id)
-        failureCode = nil
-        failureRetryable = false
-        return true
-    }
-
-    private func collectSecondRoundText(
-        context: SecondRoundContext,
-        stream: ProviderStreamContext
-    ) async throws -> String {
-        turnState = .thinking(agentID: context.participant.id)
-        for try await event in chatClient.streamEvents(
-            configuration: stream.configuration,
-            apiKey: stream.apiKey,
-            messages: stream.prompt
-        ) {
-            stream.metrics.consume(event)
-            if case let .delta(delta) = event {
-                stream.collector.text += delta
-                turnState = .typing(
-                    agentID: context.participant.id,
-                    text: "正在组织引用与立场…"
-                )
-            }
-        }
-        return stream.collector.text
-    }
-
     private func submit(
         _ trimmed: String,
         context: TurnSubmissionContext,
-        usage: ProviderUsageReport
+        usage: ProviderUsageReport,
+        markFlagged: Bool
     ) async throws -> TurnState {
         if MessageComposer.isPass(trimmed) {
             let envelope = try await repository.passTurn(
@@ -481,6 +339,9 @@ extension AppModel {
             submission: submission
         )
         try repository.apply(envelope)
+        if markFlagged, let messageID = envelope.completedMessageID {
+            try repository.flagMessage(messageID)
+        }
         return .completed(agentID: context.participant.id)
     }
 }

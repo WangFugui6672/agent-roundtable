@@ -177,6 +177,7 @@ final class AppModelProviderTests: XCTestCase {
 
     func testCheckProviderReportsInvalidKey() async {
         let model = makeModel(probe: ProviderProbe(transport: StubTransport(statusCode: 401)))
+        model.confirmProviderDataNotice()
 
         await model.checkProvider(deepseekDraft())
 
