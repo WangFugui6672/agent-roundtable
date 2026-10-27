@@ -52,6 +52,7 @@ final class CreateRoundtableUITests: XCTestCase {
         let quotedClaim = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS %@", "引用 AI · 方案派 的原观点")
         ).firstMatch
+        app.scrollUntilExists(quotedClaim)
         XCTAssertTrue(
             quotedClaim.waitForExistence(timeout: 25),
             "第二轮没有展示被引用观点的作者与原内容：\(app.debugDescription)"
@@ -59,6 +60,7 @@ final class CreateRoundtableUITests: XCTestCase {
         let challengeTarget = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS %@", "向 方案派 提出质疑")
         ).firstMatch
+        app.scrollUntilExists(challengeTarget)
         XCTAssertTrue(
             challengeTarget.waitForExistence(timeout: 10),
             "挑战关系没有展示明确对象：\(app.debugDescription)"
