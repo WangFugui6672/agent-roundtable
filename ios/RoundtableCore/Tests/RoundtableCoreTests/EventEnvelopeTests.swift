@@ -28,6 +28,42 @@ final class EventEnvelopeTests: XCTestCase {
         XCTAssertEqual(joined.roundtable.lastSequence, 0)
     }
 
+    func testDecodesReplayWindowMetadata() throws {
+        let data = Fixtures.envelope(
+            eventType: "room.joined",
+            sequence: 0,
+            payload: """
+            {
+              "roundtable": \(Fixtures.snapshotJSON),
+              "messages": [],
+              "replay": {
+                "requested_cursor": 2,
+                "oldest_sequence": 5,
+                "latest_sequence": 9,
+                "window_days": 90,
+                "cursor_expired": true
+              }
+            }
+            """
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .joined(joined) = envelope.payload else {
+            return XCTFail("expected a joined payload, got \(envelope.payload)")
+        }
+        XCTAssertEqual(
+            joined.replay,
+            ReplayMetadata(
+                requestedCursor: 2,
+                oldestSequence: 5,
+                latestSequence: 9,
+                windowDays: 90,
+                cursorExpired: true
+            )
+        )
+    }
+
     func testDecodesCompletedMessage() throws {
         let data = Fixtures.envelope(
             eventType: "message.completed",
@@ -41,13 +77,223 @@ final class EventEnvelopeTests: XCTestCase {
             return XCTFail("expected a completed message, got \(envelope.payload)")
         }
         XCTAssertEqual(message.id, Fixtures.messageID)
+        XCTAssertEqual(message.turnId, Fixtures.turnID)
+        XCTAssertEqual(message.roundNumber, 1)
         XCTAssertEqual(message.author.name, "方案派")
         XCTAssertEqual(message.author.agentKey, "advocate")
         XCTAssertEqual(message.author.roundtableAgentId, Fixtures.advocateID)
         XCTAssertEqual(message.messageType, .proposal)
         XCTAssertNil(message.stance)
         XCTAssertEqual(message.references, [])
-        XCTAssertEqual(message.confidence, 0.72, accuracy: 0.0001)
+        XCTAssertEqual(message.confidence ?? 0, 0.72, accuracy: 0.0001)
+    }
+
+    func testDecodesSummaryStartedAndCompletedEvents() throws {
+        let started = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "summary.started",
+                sequence: 20,
+                payload: "{\"round\": 2}"
+            )
+        )
+        let completed = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "summary.completed",
+                sequence: 21,
+                payload: "{\"summary\": \(Fixtures.summaryJSON)}"
+            )
+        )
+
+        guard case let .summaryStarted(summaryStarted) = started.payload,
+              case let .summaryCompleted(summaryCompleted) = completed.payload
+        else {
+            return XCTFail("expected summary events")
+        }
+        XCTAssertEqual(summaryStarted.round, 2)
+        XCTAssertEqual(summaryCompleted.summary.id, Fixtures.summaryID)
+        XCTAssertEqual(summaryCompleted.summary.version, 1)
+        XCTAssertEqual(
+            summaryCompleted.summary.consensus[0].referenceMessageIds,
+            [Fixtures.messageID]
+        )
+    }
+
+    func testDecodesFollowUpParentAndSummaryContext() throws {
+        let raw = Fixtures.snapshotJSON.replacingOccurrences(
+            of: "\"mode\": \"decision\",",
+            with: """
+            "mode": "decision",
+              "parent_roundtable_id": "C0DEC0DE-0000-4000-8000-000000000099",
+              "source_summary_id": "5A0E0000-0000-4000-8000-000000000055",
+              "follow_up_context": {
+                "parent_topic": "上一场议题",
+                "summary": \(Fixtures.summaryJSON)
+              },
+            """
+        )
+
+        let snapshot = try JSONDecoder.roundtable.decode(
+            RoundtableSnapshot.self,
+            from: Data(raw.utf8)
+        )
+
+        XCTAssertEqual(
+            snapshot.parentRoundtableId,
+            UUID(uuidString: "C0DEC0DE-0000-4000-8000-000000000099")
+        )
+        XCTAssertEqual(snapshot.sourceSummaryId, Fixtures.summaryID)
+        XCTAssertEqual(snapshot.followUpContext?.parentTopic, "上一场议题")
+        XCTAssertEqual(snapshot.followUpContext?.summary.id, Fixtures.summaryID)
+    }
+
+    func testDecodesRoundTwoReferencesAndChallengeTarget() throws {
+        let targetID = UUID(uuidString: "E00E0000-0000-4000-8000-000000000005")!
+        let referenceID = UUID(uuidString: "6F0E0000-0000-4000-8000-000000000004")!
+        let data = Fixtures.envelope(
+            eventType: "message.completed",
+            sequence: 12,
+            payload: """
+            {"message": {
+              "id": "8F0E0000-0000-4000-8000-000000000008",
+              "turn_id": "\(Fixtures.turnID.uuidString)",
+              "round_number": 2,
+              "author": {
+                "type": "agent",
+                "roundtable_agent_id": "\(Fixtures.advocateID.uuidString)",
+                "agent_key": "advocate",
+                "name": "方案派"
+              },
+              "message_type": "challenge",
+              "claim": "验证成本被低估。",
+              "body": "我质疑这个观点。",
+              "stance": "challenge",
+              "references": ["\(referenceID.uuidString)"],
+              "challenge_target_agent_id": "\(targetID.uuidString)",
+              "confidence": 0.74,
+              "mentioned_agent_ids": [],
+              "created_at": "2026-10-26T01:02:04.000Z"
+            }}
+            """
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .messageCompleted(message) = envelope.payload else {
+            return XCTFail("expected a completed message, got \(envelope.payload)")
+        }
+        XCTAssertEqual(message.roundNumber, 2)
+        XCTAssertEqual(message.references, [referenceID])
+        XCTAssertEqual(message.challengeTargetAgentId, targetID)
+    }
+
+    func testDecodesUserAuthoredMessageWithoutAnAgentIdentity() throws {
+        let data = Fixtures.envelope(
+            eventType: "message.completed",
+            sequence: 4,
+            payload: "{\"message\": \(Fixtures.userMessageJSON)}"
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .messageCompleted(message) = envelope.payload else {
+            return XCTFail("expected a completed message, got \(envelope.payload)")
+        }
+        XCTAssertEqual(message.author.type, .user)
+        XCTAssertNil(message.author.roundtableAgentId)
+        XCTAssertNil(message.author.agentKey)
+        XCTAssertEqual(message.messageType, .userMessage)
+        XCTAssertNil(message.claim)
+        XCTAssertNil(message.confidence)
+        XCTAssertEqual(message.mentionedAgentIds, [Fixtures.advocateID])
+    }
+
+    func testDecodesPausePendingTurnIdentity() throws {
+        let data = Fixtures.envelope(
+            eventType: "room.pause_pending",
+            sequence: 4,
+            payload: "{\"turn_id\": \"\(Fixtures.turnID.uuidString)\"}"
+        )
+
+        let envelope = try EventEnvelope.decode(from: data)
+
+        guard case let .pausePending(pending) = envelope.payload else {
+            return XCTFail("expected room.pause_pending, got \(envelope.payload)")
+        }
+        XCTAssertEqual(pending.turnId, Fixtures.turnID)
+    }
+
+    func testDecodesRoomControlStateEvents() throws {
+        let paused = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "room.paused",
+                sequence: 5,
+                payload: "{\"status\": \"paused\"}"
+            )
+        )
+        let resumed = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "room.resumed",
+                sequence: 6,
+                payload: "{\"status\": \"running\"}"
+            )
+        )
+        let ended = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "room.ended",
+                sequence: 7,
+                payload: "{\"status\": \"completed\"}"
+            )
+        )
+
+        guard case let .paused(pausedState) = paused.payload,
+              case let .resumed(resumedState) = resumed.payload,
+              case let .ended(endedState) = ended.payload
+        else {
+            return XCTFail("expected room control events")
+        }
+        XCTAssertEqual(pausedState.status, .paused)
+        XCTAssertEqual(resumedState.status, .running)
+        XCTAssertEqual(endedState.status, .completed)
+    }
+
+    func testDecodesAgentFailureAndBudgetExhaustion() throws {
+        let failure = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "agent.failed",
+                sequence: 8,
+                payload: """
+                {
+                  "turn_id": "\(Fixtures.turnID.uuidString)",
+                  "round": 1,
+                  "agent_id": "\(Fixtures.advocateID.uuidString)",
+                  "agent_name": "方案派",
+                  "failure_code": "provider_timeout",
+                  "message": "请求超时。",
+                  "retryable": true,
+                  "partial": "已经生成的片段"
+                }
+                """
+            )
+        )
+        let budget = try EventEnvelope.decode(
+            from: Fixtures.envelope(
+                eventType: "budget.exhausted",
+                sequence: 9,
+                payload: """
+                {"reason": "reported_tokens", "message": "讨论已达到 Token 上限。", "round": 1}
+                """
+            )
+        )
+
+        guard case let .agentFailed(details) = failure.payload,
+              case let .budgetExhausted(exhaustion) = budget.payload
+        else {
+            return XCTFail("expected failure and budget events")
+        }
+        XCTAssertEqual(details.failureCode, "provider_timeout")
+        XCTAssertEqual(details.partial, "已经生成的片段")
+        XCTAssertTrue(details.retryable)
+        XCTAssertEqual(exhaustion.reason, .reportedTokens)
     }
 
     func testKeepsUnknownEventTypesForForwardCompatibility() throws {

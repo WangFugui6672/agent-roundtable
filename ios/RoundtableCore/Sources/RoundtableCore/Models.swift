@@ -96,6 +96,72 @@ public struct Participant: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public struct ScheduledTurn: Codable, Equatable, Sendable {
+    public let turnId: UUID
+    public let round: Int
+    public let roundtableAgentId: UUID
+    public let position: Int
+    public let agentKey: String
+    public let agentName: String
+
+    public init(
+        turnId: UUID,
+        round: Int,
+        roundtableAgentId: UUID,
+        position: Int,
+        agentKey: String,
+        agentName: String
+    ) {
+        self.turnId = turnId
+        self.round = round
+        self.roundtableAgentId = roundtableAgentId
+        self.position = position
+        self.agentKey = agentKey
+        self.agentName = agentName
+    }
+}
+
+public struct NextTurnResponse: Decodable, Equatable, Sendable {
+    public let round: Int
+    public let turn: ScheduledTurn?
+    public let events: [EventEnvelope]
+
+    public init(round: Int, turn: ScheduledTurn?, events: [EventEnvelope]) {
+        self.round = round
+        self.turn = turn
+        self.events = events
+    }
+}
+
+public struct RoomCommandResponse: Decodable, Equatable, Sendable {
+    public let roundtable: RoundtableSnapshot
+    public let events: [EventEnvelope]
+
+    public init(roundtable: RoundtableSnapshot, events: [EventEnvelope]) {
+        self.roundtable = roundtable
+        self.events = events
+    }
+}
+
+public struct ProviderUsageReport: Codable, Equatable, Sendable {
+    public let inputTokens: Int?
+    public let outputTokens: Int?
+    public let latencyMs: Int?
+    public let retryCount: Int
+
+    public init(
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        latencyMs: Int? = nil,
+        retryCount: Int = 0
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.latencyMs = latencyMs
+        self.retryCount = retryCount
+    }
+}
+
 public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let topic: String
@@ -104,7 +170,13 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let maxRounds: Int
     public var currentRound: Int
     public let lastSequence: Int
+    public let pausePending: Bool?
+    public let activeTurn: ScheduledTurn?
     public let provider: ProviderMetadata?
+    public let parentRoundtableId: UUID?
+    public let sourceSummaryId: UUID?
+    public let followUpContext: FollowUpContext?
+    public let budget: BudgetSnapshot?
     public let createdAt: Date
     public let updatedAt: Date
     public var participants: [Participant]
@@ -117,7 +189,13 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         maxRounds: Int,
         currentRound: Int,
         lastSequence: Int,
+        pausePending: Bool? = nil,
+        activeTurn: ScheduledTurn? = nil,
         provider: ProviderMetadata? = nil,
+        parentRoundtableId: UUID? = nil,
+        sourceSummaryId: UUID? = nil,
+        followUpContext: FollowUpContext? = nil,
+        budget: BudgetSnapshot? = nil,
         createdAt: Date,
         updatedAt: Date,
         participants: [Participant]
@@ -129,7 +207,13 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
         self.maxRounds = maxRounds
         self.currentRound = currentRound
         self.lastSequence = lastSequence
+        self.pausePending = pausePending
+        self.activeTurn = activeTurn
         self.provider = provider
+        self.parentRoundtableId = parentRoundtableId
+        self.sourceSummaryId = sourceSummaryId
+        self.followUpContext = followUpContext
+        self.budget = budget
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.participants = participants
@@ -144,6 +228,7 @@ public enum MessageType: String, Codable, Sendable, CaseIterable {
     case question
     case pass
     case summary
+    case userMessage = "user_message"
     case unknown
 
     public init(from decoder: Decoder) throws {
@@ -165,48 +250,197 @@ public enum Stance: String, Codable, Sendable, CaseIterable {
     }
 }
 
+public enum MessageAuthorType: String, Codable, Sendable, CaseIterable {
+    case agent
+    case user
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = MessageAuthorType(rawValue: raw) ?? .unknown
+    }
+}
+
 public struct MessageAuthor: Codable, Equatable, Sendable {
-    public let roundtableAgentId: UUID
-    public let agentKey: String
+    public let type: MessageAuthorType
+    public let roundtableAgentId: UUID?
+    public let agentKey: String?
     public let name: String
 
-    public init(roundtableAgentId: UUID, agentKey: String, name: String) {
+    public init(
+        type: MessageAuthorType,
+        roundtableAgentId: UUID? = nil,
+        agentKey: String? = nil,
+        name: String
+    ) {
+        self.type = type
         self.roundtableAgentId = roundtableAgentId
         self.agentKey = agentKey
         self.name = name
+    }
+
+    public init(roundtableAgentId: UUID, agentKey: String, name: String) {
+        self.init(
+            type: .agent,
+            roundtableAgentId: roundtableAgentId,
+            agentKey: agentKey,
+            name: name
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case roundtableAgentId
+        case agentKey
+        case name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roundtableAgentId = try container.decodeIfPresent(UUID.self, forKey: .roundtableAgentId)
+        agentKey = try container.decodeIfPresent(String.self, forKey: .agentKey)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decodeIfPresent(MessageAuthorType.self, forKey: .type)
+            ?? (roundtableAgentId == nil ? .unknown : .agent)
     }
 }
 
 public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
+    public let turnId: UUID?
+    public let roundNumber: Int
     public let author: MessageAuthor
     public let messageType: MessageType
-    public let claim: String
+    public let claim: String?
     public let body: String
     public let stance: Stance?
     public let references: [UUID]
-    public let confidence: Double
+    public let challengeTargetAgentId: UUID?
+    public let confidence: Double?
+    public let mentionedAgentIds: [UUID]
+    public let isKeyPoint: Bool
+    public let supersedesMessageId: UUID?
+    public let supersededByMessageId: UUID?
     public let createdAt: Date
 
     public init(
         id: UUID,
+        turnId: UUID? = nil,
+        roundNumber: Int = 0,
         author: MessageAuthor,
         messageType: MessageType,
-        claim: String,
+        claim: String? = nil,
         body: String,
         stance: Stance?,
         references: [UUID],
-        confidence: Double,
+        challengeTargetAgentId: UUID? = nil,
+        confidence: Double? = nil,
+        mentionedAgentIds: [UUID] = [],
+        isKeyPoint: Bool = false,
+        supersedesMessageId: UUID? = nil,
+        supersededByMessageId: UUID? = nil,
         createdAt: Date
     ) {
         self.id = id
+        self.turnId = turnId
+        self.roundNumber = roundNumber
         self.author = author
         self.messageType = messageType
         self.claim = claim
         self.body = body
         self.stance = stance
         self.references = references
+        self.challengeTargetAgentId = challengeTargetAgentId
         self.confidence = confidence
+        self.mentionedAgentIds = mentionedAgentIds
+        self.isKeyPoint = isKeyPoint
+        self.supersedesMessageId = supersedesMessageId
+        self.supersededByMessageId = supersededByMessageId
         self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case turnId
+        case roundNumber
+        case author
+        case messageType
+        case claim
+        case body
+        case stance
+        case references
+        case challengeTargetAgentId
+        case confidence
+        case mentionedAgentIds
+        case isKeyPoint
+        case supersedesMessageId
+        case supersededByMessageId
+        case createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        turnId = try container.decodeIfPresent(UUID.self, forKey: .turnId)
+        roundNumber = try container.decodeIfPresent(Int.self, forKey: .roundNumber) ?? 0
+        author = try container.decode(MessageAuthor.self, forKey: .author)
+        messageType = try container.decode(MessageType.self, forKey: .messageType)
+        claim = try container.decodeIfPresent(String.self, forKey: .claim)
+        body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
+        stance = try container.decodeIfPresent(Stance.self, forKey: .stance)
+        references = try container.decodeIfPresent([UUID].self, forKey: .references) ?? []
+        challengeTargetAgentId =
+            try container.decodeIfPresent(UUID.self, forKey: .challengeTargetAgentId)
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
+        mentionedAgentIds =
+            try container.decodeIfPresent([UUID].self, forKey: .mentionedAgentIds) ?? []
+        isKeyPoint = try container.decodeIfPresent(Bool.self, forKey: .isKeyPoint) ?? false
+        supersedesMessageId =
+            try container.decodeIfPresent(UUID.self, forKey: .supersedesMessageId)
+        supersededByMessageId =
+            try container.decodeIfPresent(UUID.self, forKey: .supersededByMessageId)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func settingKeyPoint(_ value: Bool) -> Message {
+        Message(
+            id: id,
+            turnId: turnId,
+            roundNumber: roundNumber,
+            author: author,
+            messageType: messageType,
+            claim: claim,
+            body: body,
+            stance: stance,
+            references: references,
+            challengeTargetAgentId: challengeTargetAgentId,
+            confidence: confidence,
+            mentionedAgentIds: mentionedAgentIds,
+            isKeyPoint: value,
+            supersedesMessageId: supersedesMessageId,
+            supersededByMessageId: supersededByMessageId,
+            createdAt: createdAt
+        )
+    }
+
+    public func superseded(by replacementID: UUID) -> Message {
+        Message(
+            id: id,
+            turnId: turnId,
+            roundNumber: roundNumber,
+            author: author,
+            messageType: messageType,
+            claim: claim,
+            body: body,
+            stance: stance,
+            references: references,
+            challengeTargetAgentId: challengeTargetAgentId,
+            confidence: confidence,
+            mentionedAgentIds: mentionedAgentIds,
+            isKeyPoint: isKeyPoint,
+            supersedesMessageId: supersedesMessageId,
+            supersededByMessageId: replacementID,
+            createdAt: createdAt
+        )
     }
 }

@@ -5,6 +5,7 @@ struct CreateRoundtableView: View {
     @Environment(AppModel.self) private var model
     @State private var topic = ""
     @State private var showingProviderSettings = false
+    @State private var showingPrivacy = false
     @FocusState private var topicFocused: Bool
 
     private var trimmedTopic: String {
@@ -31,8 +32,30 @@ struct CreateRoundtableView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("新建圆桌")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    model.isCreatingRoundtable = false
+                } label: {
+                    Label("返回", systemImage: "chevron.left")
+                }
+                .accessibilityIdentifier("create.back")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingPrivacy = true
+                } label: {
+                    Image(systemName: "hand.raised")
+                }
+                .accessibilityLabel("隐私与安全")
+                .accessibilityIdentifier("create.privacy")
+            }
+        }
         .sheet(isPresented: $showingProviderSettings) {
             ProviderSettingsView(initialKind: model.activeProvider ?? .deepseek)
+        }
+        .sheet(isPresented: $showingPrivacy) {
+            PrivacySafetyView()
         }
     }
 
@@ -179,6 +202,16 @@ struct CreateRoundtableView: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .accessibilityLabel("创建失败：\(error)")
+            } else if let blocked = model.contentSafetyError {
+                Label(blocked, systemImage: "hand.raised.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("create.content.blocked")
+            } else if let notice = model.contentSafetyNotice {
+                Label(notice, systemImage: "flag")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("create.content.notice")
             } else if model.selectedProfileIDs.count < 3 {
                 Text("请选择 3 个参与者。")
                     .font(.footnote)
@@ -216,6 +249,12 @@ private struct AgentCard: View {
                     HStack {
                         Text(profile.name)
                             .font(.headline)
+                        Text("AI")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.blue.opacity(0.12)))
+                            .foregroundStyle(.blue)
                         Spacer()
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(isSelected ? Color.accentColor : Color(.tertiaryLabel))
@@ -241,7 +280,7 @@ private struct AgentCard: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(profile.name)，\(profile.tagline)")
+        .accessibilityLabel("AI 参与者 \(profile.name)，\(profile.tagline)")
         .accessibilityValue(isSelected ? "已选择" : "未选择")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }

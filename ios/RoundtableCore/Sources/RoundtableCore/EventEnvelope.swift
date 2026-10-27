@@ -2,13 +2,64 @@ import Foundation
 
 // MARK: - Payloads
 
+public struct ReplayMetadata: Codable, Equatable, Sendable {
+    public let requestedCursor: Int
+    public let oldestSequence: Int?
+    public let latestSequence: Int
+    public let windowDays: Int
+    public let cursorExpired: Bool
+
+    public init(
+        requestedCursor: Int,
+        oldestSequence: Int?,
+        latestSequence: Int,
+        windowDays: Int,
+        cursorExpired: Bool
+    ) {
+        self.requestedCursor = requestedCursor
+        self.oldestSequence = oldestSequence
+        self.latestSequence = latestSequence
+        self.windowDays = windowDays
+        self.cursorExpired = cursorExpired
+    }
+}
+
 public struct JoinedRoom: Codable, Equatable, Sendable {
     public let roundtable: RoundtableSnapshot
     public let messages: [Message]
+    public let failures: [TurnFailure]
+    public let summary: RoundSummary?
+    public let replay: ReplayMetadata?
 
-    public init(roundtable: RoundtableSnapshot, messages: [Message]) {
+    public init(
+        roundtable: RoundtableSnapshot,
+        messages: [Message],
+        failures: [TurnFailure] = [],
+        summary: RoundSummary? = nil,
+        replay: ReplayMetadata? = nil
+    ) {
         self.roundtable = roundtable
         self.messages = messages
+        self.failures = failures
+        self.summary = summary
+        self.replay = replay
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case roundtable
+        case messages
+        case failures
+        case summary
+        case replay
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roundtable = try container.decode(RoundtableSnapshot.self, forKey: .roundtable)
+        messages = try container.decode([Message].self, forKey: .messages)
+        failures = try container.decodeIfPresent([TurnFailure].self, forKey: .failures) ?? []
+        summary = try container.decodeIfPresent(RoundSummary.self, forKey: .summary)
+        replay = try container.decodeIfPresent(ReplayMetadata.self, forKey: .replay)
     }
 }
 
@@ -27,10 +78,19 @@ public struct RoundStarted: Codable, Equatable, Sendable {
 public struct AgentActivity: Codable, Equatable, Sendable {
     public let agentId: UUID
     public let agentName: String?
+    public let turnId: UUID?
+    public let round: Int?
 
-    public init(agentId: UUID, agentName: String?) {
+    public init(
+        agentId: UUID,
+        agentName: String?,
+        turnId: UUID? = nil,
+        round: Int? = nil
+    ) {
         self.agentId = agentId
         self.agentName = agentName
+        self.turnId = turnId
+        self.round = round
     }
 }
 
@@ -46,14 +106,62 @@ public struct RoundCompleted: Codable, Equatable, Sendable {
     }
 }
 
+public struct SummaryStarted: Codable, Equatable, Sendable {
+    public let round: Int
+
+    public init(round: Int) {
+        self.round = round
+    }
+}
+
+public struct SummaryCompleted: Codable, Equatable, Sendable {
+    public let summary: RoundSummary
+
+    public init(summary: RoundSummary) {
+        self.summary = summary
+    }
+}
+
+public struct RoomPausePending: Codable, Equatable, Sendable {
+    public let turnId: UUID
+
+    public init(turnId: UUID) {
+        self.turnId = turnId
+    }
+}
+
+public struct RoomStateChanged: Codable, Equatable, Sendable {
+    public let status: RoundtableStatus
+    public let cancelledTurnId: UUID?
+    public let cancelledAgentId: UUID?
+
+    public init(
+        status: RoundtableStatus,
+        cancelledTurnId: UUID? = nil,
+        cancelledAgentId: UUID? = nil
+    ) {
+        self.status = status
+        self.cancelledTurnId = cancelledTurnId
+        self.cancelledAgentId = cancelledAgentId
+    }
+}
+
 public enum EventPayload: Equatable, Sendable {
     case joined(JoinedRoom)
     case roundStarted(RoundStarted)
     case agentThinking(AgentActivity)
     case agentTyping(AgentActivity)
     case agentPassed(AgentActivity)
+    case agentFailed(TurnFailure)
     case messageCompleted(Message)
     case roundCompleted(RoundCompleted)
+    case summaryStarted(SummaryStarted)
+    case summaryCompleted(SummaryCompleted)
+    case budgetExhausted(BudgetExhaustion)
+    case pausePending(RoomPausePending)
+    case paused(RoomStateChanged)
+    case resumed(RoomStateChanged)
+    case ended(RoomStateChanged)
     case unknown
 }
 
@@ -105,27 +213,90 @@ extension EventEnvelope: Decodable {
         sequence = try container.decode(Int.self, forKey: .sequence)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         eventType = try container.decode(String.self, forKey: .eventType)
+        payload = try Self.decodePayload(eventType: eventType, container: container)
+    }
 
+    private static func decodePayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
         switch eventType {
         case "room.joined":
-            payload = .joined(try container.decode(JoinedRoom.self, forKey: .payload))
-        case "round.started":
-            payload = .roundStarted(try container.decode(RoundStarted.self, forKey: .payload))
-        case "agent.thinking":
-            payload = .agentThinking(try container.decode(AgentActivity.self, forKey: .payload))
-        case "agent.typing":
-            payload = .agentTyping(try container.decode(AgentActivity.self, forKey: .payload))
-        case "agent.passed":
-            payload = .agentPassed(try container.decode(AgentActivity.self, forKey: .payload))
+            return .joined(try container.decode(JoinedRoom.self, forKey: .payload))
+        case "round.started", "round.completed":
+            return try decodeRoundPayload(eventType: eventType, container: container)
+        case "agent.thinking", "agent.typing", "agent.passed":
+            return try decodeAgentPayload(eventType: eventType, container: container)
+        case "agent.failed":
+            return .agentFailed(try container.decode(TurnFailure.self, forKey: .payload))
         case "message.completed":
             let completed = try container.decode(MessageCompletedPayload.self, forKey: .payload)
-            payload = .messageCompleted(completed.message)
-        case "round.completed":
-            payload = .roundCompleted(try container.decode(RoundCompleted.self, forKey: .payload))
+            return .messageCompleted(completed.message)
+        case "room.pause_pending", "room.paused", "room.resumed", "room.ended":
+            return try decodeRoomControlPayload(eventType: eventType, container: container)
+        case "budget.exhausted":
+            return .budgetExhausted(
+                try container.decode(BudgetExhaustion.self, forKey: .payload)
+            )
+        case "summary.started":
+            return .summaryStarted(
+                try container.decode(SummaryStarted.self, forKey: .payload)
+            )
+        case "summary.completed":
+            return .summaryCompleted(
+                try container.decode(SummaryCompleted.self, forKey: .payload)
+            )
         default:
             // Unknown events must not break the stream: the server may ship
             // new event types before the client is updated.
-            payload = .unknown
+            return .unknown
+        }
+    }
+
+    private static func decodeRoundPayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
+        switch eventType {
+        case "round.started":
+            return .roundStarted(try container.decode(RoundStarted.self, forKey: .payload))
+        default:
+            return .roundCompleted(try container.decode(RoundCompleted.self, forKey: .payload))
+        }
+    }
+
+    private static func decodeAgentPayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
+        let activity = try container.decode(AgentActivity.self, forKey: .payload)
+        switch eventType {
+        case "agent.thinking":
+            return .agentThinking(activity)
+        case "agent.typing":
+            return .agentTyping(activity)
+        default:
+            return .agentPassed(activity)
+        }
+    }
+
+    private static func decodeRoomControlPayload(
+        eventType: String,
+        container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> EventPayload {
+        if eventType == "room.pause_pending" {
+            return .pausePending(
+                try container.decode(RoomPausePending.self, forKey: .payload)
+            )
+        }
+        let state = try container.decode(RoomStateChanged.self, forKey: .payload)
+        switch eventType {
+        case "room.paused":
+            return .paused(state)
+        case "room.resumed":
+            return .resumed(state)
+        default:
+            return .ended(state)
         }
     }
 }

@@ -2,6 +2,12 @@ import Foundation
 import Observation
 import RoundtableCore
 
+enum ProviderDataAction {
+    case startGeneration
+    case generateSummary
+    case checkProvider(ProviderDraft)
+}
+
 /// Provider lifecycle: availability, save/delete, connectivity check.
 extension AppModel {
     // MARK: - Provider
@@ -41,6 +47,10 @@ extension AppModel {
         providerMetadata != nil
     }
 
+    var hasProviderDataConsent: Bool {
+        defaults.bool(forKey: Self.providerDataNoticeKey)
+    }
+
     func providerConfiguration(for kind: ProviderKind) -> ProviderConfiguration? {
         providerStore.configuration(for: kind)
     }
@@ -74,6 +84,11 @@ extension AppModel {
     /// endpoint. Failures produce a readable message instead of silently
     /// swapping models (PRD 7.13).
     func checkProvider(_ draft: ProviderDraft) async {
+        guard requestProviderDataConsent(for: .checkProvider(draft)) else { return }
+        await performProviderCheck(draft)
+    }
+
+    private func performProviderCheck(_ draft: ProviderDraft) async {
         isCheckingProvider = true
         providerError = nil
         providerCheckMessage = nil
@@ -86,6 +101,40 @@ extension AppModel {
         } catch {
             providerError = Self.userMessage(for: error)
         }
+    }
+
+    @discardableResult
+    func requestProviderDataConsent(for action: ProviderDataAction) -> Bool {
+        if hasProviderDataConsent {
+            return true
+        }
+        pendingProviderDataAction = action
+        isProviderDataNoticePresented = true
+        return false
+    }
+
+    func confirmProviderDataNotice() {
+        defaults.set(true, forKey: Self.providerDataNoticeKey)
+        isProviderDataNoticePresented = false
+        guard let action = pendingProviderDataAction else { return }
+        pendingProviderDataAction = nil
+        switch action {
+        case .startGeneration:
+            startGeneration()
+        case .generateSummary:
+            if room?.summary == nil {
+                startSummaryGenerationIfNeeded()
+            } else {
+                regenerateSummary()
+            }
+        case let .checkProvider(draft):
+            Task { await performProviderCheck(draft) }
+        }
+    }
+
+    func declineProviderDataNotice() {
+        pendingProviderDataAction = nil
+        isProviderDataNoticePresented = false
     }
 
     /// Fills an empty key field from the Keychain, but only while the BaseURL is
