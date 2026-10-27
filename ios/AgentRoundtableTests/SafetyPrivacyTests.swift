@@ -127,7 +127,8 @@ final class SafetyPrivacyTests: XCTestCase {
         let transport = TurnTransport(
             responses: [
                 HTTPResponse(data: Data(guest.utf8), statusCode: 201),
-                HTTPResponse(data: profileData, statusCode: 200)
+                HTTPResponse(data: profileData, statusCode: 200),
+                HTTPResponse(data: Data("[]".utf8), statusCode: 200)
             ]
         )
         let model = makeModel(transport: transport)
@@ -142,9 +143,11 @@ final class SafetyPrivacyTests: XCTestCase {
 
         XCTAssertTrue(model.createError?.contains("本地安全规则") == true)
         let requests = await transport.recordedRequests()
-        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.count, 3)
         XCTAssertFalse(
-            requests.contains { $0.url?.path == "/api/v1/roundtables" }
+            requests.contains {
+                $0.url?.path == "/api/v1/roundtables" && $0.httpMethod == "POST"
+            }
         )
     }
 

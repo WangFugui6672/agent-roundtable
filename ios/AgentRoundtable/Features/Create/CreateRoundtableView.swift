@@ -33,6 +33,14 @@ struct CreateRoundtableView: View {
         .navigationTitle("新建圆桌")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    model.isCreatingRoundtable = false
+                } label: {
+                    Label("返回", systemImage: "chevron.left")
+                }
+                .accessibilityIdentifier("create.back")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingPrivacy = true

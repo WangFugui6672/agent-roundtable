@@ -14,13 +14,13 @@ db-up: ## 启动本地 PostgreSQL
 db-down: ## 停止本地 PostgreSQL
 	docker compose stop db
 
-docker-up: ## 构建并启动完整后端（PostgreSQL + Redis + Django/Channels）
+docker-up: ## 构建并启动后端（PostgreSQL + Redis + Daphne + Celery）
 	docker compose up --build --detach --wait
 
 docker-down: ## 停止完整后端并保留数据卷
 	docker compose down
 
-docker-smoke: ## 用隔离项目从零启动 Compose 并验证健康/Redis/匿名会话
+docker-smoke: ## 用隔离项目从零启动 Compose 并验证健康/Redis/Celery
 	./scripts/verify_compose.sh
 
 docker-purge: ## 在 Compose 数据库中执行 90 天保留清理

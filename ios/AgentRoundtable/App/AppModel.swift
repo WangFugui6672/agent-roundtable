@@ -51,6 +51,12 @@ final class AppModel {
     private(set) var profiles: [AgentProfile] = []
     private(set) var selectedProfileIDs: [UUID] = []
     var room: RoundtableRoomModel? { repository.room }
+    var historyEntries: [RoundtableHistoryEntry] = []
+    var historyError: String?
+    var isDeletingHistory = false
+    var isManagingSession = false
+    var isRoomPresented = false
+    var isCreatingRoundtable = false
     private(set) var streamState: StreamState = .idle
     private(set) var isCreating = false
     private(set) var isMockRunning = false
@@ -68,6 +74,7 @@ final class AppModel {
     var contentSafetyNotice: String?
     var contentSafetyError: String?
     var isDeletingRoom = false
+    var isRegeneratingMessage = false
 
     var turnState: TurnState = .idle
     var summaryState: SummaryGenerationState = .idle
@@ -151,6 +158,8 @@ final class AppModel {
     func bootstrap() async {
         phase = .loading
         let restored = (try? repository.restoreRecent()) ?? false
+        isRoomPresented = false
+        reloadCachedHistory()
         if restored {
             phase = .ready
         }
@@ -181,6 +190,7 @@ final class AppModel {
             selectedProfileIDs = profiles.map(\.id)
         }
         phase = .ready
+        await refreshHistory()
         if room != nil {
             repository.connect(guestSessionID: sessionID)
         }
@@ -284,6 +294,8 @@ final class AppModel {
               let guestSessionID else {
             return
         }
+        isRoomPresented = true
+        isCreatingRoundtable = false
         repository.connect(guestSessionID: guestSessionID)
     }
 
@@ -331,6 +343,9 @@ final class AppModel {
         controlError = nil
         contentSafetyNotice = nil
         contentSafetyError = nil
+        isRoomPresented = false
+        isCreatingRoundtable = false
+        reloadCachedHistory()
     }
 
     func markVisibleMessage(_ messageID: UUID) {
@@ -354,82 +369,4 @@ final class AppModel {
         contentSafetyError = nil
     }
 
-    // MARK: - Helpers
-
-    static var defaultBaseURL: URL {
-        if let raw = ProcessInfo.processInfo.environment["RT_API_BASE_URL"],
-           let url = URL(string: raw) {
-            return url
-        }
-        if let raw = Bundle.main.object(forInfoDictionaryKey: "RTAPIBaseURL") as? String,
-           let url = URL(string: raw) {
-            return url
-        }
-        return URL(string: "http://localhost:8000")!
-    }
-
-    static func live() -> AppModel {
-        let directory = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        let storeURL = directory.appendingPathComponent("AgentRoundtable.store")
-        do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
-            #if DEBUG
-            if ProcessInfo.processInfo.environment["RT_RESET_PERSISTED_ROOM"] == "1" {
-                for suffix in ["", "-shm", "-wal"] {
-                    try? FileManager.default.removeItem(
-                        atPath: storeURL.path + suffix
-                    )
-                }
-            }
-            #endif
-            let store = try SwiftDataRoomStore(storeURL: storeURL)
-            return AppModel(roomStore: store)
-        } catch {
-            return AppModel()
-        }
-    }
-
-    private static func mapConnectionState(
-        _ state: RoundtableConnectionState
-    ) -> StreamState {
-        switch state {
-        case .idle: return .idle
-        case .connecting: return .connecting
-        case .connected: return .connected
-        case let .waitingToReconnect(attempt, _): return .reconnecting(attempt: attempt)
-        case let .disconnected(message):
-            if let message {
-                return .failed(message)
-            }
-            return .closed
-        }
-    }
-
-    /// Single mapping from any error to copy shown in the UI. Provider errors
-    /// already carry actionable text (PRD 7.13), so they win over the fallback.
-    static func userMessage(for error: Error) -> String {
-        if let providerError = error as? ProviderError {
-            return providerError.message
-        }
-        if let validation = error as? ProviderValidationError {
-            return validation.message
-        }
-        if let keychain = error as? KeychainError {
-            return keychain.message
-        }
-        if let apiError = error as? APIError {
-            return apiError.message
-        }
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain {
-            return "网络请求失败：\(nsError.localizedDescription)"
-        }
-        return error.localizedDescription
-    }
 }

@@ -1,8 +1,13 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
+ARG UV_DEFAULT_INDEX=https://pypi.org/simple
+
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=300 \
+    UV_CONCURRENT_DOWNLOADS=1 \
+    UV_DEFAULT_INDEX=$UV_DEFAULT_INDEX \
     PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app

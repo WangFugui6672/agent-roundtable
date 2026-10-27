@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from apps.roundtables.statuses import IN_PROGRESS_STATUSES
+
 MAX_ACTIVE_ROUNDTABLES = 3
 MAX_MOCK_ROUNDTABLES_PER_DAY = 10
 MAX_ROUNDS = 2
@@ -12,7 +14,7 @@ MAX_TURN_SECONDS = 60
 MAX_DISCUSSION_SECONDS = 90
 MAX_REPORTED_TOKENS = 2400
 
-ACTIVE_STATUSES = frozenset({"ready", "running", "paused", "summarizing"})
+ACTIVE_STATUSES = IN_PROGRESS_STATUSES
 
 
 def utc_day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:

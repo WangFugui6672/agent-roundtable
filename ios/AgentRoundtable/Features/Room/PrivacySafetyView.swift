@@ -1,7 +1,10 @@
 import SwiftUI
 
 struct PrivacySafetyView: View {
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @State private var showingSessionDeletion = false
+    @State private var showingRotation = false
 
     var body: some View {
         NavigationStack {
@@ -58,6 +61,7 @@ struct PrivacySafetyView: View {
                             "匿名会话标识由后端生成并保存在本机 Keychain（WhenUnlockedThisDeviceOnly）。"
                             + "旧版本留在 UserDefaults 的标识会在下次启动时迁移到 Keychain。"
                     )
+                    sessionActions
                 }
                 .padding(20)
             }
@@ -68,6 +72,53 @@ struct PrivacySafetyView: View {
                     Button("完成") { dismiss() }
                 }
             }
+        }
+        .alert("删除匿名会话数据？", isPresented: $showingSessionDeletion) {
+            Button("删除全部数据", role: .destructive) {
+                Task { await model.deleteGuestSession() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("服务端圆桌与消息会立即删除，本机缓存和游标也会清除；Keychain 中的 Provider API Key 保留。")
+        }
+        .confirmationDialog(
+            "轮换匿名会话标识？",
+            isPresented: $showingRotation,
+            titleVisibility: .visible
+        ) {
+            Button("轮换标识") {
+                Task { await model.rotateGuestSession() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("旧标识会立即失效，已有圆桌继续归属于新的设备标识。")
+        }
+    }
+
+    private var sessionActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let error = model.controlError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
+            Button {
+                showingRotation = true
+            } label: {
+                Label("轮换匿名会话标识", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isManagingSession)
+            .accessibilityIdentifier("privacy.session.rotate")
+
+            Button(role: .destructive) {
+                showingSessionDeletion = true
+            } label: {
+                Label("删除匿名会话全部数据", systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isManagingSession)
+            .accessibilityIdentifier("privacy.session.delete")
         }
     }
 

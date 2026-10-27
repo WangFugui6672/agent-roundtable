@@ -24,6 +24,7 @@ flowchart LR
 
     Postgres[("PostgreSQL")]
     Redis[("Redis Channel Layer")]
+    Celery["Celery worker + beat"]
 
     UI --> Core
     Core --> Store
@@ -38,6 +39,8 @@ flowchart LR
     REST --> Postgres
     Scheduler -->|"跨进程广播"| Redis
     Redis --> WS
+    Celery -->|"每日保留清理"| Postgres
+    Celery --> Redis
 ```
 
 ## 信任边界
@@ -59,11 +62,19 @@ flowchart LR
 
 ## 部署拓扑
 
-`docker-compose.yml` 启动四个服务：
+`docker-compose.yml` 定义六个服务，其中五个常驻：
 
 - `db`：PostgreSQL 16。
 - `redis`：Redis 7，启用 AOF。
 - `backend`：Daphne + Django ASGI，启动前自动执行迁移。
+- `worker`：Celery worker，执行保留清理等后台任务。
+- `beat`：Celery beat，每日把 `purge_expired_roundtables_task` 投递到 Redis broker。
 - `purge`：可选 `ops` profile，执行 90 天保留清理。
 
-本地单元测试默认不要求 Redis；设置 `REDIS_URL` 后才启用 `channels_redis`。Compose 始终设置 Redis，避免多进程广播失效。
+`purge` 是一次性运维容器，不计入常驻服务。本地单元测试默认不要求 Redis；设置 `REDIS_URL` 后才启用 `channels_redis`。Compose 始终设置 Redis，避免多进程广播失效，并为 Celery 提供 broker。
+
+## 历史与删除墓碑
+
+iOS 首页合并 `GET /roundtables` 与 SwiftData 历史。打开缓存圆桌时先恢复完整消息、失败、结论、游标和最近可见消息，再连接 WebSocket 补发增量。
+
+服务端删除圆桌成功后，Repository 先向 SwiftData 写入持久删除墓碑，再删除缓存。此后即使本地物理删除失败或进程崩溃，恢复路径也必须跳过该圆桌；墓碑优先于旧缓存，防止已删除内容复活。

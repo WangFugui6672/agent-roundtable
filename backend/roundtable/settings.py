@@ -88,6 +88,21 @@ ROUNDTABLE_RETENTION_DAYS = max(
     int(env("ROUNDTABLE_RETENTION_DAYS", "90") or "90"),
 )
 
+# --- Celery ---------------------------------------------------------------
+CELERY_BROKER_URL = env(
+    "CELERY_BROKER_URL",
+    REDIS_URL or "redis://127.0.0.1:6379/0",
+)
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND")
+CELERY_TASK_ALWAYS_EAGER = env_flag("CELERY_TASK_ALWAYS_EAGER", default=False)
+CELERY_TIMEZONE = "UTC"
+CELERY_BEAT_SCHEDULE = {
+    "purge-expired-roundtables": {
+        "task": "apps.roundtables.tasks.purge_expired_roundtables_task",
+        "schedule": 60 * 60 * 24,
+    }
+}
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 TIME_ZONE = "UTC"

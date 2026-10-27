@@ -353,6 +353,12 @@ class MessageSerializer(serializers.ModelSerializer):
     mentioned_agent_ids = serializers.SerializerMethodField()
     challenge_target_agent_id = serializers.SerializerMethodField()
     turn_id = serializers.UUIDField(source="turn.id", allow_null=True, read_only=True)
+    supersedes_message_id = serializers.UUIDField(
+        source="supersedes_id",
+        allow_null=True,
+        read_only=True,
+    )
+    superseded_by_message_id = serializers.UUIDField(read_only=True)
 
     class Meta:
         model = Message
@@ -369,6 +375,9 @@ class MessageSerializer(serializers.ModelSerializer):
             "challenge_target_agent_id",
             "confidence",
             "mentioned_agent_ids",
+            "is_key_point",
+            "supersedes_message_id",
+            "superseded_by_message_id",
             "created_at",
         ]
         read_only_fields = fields
@@ -600,3 +609,7 @@ class TurnFailSerializer(serializers.Serializer):
         if contains_secret(self.initial_data):
             raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
         return attrs
+
+
+class KeyPointUpdateSerializer(serializers.Serializer):
+    is_key_point = serializers.BooleanField()
