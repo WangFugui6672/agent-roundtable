@@ -50,6 +50,13 @@ final class RealTurnUITests: XCTestCase {
         XCTAssertTrue(startRound.waitForExistence(timeout: 5))
         startRound.tap()
 
+        let dataNotice = app.buttons["provider.dataNotice.confirm"]
+        XCTAssertTrue(
+            dataNotice.waitForExistence(timeout: 5),
+            "首次真实 Provider 调用前没有显示数据发送提示：\(app.debugDescription)"
+        )
+        dataNotice.tap()
+
         let error = app.descendants(matching: .any).matching(identifier: "room.turn.error").firstMatch
         XCTAssertTrue(
             error.waitForExistence(timeout: 30),
