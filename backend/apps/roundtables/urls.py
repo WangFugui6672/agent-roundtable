@@ -5,6 +5,10 @@ from django.urls import path
 from apps.roundtables.views import (
     AgentProfileListView,
     GuestSessionCreateView,
+    GuestSessionDeleteView,
+    GuestSessionRotateView,
+    MessageKeyPointUpdateView,
+    MessageRegenerateView,
     MessageReportCreateView,
     RoundtableDetailView,
     RoundtableEndView,
@@ -22,6 +26,8 @@ from apps.roundtables.views import (
 
 urlpatterns = [
     path("guest-sessions", GuestSessionCreateView.as_view(), name="guest-session-create"),
+    path("guest-sessions/rotate", GuestSessionRotateView.as_view(), name="guest-session-rotate"),
+    path("guest-sessions/current", GuestSessionDeleteView.as_view(), name="guest-session-delete"),
     path("agent-profiles", AgentProfileListView.as_view(), name="agent-profile-list"),
     path("roundtables", RoundtableListCreateView.as_view(), name="roundtable-list-create"),
     path(
@@ -53,6 +59,16 @@ urlpatterns = [
         "roundtables/<uuid:roundtable_id>/messages/<uuid:message_id>/reports",
         MessageReportCreateView.as_view(),
         name="message-report-create",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/messages/<uuid:message_id>/key-point",
+        MessageKeyPointUpdateView.as_view(),
+        name="message-key-point",
+    ),
+    path(
+        "roundtables/<uuid:roundtable_id>/messages/<uuid:message_id>/regenerate",
+        MessageRegenerateView.as_view(),
+        name="message-regenerate",
     ),
     path(
         "roundtables/<uuid:roundtable_id>/pause",

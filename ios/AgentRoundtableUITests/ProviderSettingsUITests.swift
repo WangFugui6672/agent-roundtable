@@ -13,6 +13,7 @@ final class ProviderSettingsUITests: XCTestCase {
         app.launchEnvironment["RT_RESET_PROVIDER_STATE"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let providerEntry = app.buttons["create.provider"]
         XCTAssertTrue(

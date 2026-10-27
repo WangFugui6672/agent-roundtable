@@ -50,7 +50,8 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - WebSocket 使用可取消的指数退避重连，每次重连携带本机最后已处理游标。
 - `room.joined.replay` 返回 90 天补发窗口；游标过期时使用完整快照重置，不会永久跳过缺口。
 - iOS 按 `event_id` 和连续 `sequence` 去重/缓冲乱序事件，未知事件也会推进游标。
-- SwiftData 保存最近圆桌、消息、失败、游标、有界去重状态和最近可见消息；App 重启直接恢复缓存。
+- SwiftData 保存多桌历史、消息、失败、游标、有界去重状态、最近可见消息和删除墓碑；App 重启后从首页打开缓存圆桌。
+- 首页合并服务端历史与本地 SwiftData 记录，展示进行中/已完成/已归档状态；打开缓存圆桌会恢复完整消息与滚动位置，离线仍可阅读。
 - 断网时已有消息继续可读；App 进入后台会取消本地 Provider Task、暂停连接，回前台只恢复连接并要求用户显式继续。
 - `AppModel` 已通过 `RoundtableRepository` 收口 REST、WebSocket、SwiftData 和游标编排；API Key 不进入 Repository 持久化状态。
 - 第二轮或用户提前结束后进入 `summarizing`；服务端通过 `round.completed` / `room.ended` 与 `summary.started` 持久化该阶段，重连可恢复。
@@ -60,6 +61,8 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - 结论成功后圆桌进入只读 `completed`；Agent 消息、用户消息、turn 和暂停控制都会被服务端拒绝。
 - 已完成圆桌可通过 `POST /follow-ups` 创建新圆桌，显式保存父圆桌、原总结和原议题上下文。
 - 圆桌页按共识、分歧、建议、未决问题展示结论及引用原观点，并支持重新生成。
+- 用户可把有效 AI 观点标记为关键观点，总结候选会优先排列这些观点；标记不修改正文，也不会删除消息。
+- 用户可重新生成最近一条 AI 回复。服务端签发替代 turn，新消息通过 `supersedes_message_id` 关联旧消息；旧正文和既有引用保持可恢复。
 - 结论卡由 SwiftUI 与 `ImageRenderer` 绘制，可保存相册并通过系统分享；卡片不含 API Key、内部 ID、Prompt、公开链接或二维码。
 - `room.joined` 和 SwiftData 均持久化结论；进程重启后可恢复已完成圆桌与结论卡入口。
 - 参与者、消息、生成状态和结论始终显示 AI 标识；只提供固定预设 Agent，不提供公众人物冒充或克隆。
@@ -69,7 +72,10 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - 用户可举报当前圆桌的 AI 消息；举报服务端幂等保存为 `submitted`，不伪装成审核结论。
 - 用户可在本机隐藏 AI 消息；隐藏、内容标记和举报状态保存到 SwiftData，不删除或改写服务端消息。
 - `DELETE /roundtables/{id}` 幂等删除圆桌及消息、事件、回合、用量、结论和举报；iOS 同步清理本地缓存、隐藏状态和恢复游标，但保留 Keychain API Key。
+- 服务端删除成功后，iOS 先落盘删除墓碑；即使后续本地清理失败，进程重启也不会恢复已删除圆桌。
 - 圆桌按最后活动保留 90 天，`purge_roundtables` 清理任务支持 dry-run；匿名会话标识使用独立 Keychain item。
+- 匿名会话支持轮换和整体删除：轮换后旧标识立即失效、已有圆桌归属新标识；删除会话级联清理服务端与本机数据，Provider API Key 保留。
+- Celery worker 与 beat 每日执行保留清理任务，Redis 作为 broker；管理命令仍可用于手工 dry-run。
 - GitHub Actions 执行后端全量检查、Compose 冷启动、secret scan、RoundtableCore、App 单测和完整 UI 回归。
 
 ## 目录结构
@@ -109,12 +115,20 @@ docker compose up --build --detach --wait
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
-Compose 会启动 PostgreSQL、Redis 和 Django/Channels，并在 Web 服务启动前执行迁移。默认宿主机端口是 `8000` 和 PostgreSQL `5432`；端口冲突时使用 `BACKEND_PORT` / `POSTGRES_PORT`。90 天清理可按需执行：
+Compose 会启动 PostgreSQL、Redis、Django/Channels、Celery worker 和 Celery beat，并在 Web 服务启动前执行迁移。默认宿主机端口是 `8000` 和 PostgreSQL `5432`；端口冲突时使用 `BACKEND_PORT` / `POSTGRES_PORT`。90 天清理由 beat 每日调度，也可按需手工执行：
 
 ```bash
 docker compose --profile ops run --rm purge
 docker compose down
 ```
+
+中国大陆网络构建 Docker 镜像时，可在 `.env` 指定可选 PyPI 镜像，避免官方源超时：
+
+```dotenv
+UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+该参数只影响镜像构建，不写入运行时配置；CI 默认继续使用官方 PyPI。
 
 ### 本地开发后端
 
@@ -143,7 +157,7 @@ open ios/AgentRoundtable.xcodeproj
 
 后端地址默认 `http://localhost:8000`，可在 scheme 的环境变量 `RT_API_BASE_URL` 覆盖（真机调试时填局域网地址）。Info.plist 只对 `localhost` / `127.0.0.1` 放开 HTTP（`NSExceptionDomains`），上线前必须移除；生产环境要求 HTTPS/WSS。
 
-进入 App 后：输入议题 → 确认三个参与者 → 开始讨论 → 配置 Provider 后启动自动讨论，或点击 Mock 查看确定性演示事件。圆桌页底部可以发送普通消息、点名 Agent、暂停、继续或提前结束。二轮结束或提前结束后自动进入结论阶段；Mock 无 Key 演示使用规则化降级摘要。
+进入 App 后：首页可打开历史圆桌或新建讨论 → 确认三个参与者 → 开始讨论 → 配置 Provider 后启动自动讨论，或点击 Mock 查看确定性演示事件。圆桌页底部可以发送普通消息、点名 Agent、暂停、继续或提前结束；消息菜单可标记关键观点或重新生成最近一条 AI 回复。二轮结束或提前结束后自动进入结论阶段；Mock 无 Key 演示使用规则化降级摘要。
 
 创建页的「模型 Provider」可以打开 Provider 设置：选 Qwen / DeepSeek / 自定义，填写 BaseURL、Model 与 API Key。API Key 只写入 Keychain，不会出现在 `UserDefaults`、日志或后端请求里；「验证连接」会调用该服务的 `GET /models` 判断 Key 与地址是否可用（不消耗 Token）。未配置 Provider 时仍可用 Mock 演示。
 
@@ -218,7 +232,7 @@ make docker-down
 
 - `mock.run` 保留为确定性演示与 UI 测试入口；真实两轮讨论由 turn REST 握手驱动。
 - Compose 与生产配置使用 Redis Channel Layer；本地测试和单进程开发默认使用内存层，以保持测试无外部依赖。
-- 90 天清理由部署环境定时调用 `purge_roundtables`，Compose 只提供 `ops` profile，不在仓库内内置 Celery beat 或外部调度器。
+- 90 天清理由 Compose 中的 Celery beat 每日调度 worker；`purge_roundtables` 管理命令仍可供运维手工执行。
 - Provider Token 仍以客户端上报为权威观测值；Provider 未返回 usage 时只记录延迟与重试，不伪造 Token。
 - 事件补发窗口默认 90 天；窗口外只返回完整圆桌快照并标记 `cursor_expired`。
 - 两轮讨论都由服务端顺序签发 turn；第一轮结束时同一响应自动签发第二轮。

@@ -34,8 +34,27 @@ curl --fail --silent --show-error --request POST \
 
 docker compose --project-name "$PROJECT_NAME" exec --no-TTY redis redis-cli ping
 
+TASK_ID="$(
+  docker compose --project-name "$PROJECT_NAME" exec --no-TTY worker \
+    celery -A roundtable call apps.roundtables.tasks.purge_expired_roundtables_task
+)"
+WORKER_COMPLETED=false
+for _ in {1..20}; do
+  if docker compose --project-name "$PROJECT_NAME" logs --no-color worker \
+    | grep -q "purge_expired_roundtables_task.*succeeded"; then
+    WORKER_COMPLETED=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$WORKER_COMPLETED" != true ]]; then
+  docker compose --project-name "$PROJECT_NAME" logs worker
+  echo "Celery task $TASK_ID did not complete." >&2
+  exit 1
+fi
+
 docker compose --project-name "$PROJECT_NAME" exec --no-TTY backend python -c \
-  "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'roundtable.settings'); from django.conf import settings; assert settings.CHANNEL_LAYERS['default']['BACKEND'] == 'channels_redis.core.RedisChannelLayer'"
+  "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'roundtable.settings'); from django.conf import settings; assert settings.CHANNEL_LAYERS['default']['BACKEND'] == 'channels_redis.core.RedisChannelLayer'; assert settings.CELERY_BEAT_SCHEDULE['purge-expired-roundtables']['task'] == 'apps.roundtables.tasks.purge_expired_roundtables_task'"
 
 docker compose --project-name "$PROJECT_NAME" exec --no-TTY backend python - <<'PY'
 import asyncio
@@ -65,4 +84,4 @@ PURGE_OUTPUT="$(
 )"
 grep -q "dry_run=true" <<<"$PURGE_OUTPUT"
 
-echo "Compose smoke passed: migrations, Redis Channels, idle receive, health, guest session, and retention purge."
+echo "Compose smoke passed: migrations, Redis Channels, Celery worker/beat, idle receive, health, guest session, and retention purge."

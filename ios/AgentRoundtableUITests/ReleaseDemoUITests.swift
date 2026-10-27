@@ -14,6 +14,7 @@ final class ReleaseDemoUITests: XCTestCase {
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let topic = app.descendants(matching: .any).matching(identifier: "create.topic").firstMatch
         XCTAssertTrue(topic.waitForExistence(timeout: 20), app.debugDescription)

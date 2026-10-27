@@ -22,11 +22,16 @@
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | `200` |
 | `POST` | `/api/v1/guest-sessions` | `201` |
+| `POST` | `/api/v1/guest-sessions/rotate` | `200` |
+| `DELETE` | `/api/v1/guest-sessions/current` | `204` |
 | `GET` | `/api/v1/agent-profiles` | `200` |
+| `GET` | `/api/v1/roundtables` | `200` |
 | `POST` | `/api/v1/roundtables` | `201` |
 | `GET` | `/api/v1/roundtables/{id}` | `200` |
 | `DELETE` | `/api/v1/roundtables/{id}` | `204` |
 | `POST` | `/api/v1/roundtables/{id}/messages` | `201` |
+| `PATCH` | `/api/v1/roundtables/{id}/messages/{message_id}/key-point` | `200` |
+| `POST` | `/api/v1/roundtables/{id}/messages/{message_id}/regenerate` | `201`，幂等重复 `200` |
 | `POST` | `/api/v1/roundtables/{id}/turns/next` | `200` |
 | `POST` | `/api/v1/roundtables/{id}/turns/pass` | `201` |
 | `POST` | `/api/v1/roundtables/{id}/turns/fail` | `201` |
@@ -38,8 +43,6 @@
 | `POST` | `/api/v1/roundtables/{id}/summary` | `201`，幂等重试 `200` |
 | `POST` | `/api/v1/roundtables/{id}/follow-ups` | `201` |
 | `POST` | `/api/v1/roundtables/{id}/messages/{message_id}/reports` | `201`，幂等重复 `200` |
-
-当前没有“列出圆桌历史”的 `GET /roundtables`；iOS 历史恢复以本地 SwiftData 缓存和最近圆桌为入口。
 
 ### 2.1 错误信封
 
@@ -86,6 +89,10 @@
 ```
 
 MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话的圆桌。客户端把 `id` 存本地，并在后续请求中作为 `X-Guest-Session` 头发送。
+
+`POST /api/v1/guest-sessions/rotate` 返回新的 `GuestSession`，旧 UUID 立即失效；已有圆桌和举报记录在同一事务内转移到新 UUID。客户端必须在成功响应后原子替换 Keychain 中的会话标识。
+
+`DELETE /api/v1/guest-sessions/current` 返回 `204`，级联删除当前匿名会话拥有的圆桌、消息、事件、turn、用量、结论和举报。客户端同时清除 SwiftData 缓存，但不删除 Provider API Key。
 
 ### 2.4 读取预设 Agent
 
@@ -155,6 +162,8 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 这样客户端一旦误传密钥会立刻失败，而不是被静默忽略后写进日志或数据库。Provider 元数据只用于展示与可观测性，后端不会用它发起模型请求。
 
 `201` 返回圆桌快照（见 2.6）。
+
+`GET /api/v1/roundtables` 返回当前匿名会话最多 100 条历史快照数组，按创建时间倒序，包含 `ready | running | paused | summarizing | completed | failed | archived`。客户端把它与本地 SwiftData 历史合并；缓存快照不覆盖服务端较新的状态。
 
 ### 2.6 圆桌快照
 
@@ -276,6 +285,37 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 > Compose 和生产部署设置 `REDIS_URL`，使用 `channels_redis.core.RedisChannelLayer` 跨进程广播。单元测试和单进程本地开发不设置该变量，默认使用内存层。
 
 **为什么由客户端提交**：模型请求由 iOS 直连 Provider（ADR 0001），Django 只负责签发 turn、校验与持久化，所以消息一定经过一次 HTTP 提交。调度事件由服务端持久化和广播；实际逐字流仍只存在于发起请求的客户端。
+
+### 2.7.1 关键观点
+
+`PATCH /api/v1/roundtables/{id}/messages/{message_id}/key-point`：
+
+```json
+{"is_key_point": true}
+```
+
+- 只能标记同一圆桌中的有效 Agent 观点；用户消息、pass 和 summary 不能标记。
+- 重复写入相同值幂等，返回更新后的完整 `Message`。
+- 该操作只更新 `is_key_point`，不修改 claim、正文、引用或其他消息。
+- 生成结论时，候选观点按关键观点优先排列；被新版本替代的旧消息不进入默认候选集。
+
+### 2.7.2 重新生成 Agent 回复
+
+`POST /api/v1/roundtables/{id}/messages/{message_id}/regenerate` 为一条 AI 发言签发新的替代 turn：
+
+```json
+{
+  "round": 1,
+  "turn": {"turn_id": "...", "round": 1, "...": "..."},
+  "replacement_message_id": null,
+  "events": [{"event_type": "agent.thinking", "...": "..."}]
+}
+```
+
+- 原消息不删除、不改写正文；已有引用继续指向原消息。
+- 替代 turn 使用原消息的 Agent 与轮次。提交新消息后，新消息携带 `supersedes_message_id`，原消息在快照中携带 `superseded_by_message_id`。
+- 同一原消息最多绑定一个替代 turn；重复请求返回同一 pending turn。替代完成后重复请求返回 `turn: null` 和稳定的 `replacement_message_id`，不会继续创建版本。
+- 圆桌已有其他 pending turn、已进入 `summarizing/completed`，或目标不是 AI 消息时返回 `400 validation_error`。
 
 ### 2.8 获取下一位发言人
 
@@ -636,7 +676,7 @@ Token 的可信度边界：
 }
 ```
 
-总结由 iOS 使用当前 Provider 生成：模型输出只包含 `text` 和候选观点 `reference_indexes`，客户端将索引映射为真实消息 ID。严格 schema 失败最多重试一次；再次失败或 Provider 不可用时，`RuleBasedSummary` 只用原消息 claim/正文生成本地降级项并设置 `degraded = true`。候选范围、强制引用和提示约束可以降低“引入新事实”的风险，但后端无法证明任意自然语言片段没有隐含新事实。
+总结由 iOS 使用当前 Provider 生成：模型输出只包含 `text` 和候选观点 `reference_indexes`，客户端将索引映射为真实消息 ID。关键观点优先排列，被替代的旧版本排除在默认候选集之外。严格 schema 失败最多重试一次；再次失败或 Provider 不可用时，`RuleBasedSummary` 只用原消息 claim/正文生成本地降级项并设置 `degraded = true`。候选范围、强制引用和提示约束可以降低“引入新事实”的风险，但后端无法证明任意自然语言片段没有隐含新事实。
 
 ### 2.17 继续追问
 
@@ -693,7 +733,7 @@ Token 的可信度边界：
 - 已删除圆桌的详情、总结、消息、turn、举报和 WebSocket 访问均不可用。
 - 其他匿名会话删除该圆桌返回 `404 roundtable_not_found`，不会删除数据。
 
-客户端必须在服务端成功后清理该圆桌的 SwiftData 记录、消息、结论、本地隐藏/标记/举报状态和恢复游标。服务端已删除但本机清理失败时，应保留明确的可重试状态；不得删除 Keychain 中的 Provider API Key。
+客户端必须在服务端成功后先写入持久删除墓碑，再清理该圆桌的 SwiftData 记录、消息、结论、本地隐藏/标记/举报状态和恢复游标。墓碑必须先于可能失败的本地删除落盘：即使后续删除失败，重启恢复也必须跳过该圆桌，不能把服务端已删除的内容复活。不得删除 Keychain 中的 Provider API Key。
 
 ### 2.20 数据保留
 
@@ -702,6 +742,7 @@ Token 的可信度边界：
 - `GuestSession.last_seen_at` 只用于清理已经没有任何圆桌的匿名会话，不作为圆桌内容保留依据。
 - 边界语义为 `last_activity_at <= now - ROUNDTABLE_RETENTION_DAYS` 时到期，默认 `ROUNDTABLE_RETENTION_DAYS=90`。
 - 清理任务逐桌删除全部关联数据，并删除已经没有圆桌且超过保留期的匿名会话。
+- Celery worker 执行 `purge_expired_roundtables_task`，Celery beat 每日调度一次；Compose 同时启动 worker 与 beat，Redis 作为 broker。管理命令仍保留用于手工执行和 dry-run。
 - iOS Keychain 中的 API Key 不参与服务端或本地保留清理。
 
 运维命令：
@@ -813,6 +854,9 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
   "challenge_target_agent_id": "<RoundtableAgent.id>",
   "confidence": 0.64,
   "mentioned_agent_ids": [],
+  "is_key_point": false,
+  "supersedes_message_id": null,
+  "superseded_by_message_id": null,
   "created_at": "2026-10-26T01:02:03.456Z"
 }
 ```
@@ -823,6 +867,7 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 
 真实 Agent 的普通消息必须带服务端签发的 `turn_id`；Mock 消息的 `turn_id` 为 `null`，但仍带 `round_number`。
 `author.type = user` 时，`roundtable_agent_id`、`agent_key`、`turn_id`、`claim`、`stance` 和 `confidence` 均为 `null`，`message_type` 为 `user_message`。
+`is_key_point` 缺省为 `false`。`supersedes_message_id` / `superseded_by_message_id` 描述不可变正文之间的版本链，旧消息仍保留并可供引用与历史恢复。
 第一轮消息的 `challenge_target_agent_id` 通常为 `null`。第二轮中，`support/challenge/supplement/question` 消息必须引用更早的其他 Agent 有效观点；`challenge` 消息还必须带有 `challenge_target_agent_id`，并与被引用观点的作者一致。
 
 ### 3.5 客户端命令与两轮流程
@@ -878,7 +923,7 @@ round.completed
 ## 4. 客户端实现要求
 
 - 断线重连时携带本机最后持久化游标；不能用新收到的 `room.joined.roundtable.last_sequence` 覆盖已有本地游标。
-- 本地持久化最近圆桌快照、完整消息、失败、游标、有界事件 ID 去重集合和最近可见消息 ID。
+- 本地持久化历史圆桌快照、完整消息、失败、游标、有界事件 ID 去重集合、最近可见消息 ID 和删除墓碑。
 - 事件按 `event_id` 去重，按 `sequence` 忽略重复/过期事件；高序号先到时先缓冲，只有缺失序号补齐后才投影并推进游标。
 - 即使事件类型未知、payload 未被渲染，游标也要前进到该 `sequence`，否则重连会反复补发同一条事件。
 - 未知 `event_type` 必须被忽略而不是报错，以支持服务端向前演进。
@@ -891,5 +936,5 @@ round.completed
 - 所有 Agent 在参与者卡片、消息、生成状态、总结与结论卡中始终显示 AI 标识；不提供自定义公众人物角色。
 - 用户输入和 Provider 输出必须经过 `RoundtableCore.ContentPolicy`。`block` 不得发送到服务端或 Provider；`flag` 保留内容并显示“未经模型或人工审核”。
 - 真实 Provider 首次调用前必须展示第三方数据提示。确认状态可以保存在 UserDefaults，但 API Key 不得进入 UserDefaults。
-- 匿名会话标识使用独立 Keychain item；旧 UserDefaults 值只用于一次性迁移。
+- 匿名会话标识使用独立 Keychain item；轮换时先原子替换本地 Keychain 值，旧 UserDefaults 值只用于一次性迁移。删除匿名会话会清空本地缓存，但 Provider API Key 保留。
 - 本地举报状态、隐藏状态和内容标记随 SwiftData 保存；删除圆桌时全部清除。

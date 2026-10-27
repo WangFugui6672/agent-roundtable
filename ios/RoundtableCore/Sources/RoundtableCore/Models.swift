@@ -220,91 +220,6 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public struct TurnFailureSubmission: Codable, Equatable, Sendable {
-    public let turnId: UUID
-    public let roundtableAgentId: UUID
-    public let failureCode: String
-    public let message: String
-    public let retryable: Bool
-    public let partial: String?
-    public let usage: ProviderUsageReport?
-
-    public init(
-        turnId: UUID,
-        roundtableAgentId: UUID,
-        failureCode: String,
-        message: String,
-        retryable: Bool,
-        partial: String? = nil,
-        usage: ProviderUsageReport? = nil
-    ) {
-        self.turnId = turnId
-        self.roundtableAgentId = roundtableAgentId
-        self.failureCode = failureCode
-        self.message = message
-        self.retryable = retryable
-        self.partial = partial
-        self.usage = usage
-    }
-}
-
-public struct TurnFailure: Codable, Equatable, Sendable, Identifiable {
-    public let turnId: UUID
-    public let round: Int
-    public let agentId: UUID
-    public let agentName: String
-    public let failureCode: String
-    public let message: String
-    public let retryable: Bool
-    public let partial: String?
-
-    public var id: UUID { turnId }
-
-    public init(
-        turnId: UUID,
-        round: Int,
-        agentId: UUID,
-        agentName: String,
-        failureCode: String,
-        message: String,
-        retryable: Bool,
-        partial: String? = nil
-    ) {
-        self.turnId = turnId
-        self.round = round
-        self.agentId = agentId
-        self.agentName = agentName
-        self.failureCode = failureCode
-        self.message = message
-        self.retryable = retryable
-        self.partial = partial
-    }
-}
-
-public enum BudgetExhaustionReason: String, Codable, Sendable {
-    case duration
-    case agentMessages = "agent_messages"
-    case reportedTokens = "reported_tokens"
-    case unknown
-
-    public init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = BudgetExhaustionReason(rawValue: raw) ?? .unknown
-    }
-}
-
-public struct BudgetExhaustion: Codable, Equatable, Sendable {
-    public let reason: BudgetExhaustionReason
-    public let message: String
-    public let round: Int
-
-    public init(reason: BudgetExhaustionReason, message: String, round: Int) {
-        self.reason = reason
-        self.message = message
-        self.round = round
-    }
-}
-
 public enum MessageType: String, Codable, Sendable, CaseIterable {
     case proposal
     case support
@@ -403,6 +318,9 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let challengeTargetAgentId: UUID?
     public let confidence: Double?
     public let mentionedAgentIds: [UUID]
+    public let isKeyPoint: Bool
+    public let supersedesMessageId: UUID?
+    public let supersededByMessageId: UUID?
     public let createdAt: Date
 
     public init(
@@ -418,6 +336,9 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         challengeTargetAgentId: UUID? = nil,
         confidence: Double? = nil,
         mentionedAgentIds: [UUID] = [],
+        isKeyPoint: Bool = false,
+        supersedesMessageId: UUID? = nil,
+        supersededByMessageId: UUID? = nil,
         createdAt: Date
     ) {
         self.id = id
@@ -432,6 +353,9 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         self.challengeTargetAgentId = challengeTargetAgentId
         self.confidence = confidence
         self.mentionedAgentIds = mentionedAgentIds
+        self.isKeyPoint = isKeyPoint
+        self.supersedesMessageId = supersedesMessageId
+        self.supersededByMessageId = supersededByMessageId
         self.createdAt = createdAt
     }
 
@@ -448,6 +372,9 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         case challengeTargetAgentId
         case confidence
         case mentionedAgentIds
+        case isKeyPoint
+        case supersedesMessageId
+        case supersededByMessageId
         case createdAt
     }
 
@@ -467,6 +394,53 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
         mentionedAgentIds =
             try container.decodeIfPresent([UUID].self, forKey: .mentionedAgentIds) ?? []
+        isKeyPoint = try container.decodeIfPresent(Bool.self, forKey: .isKeyPoint) ?? false
+        supersedesMessageId =
+            try container.decodeIfPresent(UUID.self, forKey: .supersedesMessageId)
+        supersededByMessageId =
+            try container.decodeIfPresent(UUID.self, forKey: .supersededByMessageId)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func settingKeyPoint(_ value: Bool) -> Message {
+        Message(
+            id: id,
+            turnId: turnId,
+            roundNumber: roundNumber,
+            author: author,
+            messageType: messageType,
+            claim: claim,
+            body: body,
+            stance: stance,
+            references: references,
+            challengeTargetAgentId: challengeTargetAgentId,
+            confidence: confidence,
+            mentionedAgentIds: mentionedAgentIds,
+            isKeyPoint: value,
+            supersedesMessageId: supersedesMessageId,
+            supersededByMessageId: supersededByMessageId,
+            createdAt: createdAt
+        )
+    }
+
+    public func superseded(by replacementID: UUID) -> Message {
+        Message(
+            id: id,
+            turnId: turnId,
+            roundNumber: roundNumber,
+            author: author,
+            messageType: messageType,
+            claim: claim,
+            body: body,
+            stance: stance,
+            references: references,
+            challengeTargetAgentId: challengeTargetAgentId,
+            confidence: confidence,
+            mentionedAgentIds: mentionedAgentIds,
+            isKeyPoint: isKeyPoint,
+            supersedesMessageId: supersedesMessageId,
+            supersededByMessageId: replacementID,
+            createdAt: createdAt
+        )
     }
 }

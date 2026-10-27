@@ -14,6 +14,7 @@ final class RealTurnUITests: XCTestCase {
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let providerEntry = app.buttons["create.provider"]
         XCTAssertTrue(

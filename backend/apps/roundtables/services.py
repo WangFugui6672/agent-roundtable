@@ -23,6 +23,7 @@ from apps.roundtables.budget import (
     MAX_ACTIVE_ROUNDTABLES,
     MAX_TURN_SECONDS,
 )
+from apps.roundtables.commands import TurnFailureCommand
 from apps.roundtables.message_validation import validate_agent_message
 from apps.roundtables.models import (
     GuestSession,
@@ -41,6 +42,12 @@ from apps.roundtables.serializers import (
     RoundSummarySerializer,
     RoundtableSerializer,
     TurnSerializer,
+)
+from apps.roundtables.statuses import (
+    AGENT_SPEAKING_STATUSES,
+    NON_SCHEDULING_STATUSES,
+    READ_ONLY_STATUSES,
+    SUMMARY_STATUSES,
 )
 from roundtable.exceptions import ActiveRoundtableLimit, SummaryVersionConflict
 
@@ -244,10 +251,7 @@ def submit_summary(
         summary = RoundSummary.objects.select_for_update().filter(roundtable=room).first()
         if summary is None and room.status != Roundtable.Status.SUMMARIZING:
             raise ValidationError({"status": "第二轮结束后才能提交结论。"})
-        if room.status not in {
-            Roundtable.Status.SUMMARIZING,
-            Roundtable.Status.COMPLETED,
-        }:
+        if room.status not in SUMMARY_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不能提交结论。"})
         ended_early = room.events.filter(event_type=p.ROOM_ENDED).exists()
         if room.current_round < room.max_rounds and not ended_early:
@@ -530,7 +534,7 @@ def _run_mock_round(roundtable_id: str, guest_session_id: str) -> list[dict[str,
         )
         if (
             room is None
-            or room.status not in {Roundtable.Status.READY, Roundtable.Status.RUNNING}
+            or room.status not in AGENT_SPEAKING_STATUSES
             or room.current_round >= room.max_rounds
         ):
             return []
@@ -648,12 +652,7 @@ def create_user_message(
         )
         if room is None:
             return None
-        if room.status in {
-            Roundtable.Status.SUMMARIZING,
-            Roundtable.Status.COMPLETED,
-            Roundtable.Status.FAILED,
-            Roundtable.Status.ARCHIVED,
-        }:
+        if room.status in READ_ONLY_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不允许发送消息。"})
 
         pending_turn = (
@@ -804,12 +803,7 @@ def pause_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult |
             return None
         if room.status == Roundtable.Status.PAUSED:
             return RoomCommandResult(room=room, events=[])
-        if room.status in {
-            Roundtable.Status.SUMMARIZING,
-            Roundtable.Status.COMPLETED,
-            Roundtable.Status.FAILED,
-            Roundtable.Status.ARCHIVED,
-        }:
+        if room.status in READ_ONLY_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不允许暂停。"})
 
         pending_turn = (
@@ -852,12 +846,7 @@ def resume_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult 
         )
         if room is None:
             return None
-        if room.status in {
-            Roundtable.Status.SUMMARIZING,
-            Roundtable.Status.COMPLETED,
-            Roundtable.Status.FAILED,
-            Roundtable.Status.ARCHIVED,
-        }:
+        if room.status in READ_ONLY_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不允许继续。"})
         if room.status != Roundtable.Status.PAUSED and not room.pause_pending:
             return RoomCommandResult(room=room, events=[])
@@ -886,10 +875,7 @@ def end_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult | N
         )
         if room is None:
             return None
-        if room.status in {
-            Roundtable.Status.SUMMARIZING,
-            Roundtable.Status.COMPLETED,
-        }:
+        if room.status in SUMMARY_STATUSES:
             return RoomCommandResult(room=room, events=[])
 
         pending_turn = (
@@ -952,7 +938,7 @@ def create_message(
         )
         if room is None:
             return None
-        if room.status not in {Roundtable.Status.READY, Roundtable.Status.RUNNING}:
+        if room.status not in AGENT_SPEAKING_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不能提交 Agent 消息。"})
 
         agent = (
@@ -987,6 +973,7 @@ def create_message(
             stance=validated.get("stance") or "",
             confidence=validated.get("confidence", 0.6),
             challenge_target_id=validated.get("challenge_target_agent_id"),
+            supersedes_id=turn.replaces_message_id,
         )
         message.references.set(validated.get("references") or [])
         _record_usage(turn, validated.get("usage"))
@@ -1034,12 +1021,7 @@ def next_turn(
             return None
         if room.status == Roundtable.Status.COMPLETED:
             raise ValidationError({"status": "圆桌当前状态不能签发新的 turn。"})
-        if room.status in {
-            Roundtable.Status.PAUSED,
-            Roundtable.Status.SUMMARIZING,
-            Roundtable.Status.FAILED,
-            Roundtable.Status.ARCHIVED,
-        }:
+        if room.status in NON_SCHEDULING_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不能签发新的 turn。"})
 
         agents = list(
@@ -1306,7 +1288,7 @@ def pass_turn(
         )
         if room is None:
             return None
-        if room.status not in {Roundtable.Status.READY, Roundtable.Status.RUNNING}:
+        if room.status not in AGENT_SPEAKING_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不能提交 pass。"})
         turn = (
             Turn.objects.select_for_update()
@@ -1356,13 +1338,7 @@ def pass_turn(
 def fail_turn(
     roundtable_id: str,
     guest_session_id: str,
-    turn_id: str,
-    roundtable_agent_id: str,
-    failure_code: str,
-    message: str,
-    retryable: bool,
-    partial: str = "",
-    usage: dict[str, Any] | None = None,
+    command: TurnFailureCommand,
 ) -> dict[str, Any] | None:
     """Close one scheduled turn as failed without discarding prior messages."""
     with transaction.atomic():
@@ -1373,26 +1349,26 @@ def fail_turn(
         )
         if room is None:
             return None
-        if room.status not in {Roundtable.Status.READY, Roundtable.Status.RUNNING}:
+        if room.status not in AGENT_SPEAKING_STATUSES:
             raise ValidationError({"status": "圆桌当前状态不能提交失败。"})
 
         turn = (
             Turn.objects.select_for_update()
             .select_related("roundtable_agent__agent_profile")
-            .filter(id=turn_id, roundtable=room, status=Turn.Status.PENDING)
+            .filter(id=command.turn_id, roundtable=room, status=Turn.Status.PENDING)
             .first()
         )
         if turn is None:
             raise ValidationError({"turn_id": "turn 已过期、重复或不属于当前圆桌。"})
         agent = turn.roundtable_agent
-        if str(agent.id) != roundtable_agent_id:
+        if str(agent.id) != command.roundtable_agent_id:
             raise ValidationError({"roundtable_agent_id": "提交者不是当前 turn 的发言人。"})
 
         turn.status = Turn.Status.FAILED
-        turn.failure_code = failure_code
-        turn.failure_message = message
-        turn.failure_partial = partial
-        turn.retryable = retryable
+        turn.failure_code = command.failure_code
+        turn.failure_message = command.message
+        turn.failure_partial = command.partial
+        turn.retryable = command.retryable
         turn.completed_at = timezone.now()
         turn.save(
             update_fields=[
@@ -1404,7 +1380,7 @@ def fail_turn(
                 "completed_at",
             ]
         )
-        _record_usage(turn, usage, failure_code=failure_code)
+        _record_usage(turn, command.usage, failure_code=command.failure_code)
         agent.state = RoundtableAgent.State.FAILED
         agent.save(update_fields=["state"])
         failure_event = _append_room_event(

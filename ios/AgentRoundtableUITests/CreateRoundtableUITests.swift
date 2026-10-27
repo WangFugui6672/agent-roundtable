@@ -14,6 +14,7 @@ final class CreateRoundtableUITests: XCTestCase {
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let topic = app.descendants(matching: .any).matching(identifier: "create.topic").firstMatch
         XCTAssertTrue(
@@ -97,6 +98,9 @@ final class CreateRoundtableUITests: XCTestCase {
         let restored = XCUIApplication()
         restored.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
         restored.launch()
+        let historyTopic = restored.staticTexts["该不该把验证周期压缩到两周？"]
+        XCTAssertTrue(historyTopic.waitForExistence(timeout: 15), restored.debugDescription)
+        historyTopic.tap()
         let restoredCard = restored.buttons["summary.card.open"]
         scrollToElement(restoredCard, in: restored)
         XCTAssertTrue(
