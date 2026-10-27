@@ -3,6 +3,12 @@
 import django.db.models.deletion
 import django.utils.timezone
 from django.db import migrations, models
+from django.db.models import F
+
+
+def backfill_last_activity_at(apps, schema_editor):
+    Roundtable = apps.get_model("roundtables", "Roundtable")
+    Roundtable.objects.update(last_activity_at=F("updated_at"))
 
 
 class Migration(migrations.Migration):
@@ -16,6 +22,7 @@ class Migration(migrations.Migration):
             name="last_activity_at",
             field=models.DateTimeField(db_index=True, default=django.utils.timezone.now),
         ),
+        migrations.RunPython(backfill_last_activity_at, migrations.RunPython.noop),
         migrations.CreateModel(
             name="MessageReport",
             fields=[

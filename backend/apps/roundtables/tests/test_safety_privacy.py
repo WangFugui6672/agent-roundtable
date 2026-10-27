@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import importlib
 import uuid
 from datetime import timedelta
 from io import StringIO
 
 import pytest
+from django.apps import apps as django_apps
 from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
@@ -258,3 +260,20 @@ def test_retention_management_command_reports_without_deleting_in_dry_run():
 
     assert "expired_roundtables=1 dry_run=true" in output.getvalue()
     assert Roundtable.objects.filter(id=room.id).exists()
+
+
+def test_last_activity_migration_uses_existing_updated_at():
+    room = make_room()
+    previous_activity = timezone.now() - timedelta(days=91)
+    Roundtable.objects.filter(id=room.id).update(
+        updated_at=previous_activity,
+        last_activity_at=timezone.now(),
+    )
+    migration = importlib.import_module(
+        "apps.roundtables.migrations.0014_roundtable_last_activity_at_messagereport"
+    )
+
+    migration.backfill_last_activity_at(django_apps, None)
+
+    room.refresh_from_db()
+    assert room.last_activity_at == previous_activity
