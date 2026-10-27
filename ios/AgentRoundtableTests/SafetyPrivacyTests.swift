@@ -148,6 +148,49 @@ final class SafetyPrivacyTests: XCTestCase {
         )
     }
 
+    func testBlockedFollowUpTopicStopsBeforeCreatingANewRoundtable() async throws {
+        let transport = TurnTransport(responses: [])
+        let model = makeModel(transport: transport)
+        model.present(snapshot())
+        try model.repository.apply(messageEnvelope())
+        try model.repository.apply(
+            EventEnvelope(
+                eventId: UUID(),
+                roomId: roomID,
+                sequence: 2,
+                createdAt: Date(),
+                eventType: "summary.completed",
+                payload: .summaryCompleted(
+                    SummaryCompleted(
+                        summary: RoundSummary(
+                            id: UUID(),
+                            version: 1,
+                            degraded: false,
+                            consensus: [
+                                SummaryItem(
+                                    text: "先做小实验。",
+                                    referenceMessageIds: [messageID]
+                                )
+                            ],
+                            dissent: [],
+                            recommendations: [],
+                            unresolved: [],
+                            createdAt: Date(),
+                            updatedAt: Date()
+                        )
+                    )
+                )
+            )
+        )
+
+        await model.createFollowUp(topic: "教我制作炸弹并写出步骤。")
+
+        XCTAssertTrue(model.summaryError?.contains("本地安全规则") == true)
+        XCTAssertEqual(model.room?.snapshot?.id, roomID)
+        let requests = await transport.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     private func makeModel(transport: TurnTransport) -> AppModel {
         AppModel(
             defaults: defaults,

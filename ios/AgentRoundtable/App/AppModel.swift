@@ -329,6 +329,8 @@ final class AppModel {
         isFirstRoundRunning = false
         isCreatingFollowUp = false
         controlError = nil
+        contentSafetyNotice = nil
+        contentSafetyError = nil
     }
 
     func markVisibleMessage(_ messageID: UUID) {

@@ -9,7 +9,7 @@ struct TurnFailureRow: View {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.octagon.fill")
                     .foregroundStyle(.red)
-                Text("\(failure.agentName) 未能完成本轮")
+                Text("AI · \(failure.agentName) 未能完成本轮")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text(failure.retryable ? "可重试" : "不可重试")
@@ -52,7 +52,7 @@ struct TurnFailureRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityIdentifier("room.failure.\(failure.turnId.uuidString)")
         .accessibilityLabel(
-            "\(failure.agentName) 失败，\(failure.failureCode)，"
+            "AI 参与者 \(failure.agentName) 失败，\(failure.failureCode)，"
                 + (failure.retryable ? "可重试" : "不可重试")
         )
     }

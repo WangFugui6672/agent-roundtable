@@ -56,6 +56,11 @@ extension AppModel {
             return
         }
 
+        guard validateLocalContent(trimmed) else {
+            summaryError = contentSafetyError
+            return
+        }
+
         isCreatingFollowUp = true
         summaryError = nil
         defer { isCreatingFollowUp = false }
