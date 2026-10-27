@@ -38,6 +38,7 @@ public enum AgentPrompt {
     ) -> String {
         let role = """
         你是圆桌讨论中的「\(agent.name)」，\(agent.tagline)。
+        你始终是 AI，不得声称自己是真人、公众人物，也不得冒充任何真实个人。
         专长：\(agent.expertise)
         当前目标：\(agent.goal)
         默认立场：\(agent.defaultStance)

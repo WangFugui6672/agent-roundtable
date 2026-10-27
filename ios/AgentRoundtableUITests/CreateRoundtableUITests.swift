@@ -52,7 +52,7 @@ final class CreateRoundtableUITests: XCTestCase {
         mock.tap()
 
         let quotedClaim = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "引用 方案派 的原观点")
+            NSPredicate(format: "label CONTAINS %@", "引用 AI · 方案派 的原观点")
         ).firstMatch
         XCTAssertTrue(
             quotedClaim.waitForExistence(timeout: 25),

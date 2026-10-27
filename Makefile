@@ -1,4 +1,4 @@
-.PHONY: help db-up db-down backend-install backend-migrate backend-run backend-test backend-lint ios-project ios-build ios-test ios-lint ios-app-test verify
+.PHONY: help db-up db-down backend-install backend-migrate backend-purge backend-run backend-test backend-lint ios-project ios-build ios-test ios-lint ios-app-test verify
 
 # 可用 `make ios-app-test SIMULATOR="iPhone 16"` 覆盖。
 SIMULATOR ?= iPhone 17
@@ -17,6 +17,9 @@ backend-install: ## 安装后端依赖
 
 backend-migrate: ## 执行数据库迁移
 	cd backend && uv run python manage.py migrate
+
+backend-purge: ## 删除最后活动超过 90 天的圆桌数据
+	cd backend && uv run python manage.py purge_roundtables
 
 backend-run: ## 启动 Django 开发服务器（HTTP + WebSocket，监听 0.0.0.0:8000）
 	cd backend && DJANGO_DEBUG=1 uv run python manage.py runserver 0.0.0.0:8000

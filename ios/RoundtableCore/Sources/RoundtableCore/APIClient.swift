@@ -226,6 +226,42 @@ public struct APIClient: Sendable {
         try await controlRoundtable(roundtableID: roundtableID, action: "end")
     }
 
+    public func reportMessage(
+        roundtableID: UUID,
+        messageID: UUID,
+        reason: MessageReportReason,
+        details: String = ""
+    ) async throws -> MessageReportReceipt {
+        struct Body: Encodable {
+            let reason: MessageReportReason
+            let details: String
+        }
+        let body = try JSONEncoder.roundtable.encode(
+            Body(reason: reason, details: details)
+        )
+        return try await send(
+            makeRequest(
+                path:
+                    "api/v1/roundtables/\(roundtableID.uuidString.lowercased())"
+                    + "/messages/\(messageID.uuidString.lowercased())/reports",
+                method: "POST",
+                body: body
+            )
+        )
+    }
+
+    public func deleteRoundtable(id: UUID) async throws {
+        let response = try await transport.send(
+            makeRequest(
+                path: "api/v1/roundtables/\(id.uuidString.lowercased())",
+                method: "DELETE"
+            )
+        )
+        guard (200..<300).contains(response.statusCode) else {
+            throw error(from: response)
+        }
+    }
+
     public func fetchRoundtable(id: UUID) async throws -> RoundtableSnapshot {
         try await send(
             makeRequest(

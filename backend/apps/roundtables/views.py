@@ -28,6 +28,8 @@ from apps.roundtables.serializers import (
     AgentProfileSerializer,
     FollowUpCreateSerializer,
     MessageCreateSerializer,
+    MessageReportCreateSerializer,
+    MessageReportSerializer,
     RoundSummaryCreateSerializer,
     RoundSummarySerializer,
     RoundtableCreateSerializer,
@@ -40,12 +42,14 @@ from apps.roundtables.services import (
     create_follow_up,
     create_message,
     create_user_message,
+    delete_roundtable,
     end_room,
     fail_turn,
     next_turn,
     pass_turn,
     pause_room,
     resume_room,
+    submit_message_report,
     submit_summary,
 )
 from roundtable.exceptions import (
@@ -157,6 +161,13 @@ class RoundtableDetailView(APIView):
             raise RoundtableNotFound()
         return Response(RoundtableSerializer(roundtable).data)
 
+    def delete(self, request: Request, roundtable_id: uuid.UUID) -> Response:
+        session = resolve_guest_session(request)
+        result = delete_roundtable(str(roundtable_id), str(session.id))
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class RoundtableSummaryView(APIView):
     """Read or create/regenerate the structured conclusion."""
@@ -267,6 +278,31 @@ class RoundtableUserMessageView(APIView):
                 "events": result.events,
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class MessageReportCreateView(APIView):
+    def post(
+        self,
+        request: Request,
+        roundtable_id: uuid.UUID,
+        message_id: uuid.UUID,
+    ) -> Response:
+        session = resolve_guest_session(request)
+        body = MessageReportCreateSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        result = submit_message_report(
+            str(roundtable_id),
+            str(session.id),
+            str(message_id),
+            body.validated_data["reason"],
+            body.validated_data["details"],
+        )
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(
+            MessageReportSerializer(result.report).data,
+            status=(status.HTTP_201_CREATED if result.created else status.HTTP_200_OK),
         )
 
 

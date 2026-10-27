@@ -27,6 +27,7 @@ from apps.roundtables.message_validation import validate_agent_message
 from apps.roundtables.models import (
     GuestSession,
     Message,
+    MessageReport,
     RoomEvent,
     RoundSummary,
     Roundtable,
@@ -55,6 +56,12 @@ class SummaryCommandResult:
     room: Roundtable
     summary: RoundSummary
     events: list[dict[str, Any]]
+    created: bool
+
+
+@dataclass(frozen=True)
+class MessageReportResult:
+    report: MessageReport
     created: bool
 
 
@@ -476,6 +483,10 @@ def _join_snapshot(
     room = _room_for_session(roundtable_id, guest_session_id)
     if room is None:
         return None
+    now = timezone.now()
+    GuestSession.objects.filter(id=guest_session_id).update(last_seen_at=now)
+    room.last_activity_at = now
+    room.save(update_fields=["last_activity_at", "updated_at"])
     return build_join_envelope(room, replay=_replay_metadata(room, cursor))
 
 
@@ -697,6 +708,87 @@ def create_user_message(
         envelopes = [_event_envelope(event) for event in created]
         _broadcast_after_commit(room.id, envelopes)
         return RoomCommandResult(room=room, events=envelopes)
+
+
+def submit_message_report(
+    roundtable_id: str,
+    guest_session_id: str,
+    message_id: str,
+    reason: str,
+    details: str,
+) -> MessageReportResult | None:
+    """Record one AI-message report idempotently for the owning session."""
+    with transaction.atomic():
+        room = (
+            Roundtable.objects.select_for_update()
+            .filter(id=roundtable_id, guest_session_id=guest_session_id)
+            .first()
+        )
+        if room is None:
+            return None
+        message = Message.objects.filter(
+            id=message_id,
+            roundtable=room,
+            author_type=Message.AuthorType.AGENT,
+        ).first()
+        if message is None:
+            raise ValidationError({"message_id": "只能举报当前圆桌中的 AI 消息。"})
+
+        report, created = MessageReport.objects.get_or_create(
+            guest_session_id=guest_session_id,
+            message=message,
+            defaults={
+                "id": uuid.uuid4(),
+                "roundtable": room,
+                "reason": reason,
+                "details": details,
+            },
+        )
+        room.last_activity_at = timezone.now()
+        room.save(update_fields=["last_activity_at", "updated_at"])
+        return MessageReportResult(report=report, created=created)
+
+
+def delete_roundtable(roundtable_id: str, guest_session_id: str) -> str | None:
+    """Delete a room and all child data; return ``missing`` on a repeated delete."""
+    with transaction.atomic():
+        room = Roundtable.objects.select_for_update().filter(id=roundtable_id).first()
+        if room is None:
+            return "missing"
+        if str(room.guest_session_id) != guest_session_id:
+            return None
+        _delete_room_data(room)
+        return "deleted"
+
+
+def _delete_room_data(room: Roundtable) -> None:
+    """Delete PROTECT-linked children before the room itself."""
+    MessageReport.objects.filter(roundtable=room).delete()
+    UsageRecord.objects.filter(roundtable=room).delete()
+    RoundSummary.objects.filter(roundtable=room).delete()
+    Message.objects.filter(roundtable=room).delete()
+    Turn.objects.filter(roundtable=room).delete()
+    RoomEvent.objects.filter(roundtable=room).delete()
+    RoundtableAgent.objects.filter(roundtable=room).delete()
+    room.delete()
+
+
+def purge_expired_roundtables(now=None) -> int:
+    """Delete rooms at or beyond the retention boundary and orphaned sessions."""
+    now = now or timezone.now()
+    cutoff = now - timedelta(days=settings.ROUNDTABLE_RETENTION_DAYS)
+    deleted = 0
+    with transaction.atomic():
+        rooms = list(Roundtable.objects.select_for_update().filter(last_activity_at__lte=cutoff))
+        for room in rooms:
+            _delete_room_data(room)
+            deleted += 1
+
+        GuestSession.objects.filter(
+            last_seen_at__lte=cutoff,
+            roundtables__isnull=True,
+        ).delete()
+    return deleted
 
 
 def pause_room(roundtable_id: str, guest_session_id: str) -> RoomCommandResult | None:

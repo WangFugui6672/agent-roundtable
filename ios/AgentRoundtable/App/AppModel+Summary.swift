@@ -22,6 +22,10 @@ extension AppModel {
         else {
             return
         }
+        if activeConfiguration != nil,
+           !requestProviderDataConsent(for: .generateSummary) {
+            return
+        }
         launchSummaryGeneration()
     }
 
@@ -31,6 +35,10 @@ extension AppModel {
               summaryState != .generating,
               summaryTask == nil
         else {
+            return
+        }
+        if activeConfiguration != nil,
+           !requestProviderDataConsent(for: .generateSummary) {
             return
         }
         launchSummaryGeneration()
@@ -92,8 +100,12 @@ extension AppModel {
 
     func generateSummary() async {
         guard let room, let roundtableID = room.snapshot?.id else { return }
+        if activeConfiguration != nil, !hasProviderDataConsent {
+            guard requestProviderDataConsent(for: .generateSummary) else { return }
+        }
         summaryState = .generating
         summaryError = nil
+        summaryNeedsLocalFlag = false
 
         let draft = await summaryDraft(room: room)
         guard !Task.isCancelled else {
@@ -114,6 +126,9 @@ extension AppModel {
                 return
             }
             try repository.apply(response)
+            if summaryNeedsLocalFlag {
+                try repository.flagSummary(response.summary.id)
+            }
             summaryState = .completed(version: response.summary.version)
         } catch {
             guard !Task.isCancelled else {
@@ -129,6 +144,7 @@ extension AppModel {
     private func summaryDraft(room: RoundtableRoomModel) async -> SummaryDraft {
         let transcript = room.messages
         guard let configuration = activeConfiguration,
+              hasProviderDataConsent,
               let apiKey = try? providerStore.secret(for: configuration.kind),
               !apiKey.isEmpty
         else {
@@ -165,10 +181,26 @@ extension AppModel {
                 }
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
-                return try StructuredSummaryParser.parse(
+                let draft = try StructuredSummaryParser.parse(
                     trimmed,
                     transcript: transcript
                 )
+                let summaryText = [
+                    draft.consensus,
+                    draft.dissent,
+                    draft.recommendations,
+                    draft.unresolved
+                ]
+                .flatMap { $0 }
+                .map(\.text)
+                .joined(separator: "\n")
+                let assessment = contentPolicy.evaluate(summaryText)
+                if assessment.decision == .block {
+                    summaryNeedsLocalFlag = true
+                    return RuleBasedSummary.make(transcript: transcript)
+                }
+                summaryNeedsLocalFlag = assessment.decision == .flag
+                return draft
             } catch is StructuredSummaryError {
                 if attempt == 0 {
                     continue
