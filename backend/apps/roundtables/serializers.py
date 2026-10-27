@@ -10,6 +10,7 @@ from apps.roundtables.message_validation import validate_agent_message
 from apps.roundtables.models import (
     AgentProfile,
     Message,
+    MessageReport,
     RoundSummary,
     Roundtable,
     RoundtableAgent,
@@ -439,6 +440,47 @@ class UserMessageCreateSerializer(serializers.Serializer):
                 {"mentioned_agent_ids": "被点名的 Agent 不存在或不属于此圆桌。"}
             )
         return attrs
+
+
+class MessageReportCreateSerializer(serializers.Serializer):
+    reason = serializers.ChoiceField(choices=MessageReport.Reason.choices)
+    details = serializers.CharField(
+        max_length=500,
+        trim_whitespace=True,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+    def validate(self, attrs: dict) -> dict:
+        if contains_secret(self.initial_data):
+            raise serializers.ValidationError({"provider": ["不得向后端提交 API Key。"]})
+        return attrs
+
+
+class MessageReportSerializer(serializers.ModelSerializer):
+    message_id = serializers.UUIDField(read_only=True)
+    created_at = serializers.SerializerMethodField()
+    updated_at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MessageReport
+        fields = [
+            "id",
+            "message_id",
+            "reason",
+            "details",
+            "state",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_created_at(self, obj: MessageReport) -> str:
+        return iso8601_millis(obj.created_at)
+
+    def get_updated_at(self, obj: MessageReport) -> str:
+        return iso8601_millis(obj.updated_at)
 
 
 class MessageCreateSerializer(serializers.Serializer):

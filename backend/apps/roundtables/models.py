@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.db import models
+from django.utils import timezone
 
 
 class GuestSession(models.Model):
@@ -106,6 +107,7 @@ class Roundtable(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    last_activity_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:
         db_table = "roundtable"
@@ -119,6 +121,15 @@ class Roundtable(models.Model):
 
     def __str__(self) -> str:
         return f"{self.topic[:20]} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        # Every direct roundtable mutation is user-visible activity. Retention
+        # follows this one anchor instead of loosely combining child timestamps.
+        self.last_activity_at = timezone.now()
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "last_activity_at" not in update_fields:
+            kwargs["update_fields"] = [*update_fields, "last_activity_at"]
+        super().save(*args, **kwargs)
 
 
 class RoundtableAgent(models.Model):
@@ -259,6 +270,50 @@ class Message(models.Model):
 
     def __str__(self) -> str:
         return f"{self.message_type}: {self.claim[:20]}"
+
+
+class MessageReport(models.Model):
+    """A user-submitted concern about one AI message.
+
+    Reports are not moderation verdicts. The MVP has no server-side model audit,
+    so every report stays in the ``submitted`` state until a human handles it.
+    """
+
+    class Reason(models.TextChoices):
+        HARASSMENT = "harassment", "骚扰或攻击"
+        HATE = "hate", "仇恨内容"
+        DANGEROUS = "dangerous", "危险内容"
+        SEXUAL = "sexual", "不适宜内容"
+        IMPERSONATION = "impersonation", "冒充公众人物"
+        OTHER = "other", "其他问题"
+
+    class State(models.TextChoices):
+        SUBMITTED = "submitted", "已提交"
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="reports")
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="reports")
+    guest_session = models.ForeignKey(
+        GuestSession, on_delete=models.CASCADE, related_name="message_reports"
+    )
+    reason = models.CharField(max_length=24, choices=Reason.choices)
+    details = models.CharField(max_length=500, blank=True, default="")
+    state = models.CharField(max_length=16, choices=State.choices, default=State.SUBMITTED)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "message_report"
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["guest_session", "message"],
+                name="unique_report_per_session_message",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.message_id}:{self.reason}"
 
 
 class UsageRecord(models.Model):

@@ -6,6 +6,11 @@ extension AppModel {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSendingUserMessage, !isEnding, let room else { return }
         guard let roundtableID = room.snapshot?.id else { return }
+        guard validateLocalContent(trimmed) else {
+            controlError = contentSafetyError
+            return
+        }
+        let flagged = contentPolicy.evaluate(trimmed).decision == .flag
 
         isSendingUserMessage = true
         controlError = nil
@@ -18,6 +23,10 @@ extension AppModel {
                 mentionedAgentIDs: Array(mentionedAgentIDs.prefix(3))
             )
             try repository.apply(result)
+            if flagged,
+               let messageID = result.events.compactMap(\.completedMessageID).first {
+                try repository.flagMessage(messageID)
+            }
             if room.status == .paused {
                 turnState = .paused
             }

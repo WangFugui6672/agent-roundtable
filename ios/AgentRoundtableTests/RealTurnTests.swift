@@ -186,7 +186,7 @@ extension RealTurnTests {
         )
     }
 
-    func enableProvider(on model: AppModel) {
+    func enableProvider(on model: AppModel, grantConsent: Bool = true) {
         model.saveProvider(
             ProviderDraft(
                 kind: .deepseek,
@@ -195,6 +195,9 @@ extension RealTurnTests {
                 apiKey: "sk-test-turn"
             )
         )
+        if grantConsent {
+            model.confirmProviderDataNotice()
+        }
     }
 
     private func firstRoundResponses() -> [HTTPResponse] {
@@ -299,7 +302,7 @@ extension RealTurnTests {
         )
     }
 
-    private func nextResponse(
+    func nextResponse(
         _ turn: TurnFixture,
         sequence: Int,
         startsRound: Bool = false,
@@ -333,7 +336,7 @@ extension RealTurnTests {
         )
     }
 
-    private func completedResponse(_ turn: TurnFixture, reply: ReplyFixture) -> HTTPResponse {
+    func completedResponse(_ turn: TurnFixture, reply: ReplyFixture) -> HTTPResponse {
         let message: [String: Any] = [
             "id": reply.messageID.uuidString,
             "turn_id": turn.id.uuidString,
@@ -401,7 +404,7 @@ extension RealTurnTests {
         )
     }
 
-    private func roundCompletedResponse(sequence: Int, round: Int = 1) -> HTTPResponse {
+    func roundCompletedResponse(sequence: Int, round: Int = 1) -> HTTPResponse {
         var events = [event("round.completed", sequence: sequence, payload: ["round": round])]
         if round >= 2 {
             events.append(

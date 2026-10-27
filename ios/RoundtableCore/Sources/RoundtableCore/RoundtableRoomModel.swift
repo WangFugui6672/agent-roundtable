@@ -20,6 +20,10 @@ public final class RoundtableRoomModel {
     public private(set) var budgetExhaustion: BudgetExhaustion?
     public private(set) var summary: RoundSummary?
     public private(set) var lastVisibleMessageID: UUID?
+    public private(set) var flaggedMessageIDs: [UUID] = []
+    public private(set) var hiddenMessageIDs: [UUID] = []
+    public private(set) var reportedMessageIDs: [UUID] = []
+    public private(set) var flaggedSummaryIDs: [UUID] = []
 
     /// Last persisted sequence the client has applied. ``room.joined`` never
     /// moves it (see docs/adr/0002).
@@ -75,6 +79,10 @@ public final class RoundtableRoomModel {
             recordSeenEventID(eventID)
         }
         lastVisibleMessageID = state.lastVisibleMessageID
+        hiddenMessageIDs = state.hiddenMessageIDs.filter(seenMessageIds.contains)
+        flaggedMessageIDs = state.flaggedMessageIDs.filter(seenMessageIds.contains)
+        reportedMessageIDs = state.reportedMessageIDs.filter(seenMessageIds.contains)
+        flaggedSummaryIDs = state.flaggedSummaryIDs
         bufferedEvents = [:]
     }
 
@@ -85,6 +93,38 @@ public final class RoundtableRoomModel {
         }
         guard seenMessageIds.contains(messageID) else { return }
         lastVisibleMessageID = messageID
+    }
+
+    public func flagMessage(_ messageID: UUID) {
+        guard seenMessageIds.contains(messageID), !flaggedMessageIDs.contains(messageID) else {
+            return
+        }
+        flaggedMessageIDs.append(messageID)
+    }
+
+    public func hideMessage(_ messageID: UUID) {
+        guard seenMessageIds.contains(messageID), !hiddenMessageIDs.contains(messageID) else {
+            return
+        }
+        hiddenMessageIDs.append(messageID)
+    }
+
+    public func showMessage(_ messageID: UUID) {
+        hiddenMessageIDs.removeAll { $0 == messageID }
+    }
+
+    public func markMessageReported(_ messageID: UUID) {
+        guard seenMessageIds.contains(messageID), !reportedMessageIDs.contains(messageID) else {
+            return
+        }
+        reportedMessageIDs.append(messageID)
+    }
+
+    public func flagSummary(_ summaryID: UUID) {
+        guard summary?.id == summaryID, !flaggedSummaryIDs.contains(summaryID) else {
+            return
+        }
+        flaggedSummaryIDs.append(summaryID)
     }
 
     public func storedState(savedAt: Date) -> StoredRoomState {
@@ -100,6 +140,10 @@ public final class RoundtableRoomModel {
             lastSequence: lastSequence,
             seenEventIDs: seenEventIDOrder,
             lastVisibleMessageID: lastVisibleMessageID,
+            flaggedMessageIDs: flaggedMessageIDs,
+            hiddenMessageIDs: hiddenMessageIDs,
+            reportedMessageIDs: reportedMessageIDs,
+            flaggedSummaryIDs: flaggedSummaryIDs,
             savedAt: savedAt
         )
     }
@@ -298,6 +342,14 @@ public final class RoundtableRoomModel {
         if let selected = lastVisibleMessageID,
            !seenMessageIds.contains(selected) {
             lastVisibleMessageID = nil
+        }
+        hiddenMessageIDs = hiddenMessageIDs.filter(seenMessageIds.contains)
+        flaggedMessageIDs = flaggedMessageIDs.filter(seenMessageIds.contains)
+        reportedMessageIDs = reportedMessageIDs.filter(seenMessageIds.contains)
+        if let summary {
+            flaggedSummaryIDs = flaggedSummaryIDs.filter { $0 == summary.id }
+        } else {
+            flaggedSummaryIDs = []
         }
     }
 

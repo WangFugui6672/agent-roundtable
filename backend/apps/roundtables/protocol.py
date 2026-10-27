@@ -53,6 +53,7 @@ FAILURE_CODES = frozenset(
         "provider_server_error",
         "provider_error",
         "provider_not_configured",
+        "content_policy_blocked",
         "client_request_failed",
         "scheduler_invalid_agent",
     }
