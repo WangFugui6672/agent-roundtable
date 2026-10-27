@@ -34,6 +34,8 @@ final class CreateRoundtableUITests: XCTestCase {
         let budget = app.descendants(matching: .any).matching(identifier: "room.budget").firstMatch
         XCTAssertTrue(budget.waitForExistence(timeout: 5))
         XCTAssertTrue(budget.label.contains("0/6"))
+        XCTAssertTrue(budget.label.contains("Token 0（仅统计）"))
+        XCTAssertTrue(budget.label.contains("/600 秒"))
         attachScreenshot(of: app, named: "01-empty-roundtable")
 
         let mock = app.buttons["room.mock"]

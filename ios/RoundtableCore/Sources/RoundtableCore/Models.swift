@@ -125,11 +125,18 @@ public struct NextTurnResponse: Decodable, Equatable, Sendable {
     public let round: Int
     public let turn: ScheduledTurn?
     public let events: [EventEnvelope]
+    public let budget: BudgetSnapshot?
 
-    public init(round: Int, turn: ScheduledTurn?, events: [EventEnvelope]) {
+    public init(
+        round: Int,
+        turn: ScheduledTurn?,
+        events: [EventEnvelope],
+        budget: BudgetSnapshot? = nil
+    ) {
         self.round = round
         self.turn = turn
         self.events = events
+        self.budget = budget
     }
 }
 
@@ -176,7 +183,7 @@ public struct RoundtableSnapshot: Codable, Equatable, Sendable, Identifiable {
     public let parentRoundtableId: UUID?
     public let sourceSummaryId: UUID?
     public let followUpContext: FollowUpContext?
-    public let budget: BudgetSnapshot?
+    public var budget: BudgetSnapshot?
     public let createdAt: Date
     public let updatedAt: Date
     public var participants: [Participant]

@@ -30,7 +30,7 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - 流式状态：思考 → 输入（逐字渲染）→ 提交 → 完成；Provider 401/403、402、404、429、超时、网络和空回复会映射为稳定失败码。
 - Provider 失败会调用 `POST /turns/fail` 回报一次，保留 partial 和已完成消息；服务端关闭当前 turn 后可继续调度其他 Agent，客户端不会静默换 Provider、Model 或 Mock。
 - SSE `usage` 与 `finish_reason` 会被解析；成功 message/pass 和失败回报都会携带可取得的 Token、延迟与重试数据。
-- 服务端强制执行最多两轮、6 条 Agent 消息、单 turn 60 秒和整场 90 秒；客户端上报 Token 上限为 2400。
+- 服务端强制执行最多两轮、6 条 Agent 消息、单 turn 60 秒和整场 600 秒；客户端上报 Token 只用于统计，不再作为结束条件。
 - `room.joined` 可恢复 `failures`，`agent.failed` 与 `budget.exhausted` 只产生一次；圆桌页展示简化预算、失败卡和结束原因。
 - 同一匿名会话最多 3 个进行中圆桌；Mock 每 UTC 日最多 10 个，创建事务使用会话行锁防止并发穿透。
 - 结构化消息提交：`POST /roundtables/{id}/messages`，后端校验类型、长度、引用归属后落库并广播 `message.completed`。
@@ -207,7 +207,7 @@ make docker-down
 - 第二轮自动推进、四种立场、有效观点引用和 challenge target 校验。
 - 用户消息、显式 mention、pause_pending、暂停/继续/结束和幂等语义。
 - `turns/fail`、稳定 failure code、usage、`agent.failed` 与 `budget.exhausted` 的恢复语义。
-- 两轮/消息数/时间/客户端上报 Token 预算，以及活跃圆桌和 Mock 每日限额。
+- 两轮/消息数/时间预算、客户端上报 Token 统计，以及活跃圆桌和 Mock 每日限额。
 - `summary.started` / `summary.completed`、结论项 schema、有效观点引用和版本冲突。
 - `completed` 只读边界，以及带 parent/source 与 `follow_up_context` 的继续追问。
 - 幂等 AI 消息举报、幂等圆桌删除、90 天保留语义与清理任务。
@@ -222,7 +222,7 @@ make docker-down
 - **密钥不进后端**：BYOK 的 API Key 只存 iOS Keychain、请求由 iOS 直连 Provider（[ADR 0001](docs/adr/0001-byok-keychain-direct-provider.md)）。后端收到任何 `api_key` 字段会直接返回 400，避免误上传被静默忽略。
 - **Provider 逻辑与 Keychain 分离**：`SecretStore` 协议让 Provider 生命周期可以在没有 Keychain 的 CI 机器上测试；真实 Keychain 行为由模拟器上的集成测试覆盖。
 - **流式在客户端、校验在服务端**：模型输出由 iOS 逐字渲染，协议信封（类型、立场、claim、conﬁdence）由 `MessageComposer` 组装；Django 只做校验与持久化，所以模型返回纯文本也不会破坏协议。
-- **预算诚实分层**：服务端强制可观察的轮数、消息数、Turn 截止时间和整场时间；由于 BYOK 直连，Token 上限只能基于 iOS 上报的 Provider usage，不能伪装成服务端计费。
+- **预算诚实分层**：服务端强制可观察的轮数、消息数、Turn 截止时间和整场时间；由于 BYOK 直连，Token 仅记录 iOS 上报的 Provider usage，既不伪装成服务端计费，也不作为不可靠的终止阈值。
 - **结论与普通消息分离**：`RoundSummary` 独立版本化保存，不向消息流写伪 summary 消息，避免污染引用与调度。
 - **降级不伪造依据**：规则化摘要只复制已有观点并引用原消息；Provider 失败时仍允许完成，但 UI 和协议都保留 `degraded` 标记。
 - **本地安全与本地隐藏分离**：内容规则在发送边界执行；隐藏只改变本机 SwiftData 投影，举报单独提交且不产生审核结论。

@@ -59,6 +59,10 @@ public final class RoundtableRoomModel {
         activeParticipantId = snapshot.activeTurn?.roundtableAgentId
     }
 
+    public func updateBudget(_ budget: BudgetSnapshot) {
+        snapshot?.budget = budget
+    }
+
     public func restore(_ state: StoredRoomState) {
         update(from: state.snapshot)
         messages = []

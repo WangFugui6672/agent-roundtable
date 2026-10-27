@@ -51,7 +51,7 @@ struct RoomHeader: View {
         if let budget = room.snapshot?.budget {
             Text(
                 "\(budget.agentMessagesUsed)/\(budget.maxAgentMessages) 条 · "
-                    + "\(budget.reportedTokens)/\(budget.maxReportedTokens) Token（本机上报） · "
+                    + "Token \(budget.reportedTokens)（仅统计） · "
                     + "\(budget.elapsedSeconds)/\(budget.maxDurationSeconds) 秒"
             )
             .font(.caption2.monospacedDigit())

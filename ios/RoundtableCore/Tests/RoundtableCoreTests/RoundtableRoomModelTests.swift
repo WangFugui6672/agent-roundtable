@@ -403,6 +403,25 @@ final class RoundtableRoomModelTests: XCTestCase {
 }
 
 extension RoundtableRoomModelTests {
+    func testBudgetUpdateRefreshesTheCurrentSnapshot() throws {
+        let model = RoundtableRoomModel()
+        model.apply(try EventEnvelope.decode(from: Fixtures.joinedEnvelope))
+        let budget = BudgetSnapshot(
+            maxRounds: 2,
+            maxAgentMessages: 6,
+            agentMessagesUsed: 1,
+            maxReportedTokens: 2400,
+            reportedTokens: 2500,
+            maxDurationSeconds: 90,
+            elapsedSeconds: 60
+        )
+
+        model.updateBudget(budget)
+
+        XCTAssertEqual(model.snapshot?.budget, budget)
+        XCTAssertEqual(model.snapshot?.budget?.reportedTokens, 2500)
+    }
+
     func testBudgetExhaustionCompletesTheRoomOnce() throws {
         let model = RoundtableRoomModel()
         model.apply(try EventEnvelope.decode(from: Fixtures.joinedEnvelope))

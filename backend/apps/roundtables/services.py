@@ -175,8 +175,6 @@ def _budget_exhaustion_reason(room: Roundtable) -> str | None:
         >= room.max_agent_messages
     ):
         return "agent_messages"
-    if room.reported_tokens >= room.max_reported_tokens:
-        return "reported_tokens"
     return None
 
 

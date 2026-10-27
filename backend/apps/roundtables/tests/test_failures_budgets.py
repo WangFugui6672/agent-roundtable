@@ -12,6 +12,7 @@ from django.db import close_old_connections
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.roundtables.budget import MAX_DISCUSSION_SECONDS
 from apps.roundtables.models import (
     GuestSession,
     Message,
@@ -347,7 +348,7 @@ def test_duration_budget_ends_the_room_once_with_a_recoverable_event(api_client)
         HTTP_X_GUEST_SESSION=str(room.guest_session_id),
     )
     room.refresh_from_db()
-    room.started_at = timezone.now() - timedelta(seconds=91)
+    room.started_at = timezone.now() - timedelta(seconds=MAX_DISCUSSION_SECONDS + 1)
     room.save(update_fields=["started_at"])
 
     exhausted = request_next_turn(api_client, room)
@@ -363,7 +364,7 @@ def test_duration_budget_ends_the_room_once_with_a_recoverable_event(api_client)
     assert event["event_type"] == "budget.exhausted"
     assert event["payload"] == {
         "reason": "duration",
-        "message": "讨论已达到 90 秒时间上限。",
+        "message": f"讨论已达到 {MAX_DISCUSSION_SECONDS} 秒时间上限。",
         "round": 1,
     }
     assert repeated.status_code == 400
@@ -378,14 +379,14 @@ def test_duration_budget_ends_the_room_once_with_a_recoverable_event(api_client)
     assert budget["agent_messages_used"] == 0
     assert budget["max_reported_tokens"] == 2400
     assert budget["reported_tokens"] == 0
-    assert budget["max_duration_seconds"] == 90
+    assert budget["max_duration_seconds"] == MAX_DISCUSSION_SECONDS
     assert budget["started_at"].endswith("Z")
-    assert budget["elapsed_seconds"] >= 90
+    assert budget["elapsed_seconds"] >= MAX_DISCUSSION_SECONDS
     assert budget["exhausted_reason"] == "duration"
     assert budget["token_source"] == "client_reported"
 
 
-def test_reported_token_budget_stops_before_the_next_agent_without_losing_messages(
+def test_reported_tokens_are_advisory_and_do_not_stop_the_next_agent(
     api_client,
 ):
     room = make_room()
@@ -409,15 +410,17 @@ def test_reported_token_budget_stops_before_the_next_agent_without_losing_messag
         format="json",
         HTTP_X_GUEST_SESSION=str(room.guest_session_id),
     )
-    exhausted = request_next_turn(api_client, room)
+    next_response = request_next_turn(api_client, room)
 
     assert message_response.status_code == 201
-    assert exhausted.status_code == 200
-    assert exhausted.json()["turn"] is None
-    assert [event["event_type"] for event in exhausted.json()["events"]] == ["budget.exhausted"]
-    assert exhausted.json()["events"][0]["payload"]["reason"] == "reported_tokens"
+    assert next_response.status_code == 200
+    assert next_response.json()["turn"] is not None
+    assert all(
+        event["event_type"] != "budget.exhausted" for event in next_response.json()["events"]
+    )
+    assert next_response.json()["budget"]["reported_tokens"] == 2500
     room.refresh_from_db()
-    assert room.status == Roundtable.Status.COMPLETED
+    assert room.status == Roundtable.Status.RUNNING
     assert room.reported_tokens == 2500
     assert Message.objects.filter(roundtable=room).count() == 1
     assert UsageRecord.objects.get(turn_id=first["turn_id"]).failure_code == ""
@@ -490,7 +493,7 @@ def test_final_round_completion_wins_over_duration_budget(api_client):
     room = make_room()
     room.current_round = 2
     room.status = Roundtable.Status.RUNNING
-    room.started_at = timezone.now() - timedelta(seconds=91)
+    room.started_at = timezone.now() - timedelta(seconds=MAX_DISCUSSION_SECONDS + 1)
     room.save(update_fields=["current_round", "status", "started_at"])
     room.agents.update(state=RoundtableAgent.State.COMPLETED)
 
@@ -564,7 +567,7 @@ def test_budget_between_rounds_does_not_start_round_two(api_client):
     room = make_room()
     room.current_round = 1
     room.status = Roundtable.Status.RUNNING
-    room.started_at = timezone.now() - timedelta(seconds=91)
+    room.started_at = timezone.now() - timedelta(seconds=MAX_DISCUSSION_SECONDS + 1)
     room.save(update_fields=["current_round", "status", "started_at"])
     room.agents.update(state=RoundtableAgent.State.COMPLETED)
 

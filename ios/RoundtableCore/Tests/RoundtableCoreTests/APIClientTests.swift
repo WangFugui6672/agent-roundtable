@@ -219,7 +219,19 @@ final class APIClientTests: XCTestCase {
                 "agent_name": "方案派"
               }
             }
-          ]
+          ],
+          "budget": {
+            "max_rounds": 2,
+            "max_agent_messages": 6,
+            "agent_messages_used": 1,
+            "max_reported_tokens": 2400,
+            "reported_tokens": 2500,
+            "max_duration_seconds": 90,
+            "started_at": "2026-10-26T01:01:03.456Z",
+            "elapsed_seconds": 60,
+            "exhausted_reason": "",
+            "token_source": "client_reported"
+          }
         }
         """
         let transport = StubTransport(responses: [.init(data: Data(response.utf8), statusCode: 200)])
@@ -240,6 +252,8 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(next.turn?.roundtableAgentId, Fixtures.advocateID)
         XCTAssertEqual(next.turn?.agentKey, "advocate")
         XCTAssertEqual(next.events.map(\.eventType), ["round.started", "agent.thinking"])
+        XCTAssertEqual(next.budget?.agentMessagesUsed, 1)
+        XCTAssertEqual(next.budget?.reportedTokens, 2500)
         let requests = await transport.recordedRequests()
         let request = try XCTUnwrap(requests.first)
         XCTAssertEqual(

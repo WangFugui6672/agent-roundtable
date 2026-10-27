@@ -136,7 +136,11 @@ extension AppModel {
 
     private func requestNextTurn(context: GenerationContext) async -> NextTurnResponse? {
         do {
-            return try await repository.nextTurn(roundtableID: context.roundtableID)
+            let response = try await repository.nextTurn(roundtableID: context.roundtableID)
+            if let budget = response.budget {
+                context.room.updateBudget(budget)
+            }
+            return response
         } catch {
             guard !Task.isCancelled, !isEnding else { return nil }
             failBeforeTurn(room: context.room, error: error)

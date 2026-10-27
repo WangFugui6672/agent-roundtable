@@ -194,7 +194,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
     "agent_messages_used": 0,
     "max_reported_tokens": 2400,
     "reported_tokens": 0,
-    "max_duration_seconds": 90,
+    "max_duration_seconds": 600,
     "started_at": null,
     "elapsed_seconds": 0,
     "exhausted_reason": null,
@@ -221,7 +221,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 `provider`：创建时提交的 Provider 元数据快照，未配置时为 `null`。快照**永远不含** API Key。
 `parent_roundtable_id` / `source_summary_id`：继续追问创建的新圆桌会显式保存父圆桌与原结论关系，否则为 `null`。
 `follow_up_context`：继续追问时返回 `{"parent_topic": "...", "summary": <RoundSummary>}`；普通圆桌为 `null`。
-`budget`：服务端实际执行的轮数、消息数、时间和客户端上报 Token 上限。`token_source = client_reported` 表示 Token 不是服务端计量或计费事实；Django 不接触 Provider 请求。
+`budget`：服务端实际执行的轮数、消息数、时间，以及客户端上报 Token 统计。`token_source = client_reported` 表示 Token 不是服务端计量或计费事实；`max_reported_tokens` 为兼容旧客户端的遗留字段，不触发讨论结束。
 
 ### 2.7 提交结构化发言
 
@@ -256,7 +256,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 - `references`：最多 3 条，且不能重复。第二轮至少 1 条，每条都必须指向**同一圆桌**中更早产生的有效 Agent 观点；该观点必须来自其他参与者，不能被用户消息、自身、`pass`、`summary`、未知消息或跨圆桌消息替代。
 - `challenge_target_agent_id`：可选参与者 ID。`challenge` 时必填，且必须是被引用观点的作者；其他立场时必须省略或为 `null`。
 - `confidence`：0-1，默认 `0.6`。
-- `usage`：可选、仅用于可观测性和客户端上报 Token 预算。字段全部可选；`retry_count` 为 0-10，默认 0。后端只保存模型快照、Token、延迟、重试和失败码，不保存 Prompt 或 Provider 请求头。
+- `usage`：可选、仅用于 Token 用量和延迟可观测性。字段全部可选；`retry_count` 为 0-10，默认 0。后端只保存模型快照、Token、延迟、重试和失败码，不保存 Prompt 或 Provider 请求头。
 
 第一轮允许 `proposal | support | challenge | supplement | question | summary` 且可以不引用。第二轮只接受 `support | challenge | supplement | question`，并要求 `message_type` 与 `stance` 相同、`claim` 非空、引用合法；`proposal`、`summary`、`pass` 和 `user_message` 不能伪装成第二轮互评。
 - 请求体任意层级出现 `api_key` → `400 validation_error`，`details` 形如 `{"provider": ["不得向后端提交 API Key。"]}`（与 2.5 相同）。
@@ -362,7 +362,19 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
       "event_type": "room.pause_pending",
       "payload": {"turn_id": "a11c..."}
     }
-  ]
+  ],
+  "budget": {
+    "max_rounds": 2,
+    "max_agent_messages": 6,
+    "agent_messages_used": 1,
+    "max_reported_tokens": 2400,
+    "reported_tokens": 2500,
+    "max_duration_seconds": 600,
+    "started_at": "2026-10-26T01:02:03.456Z",
+    "elapsed_seconds": 60,
+    "exhausted_reason": "",
+    "token_source": "client_reported"
+  }
 }
 ```
 
@@ -370,6 +382,7 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 - 同一圆桌最多存在一个 `pending` turn。iOS 重复请求时返回同一个 `turn_id` 和空 `events`，不会重复签发。
 - 当前轮所有 Agent 已 `completed` 或 `passed` 时，服务端发送唯一的 `round.completed`。若还未达到 `max_rounds`，同一响应会立即追加下一轮的 `round.started` 和 `agent.thinking`，并返回新 turn，客户端无需额外请求即可自动进入第二轮。
 - 达到 `max_rounds` 后返回 `turn: null`，追加唯一 `summary.started` 并进入 `summarizing`。完成结算后重复请求返回 `400 validation_error`，不会重复产生 `round.completed`。
+- `budget` 是本次调度后的最新权威预算快照，客户端必须用它刷新 Agent 消息数、上报 Token 和时间展示。
 - `turn_id` 是后续消息完成、失败或 pass 的唯一回合身份。iOS 不得自行生成或替换。
 - `agent.thinking` 表示服务端已把该 turn 签发给客户端；`agent.typing` 和逐字 delta 仍是本地临时状态。
 
@@ -581,21 +594,21 @@ turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使�
 - 最多 2 轮。
 - 最多 6 条有效 Agent 消息（三位参与者 × 两轮）。
 - 单个 turn 最多 60 秒。
-- 整场讨论最多 90 秒。
-- 客户端上报 Token 上限 2400。
+- 整场讨论最多 600 秒。
+- 客户端上报 Token 只统计和展示，不设置强制结束阈值。
 
 Token 的可信度边界：
 
 - Django 不代理 Provider 请求，因此不能看到真实 Token 或账单。
 - 服务端只会累加 iOS 从 Provider SSE `usage` 中解析后上报的 `input_tokens + output_tokens`。
-- `reported_tokens` 是客户端自报观测值，不是安全计费依据；超限时会停止后续调度，但不能证明 Provider 实际计费。
+- `reported_tokens` 是客户端自报观测值，不是安全计费依据；超过历史兼容字段 `max_reported_tokens` 也不会停止后续调度。
 - 服务端可靠执行的是轮数、消息数、Turn 截止时间和整场时间。
 
 结束事件优先级：
 
 1. 用户 `end` 产生一次 `room.ended`，优先于后续所有预算检查。
 2. 当前轮已经是最后一轮且所有参与者均已关闭时，产生一次 `round.completed`，随后追加一次 `summary.started` 并进入 `summarizing`；自然完成优先于预算耗尽。
-3. 仍有后续发言空间，但时长、消息数或上报 Token 已达上限时，产生一次 `budget.exhausted` 并把圆桌置为 `completed`。
+3. 仍有后续发言空间，但时长或消息数已达上限时，产生一次 `budget.exhausted` 并把圆桌置为 `completed`。
 4. 单个 `agent.failed` 只关闭该 turn，不终止整场讨论。
 
 若当前轮自然结束、仍有下一轮空间，但预算已经耗尽，同一响应先返回该轮的 `round.completed`，再返回唯一的 `budget.exhausted`，不会签发下一轮 turn。
@@ -823,7 +836,7 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 | `agent.failed` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派", "failure_code": "provider_timeout", "message": "...", "retryable": true, "partial": "..."}` | 单个 Agent 失败；不影响已完成消息 |
 | `message.completed` | `{"message": <Message>}` | 一条结构化发言完成 |
 | `round.completed` | `{"round": 1}` | 一轮结束 |
-| `budget.exhausted` | `{"reason": "duration | agent_messages | reported_tokens", "message": "...", "round": 1}` | 单次预算终态事件 |
+| `budget.exhausted` | `{"reason": "duration | agent_messages", "message": "...", "round": 1}` | 单次预算终态事件；`reported_tokens` 仅用于兼容旧事件 |
 | `room.pause_pending` | `{"turn_id": "<Turn.id>"}` | 已请求暂停，等待当前 turn 完成 |
 | `room.paused` | `{"status": "paused"}` | 圆桌已暂停 |
 | `room.resumed` | `{"status": "running"}` | 圆桌已继续 |

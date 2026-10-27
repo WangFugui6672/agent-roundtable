@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from apps.roundtables import consumers as consumer_module
 from apps.roundtables import protocol as p
+from apps.roundtables.budget import MAX_DISCUSSION_SECONDS
 from apps.roundtables.models import (
     GuestSession,
     Message,
@@ -155,7 +156,7 @@ async def test_mock_budget_stops_after_two_rounds():
 async def test_mock_run_respects_the_discussion_time_budget_once():
     session_id, room_id = await sync_to_async(_seed_room)()
     await sync_to_async(Roundtable.objects.filter(id=room_id).update)(
-        started_at=timezone.now() - timedelta(seconds=91)
+        started_at=timezone.now() - timedelta(seconds=MAX_DISCUSSION_SECONDS + 1)
     )
     communicator, _ = await _connect(session_id, room_id)
     await communicator.receive_json_from(timeout=1)

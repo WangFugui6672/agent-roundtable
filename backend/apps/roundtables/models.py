@@ -82,7 +82,7 @@ class Roundtable(models.Model):
     max_agent_messages = models.PositiveSmallIntegerField(default=6)
     max_reported_tokens = models.PositiveIntegerField(default=2400)
     reported_tokens = models.PositiveIntegerField(default=0)
-    max_duration_seconds = models.PositiveSmallIntegerField(default=90)
+    max_duration_seconds = models.PositiveSmallIntegerField(default=600)
     current_round = models.PositiveSmallIntegerField(default=0)
     event_sequence = models.BigIntegerField(default=0)
     pause_pending = models.BooleanField(default=False)

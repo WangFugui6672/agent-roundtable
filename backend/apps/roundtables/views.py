@@ -34,6 +34,7 @@ from apps.roundtables.protocol import iso8601_millis
 from apps.roundtables.regeneration import request_regeneration
 from apps.roundtables.serializers import (
     AgentProfileSerializer,
+    BudgetSerializer,
     FollowUpCreateSerializer,
     KeyPointUpdateSerializer,
     MessageCreateSerializer,
@@ -444,7 +445,15 @@ class RoundtableNextTurnView(APIView):
         if result is None:
             raise RoundtableNotFound()
         round_number, turn, events = result
-        return Response({"round": round_number, "turn": turn, "events": events})
+        room = Roundtable.objects.get(id=roundtable_id, guest_session=session)
+        return Response(
+            {
+                "round": round_number,
+                "turn": turn,
+                "events": events,
+                "budget": BudgetSerializer(room).data,
+            }
+        )
 
 
 class RoundtableTurnPassView(APIView):

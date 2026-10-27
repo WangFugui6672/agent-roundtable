@@ -44,11 +44,11 @@ AgentProfile 在某个圆桌中的实例。它保存该圆桌内的当前目标�
 
 ## 客户端上报 Token
 
-BYOK 架构下，Django 看不到 Provider 的真实 Token。iOS 从 SSE `usage` 解析后上报的数字只用于展示和客户端上报预算，不是服务端计费级计量。服务端可靠强制的是轮数、消息数、Turn 截止时间和整场时间。
+BYOK 架构下，Django 看不到 Provider 的真实 Token。iOS 从 SSE `usage` 解析后上报的数字只用于展示和成本观察，不是服务端计费级计量，也不触发讨论结束。服务端可靠强制的是轮数、消息数、Turn 截止时间和整场时间。
 
 ## 预算耗尽（Budget Exhausted）
 
-圆桌仍有潜在发言空间，但时长、Agent 消息数或客户端上报 Token 已达到上限时的终态。它只产生一次 `budget.exhausted` 事件；若最后一轮已经自然完成，则 `round.completed` 优先，不再追加预算耗尽事件。
+圆桌仍有潜在发言空间，但时长或 Agent 消息数已达到上限时的终态。它只产生一次 `budget.exhausted` 事件；若最后一轮已经自然完成，则 `round.completed` 优先，不再追加预算耗尽事件。
 
 ## 进行中圆桌限额
 
@@ -206,7 +206,7 @@ Bring Your Own Key。用户提供自己的模型服务凭据，产品不提供�
 
 ## 讨论预算（Discussion Budget）
 
-一次圆桌允许消耗的最大 Token、轮数、消息数和时间。预算用于防止无限讨论和成本失控。
+一次圆桌允许的最大轮数、消息数和时间。Token 用量会记录和展示，但依赖客户端上报，因此不作为强制计费或终止条件。
 
 ## 内容策略（Content Policy）
 
