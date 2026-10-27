@@ -1,6 +1,6 @@
 # Agent Roundtable 协议 v1
 
-**状态：** 实现中（Issue #11）
+**状态：** MVP v0.1.0 已实现
 **传输：** REST（HTTP/JSON）+ WebSocket（JSON 文本帧）
 
 本文件是 iOS 与 Django 的唯一接口契约。改动接口时同步更新本文件，并在 Issue 中说明兼容性。
@@ -11,8 +11,35 @@
 - 所有 ID 为 UUID 字符串。
 - 未特别说明时，请求与响应均为 `application/json`。
 - 字段命名使用 `snake_case`，与后端模型和 PRD 术语一致。
+- 除健康检查、读取预设 Agent 和创建匿名会话外，REST 请求都需要 `X-Guest-Session`。
+- 文档中的 `...` 只表示被省略的字段，不是实际响应中的字面值。
 
 ## 2. REST
+
+### 2.0 Endpoint 索引
+
+| Method | Path | 成功状态 |
+| --- | --- | --- |
+| `GET` | `/api/v1/health` | `200` |
+| `POST` | `/api/v1/guest-sessions` | `201` |
+| `GET` | `/api/v1/agent-profiles` | `200` |
+| `POST` | `/api/v1/roundtables` | `201` |
+| `GET` | `/api/v1/roundtables/{id}` | `200` |
+| `DELETE` | `/api/v1/roundtables/{id}` | `204` |
+| `POST` | `/api/v1/roundtables/{id}/messages` | `201` |
+| `POST` | `/api/v1/roundtables/{id}/turns/next` | `200` |
+| `POST` | `/api/v1/roundtables/{id}/turns/pass` | `201` |
+| `POST` | `/api/v1/roundtables/{id}/turns/fail` | `201` |
+| `POST` | `/api/v1/roundtables/{id}/user-messages` | `201` |
+| `POST` | `/api/v1/roundtables/{id}/pause` | `200` |
+| `POST` | `/api/v1/roundtables/{id}/resume` | `200` |
+| `POST` | `/api/v1/roundtables/{id}/end` | `200` |
+| `GET` | `/api/v1/roundtables/{id}/summary` | `200` |
+| `POST` | `/api/v1/roundtables/{id}/summary` | `201`，幂等重试 `200` |
+| `POST` | `/api/v1/roundtables/{id}/follow-ups` | `201` |
+| `POST` | `/api/v1/roundtables/{id}/messages/{message_id}/reports` | `201`，幂等重复 `200` |
+
+当前没有“列出圆桌历史”的 `GET /roundtables`；iOS 历史恢复以本地 SwiftData 缓存和最近圆桌为入口。
 
 ### 2.1 错误信封
 
@@ -47,6 +74,8 @@
 ### 2.2 健康检查
 
 `GET /api/v1/health` → `200 {"status": "ok", "service": "agent-roundtable"}`
+
+该接口是进程存活检查。Compose 另用 PostgreSQL/Redis healthcheck 和启动依赖保证依赖就绪。
 
 ### 2.3 创建匿名会话
 
@@ -244,7 +273,7 @@ MVP 中 UUID 本身即能力凭据：持有它的客户端可以读写该会话�
 
 turn 同时被关闭为 `completed`。重复提交、其他 Agent 提交或使用过期 `turn_id` 都会返回 `400 validation_error`，不会写入第二条消息或事件。
 
-> 当前 channel layer 是 Django Channels 的 `InMemoryChannelLayer`，只在单进程内广播；跨进程广播仍需接入 Redis。
+> Compose 和生产部署设置 `REDIS_URL`，使用 `channels_redis.core.RedisChannelLayer` 跨进程广播。单元测试和单进程本地开发不设置该变量，默认使用内存层。
 
 **为什么由客户端提交**：模型请求由 iOS 直连 Provider（ADR 0001），Django 只负责签发 turn、校验与持久化，所以消息一定经过一次 HTTP 提交。调度事件由服务端持久化和广播；实际逐字流仍只存在于发起请求的客户端。
 
@@ -748,10 +777,9 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 | `room.joined` | `{"roundtable": <快照>, "messages": [<Message>], "failures": [<TurnFailure>], "summary": <RoundSummary|null>, "replay": <ReplayMetadata>}` | 进入圆桌；恢复完整消息、失败 turn、结论和补发窗口；新增字段缺失时旧客户端按兼容缺省处理 |
 | `round.started` | `{"round": 1, "max_rounds": 2, "topic": "..."}` | 一轮开始 |
 | `agent.thinking` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | 服务端已签发本轮 turn |
-| `agent.typing` | `{"agent_id": "<RoundtableAgent.id>"}` | Agent 输入中 |
+| `agent.typing` | `{"agent_id": "<RoundtableAgent.id>"}` | Mock 脚本的 Agent 输入状态；真实 turn 的逐字状态只在本机临时展示 |
 | `agent.passed` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派"}` | Agent 明确选择沉默，不产生普通消息 |
 | `agent.failed` | `{"turn_id": "<Turn.id>", "round": 1, "agent_id": "<RoundtableAgent.id>", "agent_name": "方案派", "failure_code": "provider_timeout", "message": "...", "retryable": true, "partial": "..."}` | 单个 Agent 失败；不影响已完成消息 |
-| `message.delta` | `{"message_id": "...", "delta": "..."}` | 流式片段（Mock 切片暂不产生） |
 | `message.completed` | `{"message": <Message>}` | 一条结构化发言完成 |
 | `round.completed` | `{"round": 1}` | 一轮结束 |
 | `budget.exhausted` | `{"reason": "duration | agent_messages | reported_tokens", "message": "...", "round": 1}` | 单次预算终态事件 |
@@ -760,9 +788,9 @@ ws(s)://<host>/ws/v1/roundtables/<roundtable_id>/?guest_session=<uuid>&cursor=<i
 | `room.resumed` | `{"status": "running"}` | 圆桌已继续 |
 | `room.ended` | `{"status": "summarizing", "cancelled_turn_id": "<Turn.id>", "cancelled_agent_id": "<RoundtableAgent.id>"}` | 用户提前结束讨论并进入总结；无在途 turn 时两个取消字段为 `null` |
 | `summary.started` | `{"round": <current_round>}` | 自然完成最后一轮或用户提前结束，圆桌进入 `summarizing` |
-| `summary.delta` | 本地预留 | 总结流只属于生成设备，不持久化、不广播 |
 | `summary.completed` | `{"summary": <RoundSummary>}` | 结论已校验保存，圆桌进入 `completed` |
-| `room.failed` | `{"reason": "..."}` | 圆桌级失败（预留） |
+
+当前服务端不发送 `message.delta`、`summary.delta` 或 `room.failed`。真实 Provider 的文本 delta 和总结流只存在于生成设备，不写入事件日志；单个 Agent 失败使用 `agent.failed`，客户端必须忽略未来新增的未知事件类型。
 
 `Message`：
 
@@ -827,7 +855,7 @@ Mock 演示仍支持一条 WebSocket 命令：
 
 服务端执行一轮脚本化 Mock 讨论（11 个事件），每个事件都已持久化并经同一服务入口广播。达到 `max_rounds` 后再发送不会产生任何事件。超过时间预算时只返回一次 `budget.exhausted`。
 
-> `mock.run` 仅用于确定性演示和 UI 测试，不参与真实 Provider 的 turn 调度。未知命令一律忽略，便于客户端向前兼容地探测能力。
+> `mock.run` 是 MVP 正式支持的确定性演示和 UI 测试入口，不参与真实 Provider 的 turn 调度。未知命令一律忽略，便于客户端向前兼容地探测能力。
 
 ### 3.6 Mock 一轮的事件序列
 

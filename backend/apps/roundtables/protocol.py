@@ -59,8 +59,7 @@ FAILURE_CODES = frozenset(
     }
 )
 
-#: Client -> server command that plays one scripted mock round.
-#: TODO(#5): the turn scheduler replaces this bridge; clients stop sending it.
+#: Client -> server command that plays one scripted mock round for demos and tests.
 MOCK_RUN = "mock.run"
 
 
