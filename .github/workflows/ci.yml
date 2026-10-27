@@ -90,6 +90,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
       - name: Install XcodeGen, SwiftLint, PostgreSQL, and Redis
         run: |
           brew install xcodegen swiftlint postgresql@16 redis
