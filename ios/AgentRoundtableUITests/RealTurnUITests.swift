@@ -40,7 +40,7 @@ final class RealTurnUITests: XCTestCase {
         topic.tap()
         topic.typeText("该不该把验证周期压缩到两周？")
         dismissKeyboard(in: app)
-        app.buttons["create.start"].tap()
+        app.startRoundtable()
 
         XCTAssertTrue(
             app.staticTexts["room.empty"].waitForExistence(timeout: 25),

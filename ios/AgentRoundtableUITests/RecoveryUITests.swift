@@ -22,7 +22,7 @@ final class RecoveryUITests: XCTestCase {
         XCTAssertTrue(topicField.waitForExistence(timeout: 20), first.debugDescription)
         topicField.tap()
         topicField.typeText(topic)
-        first.buttons["create.start"].tap()
+        first.startRoundtable()
 
         XCTAssertTrue(
             first.staticTexts["room.empty"].waitForExistence(timeout: 25),

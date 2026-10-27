@@ -21,10 +21,7 @@ final class ReleaseDemoUITests: XCTestCase {
         topic.tap()
         topic.typeText("独立开发者该不该先做 iOS 再补 Android？")
 
-        let start = app.buttons["create.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 5))
-        XCTAssertTrue(start.isEnabled)
-        start.tap()
+        app.startRoundtable()
 
         XCTAssertTrue(
             app.staticTexts["room.empty"].waitForExistence(timeout: 25),

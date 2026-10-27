@@ -24,10 +24,7 @@ final class CreateRoundtableUITests: XCTestCase {
         topic.tap()
         topic.typeText("该不该把验证周期压缩到两周？")
 
-        let start = app.buttons["create.start"]
-        XCTAssertTrue(start.waitForExistence(timeout: 5))
-        XCTAssertTrue(start.isEnabled, "填了议题、选满 3 个 Agent 后按钮仍然不可用")
-        start.tap()
+        app.startRoundtable()
 
         let emptyRoom = app.staticTexts["room.empty"]
         XCTAssertTrue(
