@@ -34,7 +34,17 @@ final class UserControlUITests: XCTestCase {
 
         input.tap()
         input.typeText("体验派先补充用户侧影响。")
-        app.buttons["room.user-message.send"].tap()
+        let send = app.buttons["room.user-message.send"]
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true AND hittable == true"),
+            object: send
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [enabled], timeout: 5),
+            .completed,
+            "发送按钮没有在输入完成后启用：\(app.debugDescription)"
+        )
+        send.tap()
 
         XCTAssertTrue(
             app.staticTexts.containing(
