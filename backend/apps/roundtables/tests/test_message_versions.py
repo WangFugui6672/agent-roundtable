@@ -145,3 +145,55 @@ def test_regeneration_rejects_user_messages(api_client):
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_roundtable_with_a_regenerated_reply_can_be_deleted(api_client):
+    room = make_room()
+    old = submit_message(api_client, room, next_turn(api_client, room))
+    headers = {"HTTP_X_GUEST_SESSION": str(room.guest_session_id)}
+    path = f"/api/v1/roundtables/{room.id}/messages/{old['id']}/regenerate"
+
+    regenerated = api_client.post(path, format="json", **headers)
+    assert regenerated.status_code == 201, regenerated.content
+    replacement = submit_message(api_client, room, regenerated.json()["turn"])
+
+    deleted = api_client.delete(f"/api/v1/roundtables/{room.id}", **headers)
+
+    assert deleted.status_code == 204
+    assert not Roundtable.objects.filter(id=room.id).exists()
+    assert not Message.objects.filter(id__in=[old["id"], replacement["id"]]).exists()
+
+
+def test_guest_session_with_a_regenerated_reply_can_be_deleted(api_client):
+    room = make_room()
+    old = submit_message(api_client, room, next_turn(api_client, room))
+    headers = {"HTTP_X_GUEST_SESSION": str(room.guest_session_id)}
+    path = f"/api/v1/roundtables/{room.id}/messages/{old['id']}/regenerate"
+    regenerated = api_client.post(path, format="json", **headers)
+    assert regenerated.status_code == 201, regenerated.content
+    submit_message(api_client, room, regenerated.json()["turn"])
+
+    deleted = api_client.delete("/api/v1/guest-sessions/current", **headers)
+
+    assert deleted.status_code == 204
+    assert not GuestSession.objects.filter(id=room.guest_session_id).exists()
+    assert not Roundtable.objects.filter(id=room.id).exists()
+
+
+def test_roundtable_with_a_pending_regeneration_can_be_deleted(api_client):
+    room = make_room()
+    old = submit_message(api_client, room, next_turn(api_client, room))
+    headers = {"HTTP_X_GUEST_SESSION": str(room.guest_session_id)}
+    path = f"/api/v1/roundtables/{room.id}/messages/{old['id']}/regenerate"
+
+    first_regeneration = api_client.post(path, format="json", **headers)
+    assert first_regeneration.status_code == 201, first_regeneration.content
+    replacement = submit_message(api_client, room, first_regeneration.json()["turn"])
+    second_path = f"/api/v1/roundtables/{room.id}/messages/{replacement['id']}/regenerate"
+    second_regeneration = api_client.post(second_path, format="json", **headers)
+    assert second_regeneration.status_code == 201, second_regeneration.content
+
+    deleted = api_client.delete(f"/api/v1/roundtables/{room.id}", **headers)
+
+    assert deleted.status_code == 204
+    assert not Roundtable.objects.filter(id=room.id).exists()

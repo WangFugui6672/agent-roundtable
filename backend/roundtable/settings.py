@@ -89,7 +89,10 @@ ROUNDTABLE_RETENTION_DAYS = max(
 )
 
 # --- Celery ---------------------------------------------------------------
-CELERY_BROKER_URL = REDIS_URL or env("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_BROKER_URL = env(
+    "CELERY_BROKER_URL",
+    REDIS_URL or "redis://127.0.0.1:6379/0",
+)
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND")
 CELERY_TASK_ALWAYS_EAGER = env_flag("CELERY_TASK_ALWAYS_EAGER", default=False)
 CELERY_TIMEZONE = "UTC"
