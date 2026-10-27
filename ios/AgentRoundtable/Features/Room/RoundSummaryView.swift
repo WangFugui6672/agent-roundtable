@@ -22,6 +22,15 @@ struct RoundSummaryPanel: View {
                     .foregroundStyle(.orange)
                     .accessibilityIdentifier("summary.degraded")
                 }
+                if room.flaggedSummaryIDs.contains(summary.id) {
+                    Label(
+                        "本地规则已标记或替换模型输出；未经模型或人工审核",
+                        systemImage: "flag"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("summary.content.flagged")
+                }
                 SummaryCategoryView(
                     title: "共识",
                     icon: "hand.thumbsup",
@@ -132,7 +141,7 @@ struct RoundSummaryPanel: View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles.rectangle.stack")
                 .foregroundStyle(.blue)
-            Text("圆桌结论")
+            Text("AI 圆桌结论")
                 .font(.headline)
             Spacer()
             if let summary = room.summary {
@@ -143,7 +152,6 @@ struct RoundSummaryPanel: View {
         }
     }
 }
-
 private struct SummaryCategoryView: View {
     let title: String
     let icon: String
@@ -168,7 +176,7 @@ private struct SummaryCategoryView: View {
                         ForEach(item.referenceMessageIds, id: \.self) { id in
                             if let source = messages.first(where: { $0.id == id }) {
                                 Label(
-                                    "\(source.author.name)：\(source.claim ?? source.body)",
+                                    "AI · \(source.author.name)：\(source.claim ?? source.body)",
                                     systemImage: "quote.opening"
                                 )
                                 .font(.caption2)
@@ -387,6 +395,12 @@ private struct SummaryCardView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(participant.agent.name)
                             .font(.system(size: 28, weight: .bold))
+                        Text("AI")
+                            .font(.system(size: 20, weight: .bold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.blue.opacity(0.12)))
+                            .foregroundStyle(.blue)
                         Text(primaryClaim(for: participant))
                             .font(.system(size: 22))
                             .foregroundStyle(.secondary)
@@ -452,34 +466,6 @@ private struct SummaryCardView: View {
                             .font(.system(size: 26))
                             .lineLimit(3)
                     }
-                }
-            }
-        }
-    }
-}
-
-private struct ActivityView: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-private enum PhotoLibraryWriter {
-    static func save(_ image: UIImage) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
-            } completionHandler: { success, error in
-                if success {
-                    continuation.resume()
-                } else {
-                    continuation.resume(
-                        throwing: error ?? CocoaError(.fileWriteUnknown)
-                    )
                 }
             }
         }

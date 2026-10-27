@@ -5,12 +5,27 @@ struct RoundtableView: View {
     @Environment(AppModel.self) private var model
     let room: RoundtableRoomModel
     @State private var visibleMessageID: UUID?
+    @State private var showingHiddenMessages = false
+    @State private var showingPrivacy = false
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            RoomHeader(
+                room: room,
+                statusText: statusBadge.text,
+                statusTint: statusBadge.tint,
+                streamText: streamBadge.text,
+                streamTint: streamBadge.tint,
+                contentSafetyNotice: model.contentSafetyNotice,
+                contentSafetyError: model.contentSafetyError,
+                controlError: room.status == .completed ? model.controlError : nil
+            )
             Divider()
-            participantsStrip
+            RoomParticipantsStrip(
+                participants: room.participants,
+                activeAgentID: room.activeParticipantId ?? turn.agentID
+            )
             Divider()
             turnStatus
             messageList
@@ -25,58 +40,47 @@ struct RoundtableView: View {
         .navigationTitle("圆桌")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showingPrivacy = true
+                } label: {
+                    Image(systemName: "hand.raised")
+                }
+                .accessibilityLabel("隐私与安全")
+                .accessibilityIdentifier("room.privacy")
+
+                Button(role: .destructive) {
+                    showingDeleteConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(model.isDeletingRoom)
+                .accessibilityLabel("删除圆桌")
+                .accessibilityIdentifier("room.delete")
+
                 Button("离开") { model.leaveRoom() }
             }
         }
         .onAppear {
             model.startSummaryGenerationIfNeeded()
         }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(room.snapshot?.topic ?? "")
-                .font(.headline)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 8) {
-                StatusPill(text: statusBadge.text, tint: statusBadge.tint)
-                StatusPill(text: streamBadge.text, tint: streamBadge.tint)
-                Spacer()
-                Text("第 \(room.currentRound)/\(room.snapshot?.maxRounds ?? 2) 轮")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            if let budget = room.snapshot?.budget {
-                Text(
-                    "\(budget.agentMessagesUsed)/\(budget.maxAgentMessages) 条 · "
-                        + "\(budget.reportedTokens)/\(budget.maxReportedTokens) Token（本机上报） · "
-                        + "\(budget.elapsedSeconds)/\(budget.maxDurationSeconds) 秒"
-                )
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("room.budget")
-            }
+        .sheet(isPresented: $showingPrivacy) {
+            PrivacySafetyView()
         }
-        .padding(16)
-    }
-
-    private var participantsStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(room.participants) { participant in
-                    ParticipantChip(
-                        participant: participant,
-                        isActive: room.activeParticipantId == participant.id
-                            || turn.agentID == participant.id
-                    )
-                    .accessibilityIdentifier("room.participant.\(participant.position)")
-                }
+        .confirmationDialog(
+            "删除这桌讨论？",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("删除圆桌和本机缓存", role: .destructive) {
+                Task { await model.deleteCurrentRoom() }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "服务端消息、事件、结论与举报会立即删除；本机隐藏状态和恢复游标也会清除。"
+                    + "Keychain 中的 API Key 会保留。"
+            )
         }
     }
 
@@ -102,7 +106,8 @@ struct RoundtableView: View {
     /// One switch over `turnState`; everything else in the view reads this.
     private var turn: TurnPresentation {
         func name(_ id: UUID) -> String {
-            room.participants.first(where: { $0.id == id })?.agent.name ?? "Agent"
+            let agentName = room.participants.first(where: { $0.id == id })?.agent.name ?? "Agent"
+            return "AI · \(agentName)"
         }
 
         switch model.turnState {
@@ -264,6 +269,21 @@ struct RoundtableView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    if !room.hiddenMessageIDs.isEmpty {
+                        Button {
+                            showingHiddenMessages.toggle()
+                        } label: {
+                            Label(
+                                showingHiddenMessages
+                                    ? "收起本地隐藏消息"
+                                    : "本机已隐藏 \(room.hiddenMessageIDs.count) 条消息",
+                                systemImage: showingHiddenMessages ? "eye.slash" : "eye"
+                            )
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("room.hidden.toggle")
+                    }
                     if room.messages.isEmpty,
                        room.failures.isEmpty,
                        turn.draft == nil,
@@ -271,11 +291,14 @@ struct RoundtableView: View {
                        room.status != .summarizing {
                         emptyState
                     } else {
-                        ForEach(room.messages) { message in
+                        ForEach(visibleMessages) { message in
                             MessageRow(
                                 message: message,
                                 messages: room.messages,
-                                participants: room.participants
+                                participants: room.participants,
+                                isHidden: room.hiddenMessageIDs.contains(message.id),
+                                isFlagged: room.flaggedMessageIDs.contains(message.id),
+                                isReported: room.reportedMessageIDs.contains(message.id)
                             )
                                 .id(message.id)
                         }
@@ -328,6 +351,13 @@ struct RoundtableView: View {
 }
 
 private extension RoundtableView {
+    var visibleMessages: [Message] {
+        if showingHiddenMessages {
+            return room.messages
+        }
+        return room.messages.filter { !room.hiddenMessageIDs.contains($0.id) }
+    }
+
     func scrollToVisibleMessage(
         using proxy: ScrollViewProxy,
         animated: Bool
@@ -343,106 +373,14 @@ private extension RoundtableView {
     }
 
     var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("圆桌已经建好，还没有发言")
-                .font(.headline)
-                .accessibilityIdentifier("room.empty")
-            Text("配置 Provider 后开始第一轮，由系统依次邀请三位 Agent 发言；也可以播放 Mock 事件。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        RoomEmptyState()
     }
 
     var statusBadge: (text: String, tint: Color) {
-        guard let status = room.status else { return ("准备中", .secondary) }
-        if room.budgetExhaustion != nil {
-            return ("预算用尽", .orange)
-        }
-        if room.pausePending {
-            return ("将在当前发言后暂停", .orange)
-        }
-        switch status {
-        case .draft: return ("草稿", .secondary)
-        case .ready: return ("就绪", .secondary)
-        case .running: return ("讨论中", .green)
-        case .paused: return ("已暂停", .orange)
-        case .summarizing: return ("总结中", .orange)
-        case .completed: return ("已结束", .blue)
-        case .failed: return ("失败", .red)
-        case .archived: return ("已归档", .secondary)
-        case .unknown: return ("未知状态", .secondary)
-        }
+        RoomStatusPresentation.status(room: room)
     }
 
     var streamBadge: (text: String, tint: Color) {
-        switch model.streamState {
-        case .idle: return ("未连接", .secondary)
-        case .connecting: return ("连接中", .orange)
-        case .connected: return ("已连接", .green)
-        case .reconnecting: return ("离线，重试中", .orange)
-        case .closed: return ("已断开", .secondary)
-        case .failed: return ("连接失败", .red)
-        }
-    }
-}
-
-private struct TurnFailureRow: View {
-    let failure: TurnFailure
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.octagon.fill")
-                    .foregroundStyle(.red)
-                Text("\(failure.agentName) 未能完成本轮")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(failure.retryable ? "可重试" : "不可重试")
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule().fill(
-                            failure.retryable ? Color.orange.opacity(0.14) : Color.red.opacity(0.12)
-                        )
-                    )
-                    .foregroundStyle(failure.retryable ? .orange : .red)
-            }
-            Text(failure.message)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if let partial = failure.partial, !partial.isEmpty {
-                Text(partial)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(5)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.tertiarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            Text(failure.failureCode)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-        }
-        .padding(12)
-        .background(Color.red.opacity(0.06))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.red.opacity(0.16))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityIdentifier("room.failure.\(failure.turnId.uuidString)")
-        .accessibilityLabel(
-            "\(failure.agentName) 失败，\(failure.failureCode)，"
-                + (failure.retryable ? "可重试" : "不可重试")
-        )
+        RoomStatusPresentation.stream(model.streamState)
     }
 }

@@ -2,7 +2,7 @@
 
 Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前阶段：** Issue #9「结论与结论卡」—— 自动总结、结构化引用校验、降级摘要、只读完成态、继续追问和原生分享卡已落地。
+**当前阶段：** Issue #11「内容安全、隐私与删除」—— AI 标识、本地内容规则、举报/隐藏、第三方数据提示、90 天保留和级联删除已落地。
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -60,9 +60,15 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 - 圆桌页按共识、分歧、建议、未决问题展示结论及引用原观点，并支持重新生成。
 - 结论卡由 SwiftUI 与 `ImageRenderer` 绘制，可保存相册并通过系统分享；卡片不含 API Key、内部 ID、Prompt、公开链接或二维码。
 - `room.joined` 和 SwiftData 均持久化结论；进程重启后可恢复已完成圆桌与结论卡入口。
+- 参与者、消息、生成状态和结论始终显示 AI 标识；只提供固定预设 Agent，不提供公众人物冒充或克隆。
+- `RoundtableCore.ContentPolicy` 用可测试本地规则返回 `allow / block / flag`；阻断内容不会发送给 Django 或 Provider，标记内容会明确说明未经审核。
+- 规则覆盖明显违法、危险、仇恨、未成年人性和公众人物冒充样本，并在 [`docs/content-safety.md`](docs/content-safety.md) 记录边界与误报策略。
+- 真实 Provider 首次调用前显示第三方数据提示；取消不会发起 Provider 请求，确认状态只写 UserDefaults。
+- 用户可举报当前圆桌的 AI 消息；举报服务端幂等保存为 `submitted`，不伪装成审核结论。
+- 用户可在本机隐藏 AI 消息；隐藏、内容标记和举报状态保存到 SwiftData，不删除或改写服务端消息。
+- `DELETE /roundtables/{id}` 幂等删除圆桌及消息、事件、回合、用量、结论和举报；iOS 同步清理本地缓存、隐藏状态和恢复游标，但保留 Keychain API Key。
+- 圆桌按最后活动保留 90 天，`purge_roundtables` 清理任务支持 dry-run；匿名会话标识使用独立 Keychain item。
 - 后端单元/集成测试、iOS 解码/状态机/Provider/流式客户端测试、Keychain 集成测试、最小 GitHub Actions。
-
-内容安全、删除与发布材料见后续 Issue。
 
 ## 目录结构
 
@@ -96,6 +102,7 @@ make db-up            # 启动 PostgreSQL
 make backend-install  # uv sync
 make backend-migrate  # 建表 + 写入三个预设 Agent
 make backend-run      # http://127.0.0.1:8000
+make backend-purge    # 可选：删除最后活动超过 90 天的圆桌
 ```
 
 健康检查：`curl http://127.0.0.1:8000/api/v1/health`
@@ -156,6 +163,8 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - 两轮/消息数/时间/客户端上报 Token 预算，以及活跃圆桌和 Mock 每日限额。
 - `summary.started` / `summary.completed`、结论项 schema、有效观点引用和版本冲突。
 - `completed` 只读边界，以及带 parent/source 与 `follow_up_context` 的继续追问。
+- 幂等 AI 消息举报、幂等圆桌删除、90 天保留语义与清理任务。
+- 本地内容策略、第三方数据提示、AI 标识和匿名会话 Keychain 存储。
 - `mock.run` 确定性演示命令与一轮 Mock 的事件顺序。
 
 ## 设计要点
@@ -168,6 +177,8 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - **预算诚实分层**：服务端强制可观察的轮数、消息数、Turn 截止时间和整场时间；由于 BYOK 直连，Token 上限只能基于 iOS 上报的 Provider usage，不能伪装成服务端计费。
 - **结论与普通消息分离**：`RoundSummary` 独立版本化保存，不向消息流写伪 summary 消息，避免污染引用与调度。
 - **降级不伪造依据**：规则化摘要只复制已有观点并引用原消息；Provider 失败时仍允许完成，但 UI 和协议都保留 `degraded` 标记。
+- **本地安全与本地隐藏分离**：内容规则在发送边界执行；隐藏只改变本机 SwiftData 投影，举报单独提交且不产生审核结论。
+- **删除与保留可审计**：服务端以圆桌最后活动为 90 天锚点并级联删除，本机删除缓存与游标，但 API Key 只由用户主动删除 Provider 时移除。
 
 ## 已知边界
 
@@ -184,7 +195,8 @@ iOS 单元测试使用 XCTest，必须由带 Xcode 的工具链执行（纯 Comm
 - `RoundtableRepository` 持有圆桌 API、WebSocket、本地存储和游标；`AppModel` 只负责会话、Provider turn 与 UI 状态编排。
 - 后端可以验证结构、引用归属和版本，但无法证明模型生成的自然语言绝对没有隐含新事实；MVP 通过候选范围、强制引用和降级规则降低风险。
 - 结论重新生成保留版本号和新 `summary.completed` 事件，不做公开分享链接、二维码或可导入房间。
-- 匿名会话 ID 目前存 `UserDefaults`，它只是能力凭据、不含模型密钥；会话轮换与安全存储随隐私 Issue（#11）处理。
+- 匿名会话 ID 存在独立 Keychain service；旧 `UserDefaults` 值会在下次启动时迁移后删除。
+- 本地内容规则是有限第一道过滤，不能覆盖所有语义变体；服务端不做模型审核，举报仅进入人工处理队列。
 
 ## 故障排查
 

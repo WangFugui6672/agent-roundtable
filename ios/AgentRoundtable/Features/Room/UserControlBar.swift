@@ -7,6 +7,7 @@ struct UserControlBar: View {
 
     @State private var draft = ""
     @State private var mentionedAgentIDs: Set<UUID> = []
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(spacing: 10) {
@@ -19,6 +20,7 @@ struct UserControlBar: View {
                 TextField("补充观点…", text: $draft, axis: .vertical)
                     .lineLimit(1...4)
                     .textFieldStyle(.roundedBorder)
+                    .focused($inputFocused)
                     .accessibilityIdentifier("room.user-message.input")
 
                 Button {
@@ -57,7 +59,11 @@ struct UserControlBar: View {
                 .accessibilityIdentifier("room.mock")
             }
 
-            if let error = model.controlError ?? model.turnError ?? model.streamError {
+            if let error =
+                model.controlError
+                ?? model.contentSafetyError
+                ?? model.turnError
+                ?? model.streamError {
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.red)
@@ -76,9 +82,9 @@ struct UserControlBar: View {
                     toggleMention(participant.id)
                 } label: {
                     if mentionedAgentIDs.contains(participant.id) {
-                        Label(participant.agent.name, systemImage: "checkmark")
+                        Label("AI · \(participant.agent.name)", systemImage: "checkmark")
                     } else {
-                        Text(participant.agent.name)
+                        Text("AI · \(participant.agent.name)")
                     }
                 }
             }
@@ -99,7 +105,7 @@ struct UserControlBar: View {
                         toggleMention(participant.id)
                     } label: {
                         HStack(spacing: 4) {
-                            Text("@\(participant.agent.name)")
+                            Text("@AI · \(participant.agent.name)")
                             Image(systemName: "xmark")
                                 .font(.caption2)
                         }
@@ -191,6 +197,7 @@ struct UserControlBar: View {
     private func send() {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
+        inputFocused = false
         let mentions = Array(mentionedAgentIDs)
         Task {
             await model.sendUserMessage(body, mentionedAgentIDs: mentions)

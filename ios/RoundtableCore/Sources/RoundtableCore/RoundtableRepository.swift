@@ -1,40 +1,6 @@
 import Foundation
 import Observation
 
-public struct StoredRoomState: Codable, Equatable, Sendable {
-    public let snapshot: RoundtableSnapshot
-    public let messages: [Message]
-    public let failures: [TurnFailure]
-    public let budgetExhaustion: BudgetExhaustion?
-    public let summary: RoundSummary?
-    public let lastSequence: Int
-    public let seenEventIDs: [UUID]
-    public let lastVisibleMessageID: UUID?
-    public let savedAt: Date
-
-    public init(
-        snapshot: RoundtableSnapshot,
-        messages: [Message],
-        failures: [TurnFailure],
-        budgetExhaustion: BudgetExhaustion?,
-        summary: RoundSummary? = nil,
-        lastSequence: Int,
-        seenEventIDs: [UUID],
-        lastVisibleMessageID: UUID?,
-        savedAt: Date
-    ) {
-        self.snapshot = snapshot
-        self.messages = messages
-        self.failures = failures
-        self.budgetExhaustion = budgetExhaustion
-        self.summary = summary
-        self.lastSequence = lastSequence
-        self.seenEventIDs = seenEventIDs
-        self.lastVisibleMessageID = lastVisibleMessageID
-        self.savedAt = savedAt
-    }
-}
-
 @MainActor
 public protocol RoundtableRoomStore {
     func save(_ state: StoredRoomState) throws
@@ -211,6 +177,26 @@ public final class RoundtableRepository {
         try await api.endRoundtable(roundtableID: roundtableID)
     }
 
+    @discardableResult
+    public func reportMessage(
+        roundtableID: UUID,
+        messageID: UUID,
+        reason: MessageReportReason,
+        details: String = ""
+    ) async throws -> MessageReportReceipt {
+        let receipt = try await api.reportMessage(
+            roundtableID: roundtableID,
+            messageID: messageID,
+            reason: reason,
+            details: details
+        )
+        if room?.snapshot?.id == roundtableID {
+            room?.markMessageReported(messageID)
+            try persist()
+        }
+        return receipt
+    }
+
     public func fetchRoundtable(id: UUID) async throws -> RoundtableSnapshot {
         try await api.fetchRoundtable(id: id)
     }
@@ -276,6 +262,30 @@ public final class RoundtableRepository {
         try persist()
     }
 
+    public func flagMessage(_ messageID: UUID) throws {
+        guard let room else { return }
+        room.flagMessage(messageID)
+        try persist()
+    }
+
+    public func hideMessage(_ messageID: UUID) throws {
+        guard let room else { return }
+        room.hideMessage(messageID)
+        try persist()
+    }
+
+    public func showMessage(_ messageID: UUID) throws {
+        guard let room else { return }
+        room.showMessage(messageID)
+        try persist()
+    }
+
+    public func flagSummary(_ summaryID: UUID) throws {
+        guard let room, room.summary?.id == summaryID else { return }
+        room.flagSummary(summaryID)
+        try persist()
+    }
+
     public func save() throws {
         try persist()
     }
@@ -287,6 +297,23 @@ public final class RoundtableRepository {
     public func delete(roomID: UUID) throws {
         try store.delete(roomID: roomID)
         if room?.snapshot?.id == roomID {
+            room = nil
+        }
+    }
+
+    public func deleteRoundtable(roomID: UUID) async throws {
+        do {
+            try await api.deleteRoundtable(id: roomID)
+        } catch {
+            throw RoundtableDeletionError.server(error)
+        }
+        do {
+            try store.delete(roomID: roomID)
+        } catch {
+            throw RoundtableDeletionError.local(error)
+        }
+        if room?.snapshot?.id == roomID {
+            disconnect(reason: nil)
             room = nil
         }
     }

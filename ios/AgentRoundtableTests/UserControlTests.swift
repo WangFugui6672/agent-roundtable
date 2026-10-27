@@ -289,6 +289,7 @@ private extension UserControlTests {
                 apiKey: "sk-test-user-control"
             )
         )
+        model.confirmProviderDataNotice()
     }
 
     private func waitUntil(

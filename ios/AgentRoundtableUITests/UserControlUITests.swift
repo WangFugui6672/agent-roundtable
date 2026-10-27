@@ -28,7 +28,7 @@ final class UserControlUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
 
         app.buttons["room.user-message.mention"].tap()
-        let experience = app.buttons["体验派"]
+        let experience = app.buttons["AI · 体验派"]
         XCTAssertTrue(experience.waitForExistence(timeout: 5))
         experience.tap()
 

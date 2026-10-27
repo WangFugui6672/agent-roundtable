@@ -4,11 +4,11 @@ import XCTest
 
 @MainActor
 final class RoundtableRoomModelTests: XCTestCase {
-    private func joinedEnvelope() throws -> EventEnvelope {
+    func joinedEnvelope() throws -> EventEnvelope {
         try EventEnvelope.decode(from: Fixtures.joinedEnvelope)
     }
 
-    private func envelope(_ type: String, _ sequence: Int, _ payload: String) throws -> EventEnvelope {
+    func envelope(_ type: String, _ sequence: Int, _ payload: String) throws -> EventEnvelope {
         try EventEnvelope.decode(
             from: Fixtures.envelope(
                 eventType: type,
