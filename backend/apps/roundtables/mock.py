@@ -17,17 +17,22 @@ from apps.roundtables import protocol as p
 def _message(
     *,
     agent,
+    round_number: int,
     message_type: str,
     claim: str,
     body: str,
     stance: str | None = None,
     references: list[str] | None = None,
+    challenge_target_agent_id: str | None = None,
     confidence: float,
 ) -> dict[str, Any]:
     return {
         "message": {
             "id": str(uuid.uuid4()),
+            "turn_id": None,
+            "round_number": round_number,
             "author": {
+                "type": "agent",
                 "roundtable_agent_id": str(agent.id),
                 "agent_key": agent.agent_profile.key,
                 "name": agent.agent_profile.name,
@@ -37,7 +42,9 @@ def _message(
             "body": body,
             "stance": stance,
             "references": references or [],
+            "challenge_target_agent_id": challenge_target_agent_id,
             "confidence": confidence,
+            "mentioned_agent_ids": [],
             "created_at": p.now_iso(),
         }
     }
@@ -67,6 +74,7 @@ def build_mock_round(room, agents, round_number: int) -> list[tuple[str, dict[st
 
     proposal = _message(
         agent=first,
+        round_number=round_number,
         message_type="proposal",
         claim="先用一个两周的验证性实验确认假设，再决定是否加大投入。",
         body=(
@@ -77,6 +85,7 @@ def build_mock_round(room, agents, round_number: int) -> list[tuple[str, dict[st
     )
     challenge = _message(
         agent=second,
+        round_number=round_number,
         message_type="challenge",
         claim="两周验证可能只是把决策成本推后，而不是降低。",
         body=(
@@ -85,10 +94,12 @@ def build_mock_round(room, agents, round_number: int) -> list[tuple[str, dict[st
         ),
         stance="challenge",
         references=[proposal["message"]["id"]],
+        challenge_target_agent_id=str(first.id) if round_number >= 2 else None,
         confidence=0.64,
     )
     supplement = _message(
         agent=third,
+        round_number=round_number,
         message_type="supplement",
         claim="用户能感知的是等待和不确定，方案要先给出现在就能拿到的价值。",
         body=(

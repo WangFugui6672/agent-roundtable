@@ -11,7 +11,9 @@ final class ProviderSettingsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
         app.launchEnvironment["RT_RESET_PROVIDER_STATE"] = "1"
+        app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let providerEntry = app.buttons["create.provider"]
         XCTAssertTrue(

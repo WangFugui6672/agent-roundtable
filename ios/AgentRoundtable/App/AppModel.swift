@@ -1,12 +1,37 @@
 import Foundation
 import Observation
 import RoundtableCore
+import SwiftData
+
+enum AppTurnState: Equatable {
+    case idle
+    case thinking(agentID: UUID)
+    case typing(agentID: UUID, text: String)
+    case submitting(agentID: UUID)
+    case completed(agentID: UUID)
+    case passed(agentID: UUID)
+    case roundCompleted(round: Int)
+    case paused
+    case ended
+    /// `partial` keeps streamed text so a failed turn remains retryable.
+    case failed(agentID: UUID, message: String, partial: String?)
+
+    var isBusy: Bool {
+        switch self {
+        case .thinking, .typing, .submitting: return true
+        case .idle, .completed, .passed, .roundCompleted, .paused, .ended, .failed:
+            return false
+        }
+    }
+}
 
 /// App-level orchestration: session bootstrap, roundtable creation, and the
 /// WebSocket lifecycle. All UI state lives here or in ``RoundtableRoomModel``.
 @MainActor
 @Observable
 final class AppModel {
+    typealias TurnState = AppTurnState
+
     enum Phase: Equatable {
         case loading
         case ready
@@ -17,6 +42,7 @@ final class AppModel {
         case idle
         case connecting
         case connected
+        case reconnecting(attempt: Int)
         case closed
         case failed(String)
     }
@@ -24,33 +50,37 @@ final class AppModel {
     private(set) var phase: Phase = .loading
     private(set) var profiles: [AgentProfile] = []
     private(set) var selectedProfileIDs: [UUID] = []
-    private(set) var room: RoundtableRoomModel?
+    var room: RoundtableRoomModel? { repository.room }
+    var historyEntries: [RoundtableHistoryEntry] = []
+    var historyError: String?
+    var isDeletingHistory = false
+    var isManagingSession = false
+    var isRoomPresented = false
+    var isCreatingRoundtable = false
     private(set) var streamState: StreamState = .idle
     private(set) var isCreating = false
     private(set) var isMockRunning = false
+    var isSceneActive = true
+    var isFirstRoundRunning = false
     private(set) var createError: String?
-
-    /// One real-provider turn at a time (Issue #4). Scheduling three agents in
-    /// order is Issue #5's job.
-    enum TurnState: Equatable {
-        case idle
-        case thinking(agentID: UUID)
-        case typing(agentID: UUID, text: String)
-        case submitting(agentID: UUID)
-        case completed(agentID: UUID)
-        /// `partial` keeps the streamed text so a failed turn is retryable
-        /// without losing what the model already produced (PRD 7.12).
-        case failed(agentID: UUID, message: String, partial: String?)
-
-        var isBusy: Bool {
-            switch self {
-            case .thinking, .typing, .submitting: return true
-            case .idle, .completed, .failed: return false
-            }
-        }
-    }
+    var controlError: String?
+    var failureCode: String?
+    var failureRetryable = false
+    var scheduledTurn: ScheduledTurn?
+    var isSendingUserMessage = false
+    var isChangingDiscussion = false
+    var isProviderDataNoticePresented = false
+    var pendingProviderDataAction: ProviderDataAction?
+    var contentSafetyNotice: String?
+    var contentSafetyError: String?
+    var isDeletingRoom = false
+    var isRegeneratingMessage = false
 
     var turnState: TurnState = .idle
+    var summaryState: SummaryGenerationState = .idle
+    var summaryError: String?
+    var summaryNeedsLocalFlag = false
+    var isCreatingFollowUp = false
 
     // Provider state (Issue #3). Secrets never enter these properties: only the
     // non-secret configuration is exposed to the UI. They are internal so the
@@ -61,35 +91,60 @@ final class AppModel {
     var isSavingProvider = false
     var isCheckingProvider = false
 
-    var api: APIClient
-    private var guestSessionID: UUID?
-    private var stream: RoundtableStream?
-    private var streamTask: Task<Void, Never>?
+    var guestSessionID: UUID?
+    let repository: RoundtableRepository
+    var generationTask: Task<Void, Never>?
+    var generationID: UUID?
+    var summaryTask: Task<Void, Never>?
+    var summaryGenerationID: UUID?
+    var reportedFailureTurnIDs: Set<UUID> = []
+    var isEnding = false
     let defaults: UserDefaults
     let providerStore: ProviderStore
     let probe: ProviderProbe
     let chatClient: ProviderChatClient
+    let contentPolicy: ContentPolicy
+    let guestSessionStore: AnonymousSessionStore
 
     private static let sessionKey = "roundtable.guestSessionID"
     static let activeProviderKey = "roundtable.activeProviderKind"
+    static let providerDataNoticeKey = "roundtable.providerDataNoticeAcknowledged"
 
     init(
         defaults: UserDefaults = .standard,
         providerStore: ProviderStore? = nil,
         probe: ProviderProbe = ProviderProbe(),
         chatClient: ProviderChatClient = ProviderChatClient(),
-        api: APIClient? = nil
+        contentPolicy: ContentPolicy = .standard,
+        guestSessionStore: AnonymousSessionStore = AnonymousSessionStore(),
+        api: APIClient? = nil,
+        roomStore: (any RoundtableRoomStore)? = nil,
+        socketFactory: any RoundtableSocketFactory = URLSessionSocketFactory()
     ) {
         self.defaults = defaults
-        self.api = api ?? APIClient(baseURL: Self.defaultBaseURL)
         self.providerStore = providerStore ?? ProviderStore()
         self.probe = probe
         self.chatClient = chatClient
+        self.contentPolicy = contentPolicy
+        self.guestSessionStore = guestSessionStore
+        repository = RoundtableRepository(
+            api: api ?? APIClient(baseURL: Self.defaultBaseURL),
+            store: roomStore ?? InMemoryRoomStore(),
+            socketFactory: socketFactory
+        )
+        repository.connectionStateHandler = { [weak self] state in
+            self?.streamState = Self.mapConnectionState(state)
+        }
 
         #if DEBUG
         if ProcessInfo.processInfo.environment["RT_RESET_PROVIDER_STATE"] == "1" {
             self.providerStore.reset()
             defaults.removeObject(forKey: Self.activeProviderKey)
+            defaults.removeObject(forKey: Self.providerDataNoticeKey)
+        }
+        if ProcessInfo.processInfo.environment["RT_RESET_GUEST_SESSION"] == "1" {
+            try? guestSessionStore.clear()
+            defaults.removeObject(forKey: Self.sessionKey)
         }
         #endif
 
@@ -102,6 +157,12 @@ final class AppModel {
 
     func bootstrap() async {
         phase = .loading
+        let restored = (try? repository.restoreRecent()) ?? false
+        isRoomPresented = false
+        reloadCachedHistory()
+        if restored {
+            phase = .ready
+        }
         do {
             try await loadInitialState()
         } catch let error as APIError where error.code == "guest_session_required" {
@@ -111,40 +172,59 @@ final class AppModel {
             do {
                 try await loadInitialState()
             } catch {
-                phase = .failed(Self.userMessage(for: error))
+                handleBootstrapFailure(error, hasCachedRoom: restored)
             }
         } catch {
-            phase = .failed(Self.userMessage(for: error))
+            handleBootstrapFailure(error, hasCachedRoom: restored)
         }
     }
 
     private func loadInitialState() async throws {
         let sessionID = try await ensureGuestSession()
         guestSessionID = sessionID
-        api = api.withGuestSession(sessionID)
+        repository.setGuestSession(sessionID)
 
-        let profiles = try await api.fetchAgentProfiles()
+        let profiles = try await repository.fetchAgentProfiles()
         self.profiles = profiles
         if selectedProfileIDs.isEmpty {
             selectedProfileIDs = profiles.map(\.id)
         }
         phase = .ready
+        await refreshHistory()
+        if room != nil {
+            repository.connect(guestSessionID: sessionID)
+        }
     }
 
     private func resetGuestSession() {
+        try? guestSessionStore.clear()
         defaults.removeObject(forKey: Self.sessionKey)
         guestSessionID = nil
-        api = api.withGuestSession(nil)
+        repository.setGuestSession(nil)
     }
 
     private func ensureGuestSession() async throws -> UUID {
-        if let raw = defaults.string(forKey: Self.sessionKey),
-           let stored = UUID(uuidString: raw) {
+        if let stored = try guestSessionStore.load() {
             return stored
         }
-        let session = try await api.createGuestSession()
-        defaults.set(session.id.uuidString, forKey: Self.sessionKey)
+        if let raw = defaults.string(forKey: Self.sessionKey),
+           let legacy = UUID(uuidString: raw) {
+            try guestSessionStore.save(legacy)
+            defaults.removeObject(forKey: Self.sessionKey)
+            return legacy
+        }
+        let session = try await repository.createGuestSession()
+        try guestSessionStore.save(session.id)
         return session.id
+    }
+
+    private func handleBootstrapFailure(_ error: Error, hasCachedRoom: Bool) {
+        if hasCachedRoom {
+            phase = .ready
+            streamState = .failed("当前离线，正在显示本机缓存的圆桌。")
+        } else {
+            phase = .failed(Self.userMessage(for: error))
+        }
     }
 
     // MARK: - Create
@@ -176,18 +256,25 @@ final class AppModel {
             createError = "Provider 配置不完整：\(incomplete)"
             return
         }
+        guard validateLocalContent(trimmed) else {
+            createError = contentSafetyError
+            return
+        }
 
         isCreating = true
         createError = nil
         defer { isCreating = false }
 
         do {
-            let snapshot = try await api.createRoundtable(
+            let snapshot = try await repository.createRoundtable(
                 topic: trimmed,
-                agentProfileIds: selectedProfileIDs,
+                agentProfileIDs: selectedProfileIDs,
                 provider: providerMetadata
             )
             open(snapshot)
+            contentSafetyNotice = contentPolicy.evaluate(trimmed).decision == .flag
+                ? contentSafetyNotice
+                : nil
         } catch {
             createError = Self.userMessage(for: error)
         }
@@ -199,106 +286,87 @@ final class AppModel {
     /// adds the stream. Splitting the two keeps the projection testable
     /// without a boolean flag.
     func present(_ snapshot: RoundtableSnapshot) {
-        let room = RoundtableRoomModel()
-        room.seed(snapshot)
-        self.room = room
+        try? repository.present(snapshot)
     }
 
     func open(_ snapshot: RoundtableSnapshot) {
-        present(snapshot)
-        connect(roomID: snapshot.id, cursor: snapshot.lastSequence)
-    }
-
-    private func connect(roomID: UUID, cursor: Int) {
-        streamTask?.cancel()
-        stream?.close()
-
-        guard let guestSessionID,
-              let url = RoundtableStream.makeURL(
-                  baseURL: api.baseURL,
-                  roomID: roomID,
-                  guestSessionID: guestSessionID,
-                  cursor: cursor
-              )
-        else {
-            streamState = .failed("无法构造 WebSocket 地址。")
+        guard (try? repository.present(snapshot)) != nil,
+              let guestSessionID else {
             return
         }
-
-        let stream = RoundtableStream(url: url)
-        self.stream = stream
-        streamState = .connecting
-
-        streamTask = Task { [weak self] in
-            do {
-                for try await event in stream.events() {
-                    guard let self else { return }
-                    self.room?.apply(event)
-                    if case .joined = event.payload {
-                        self.streamState = .connected
-                    }
-                }
-                self?.streamState = .closed
-            } catch {
-                self?.streamState = .failed(Self.userMessage(for: error))
-            }
-        }
+        isRoomPresented = true
+        isCreatingRoundtable = false
+        repository.connect(guestSessionID: guestSessionID)
     }
 
     func runMockRound() async {
-        guard let stream, !isMockRunning else { return }
+        guard !isMockRunning else { return }
         isMockRunning = true
         defer { isMockRunning = false }
+        let initialStatus = room?.status
         do {
-            try await stream.runMockRound()
+            try await repository.runMockRound()
+            for _ in 0 ..< 100 {
+                guard room?.status == initialStatus else {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            if room?.status == .summarizing {
+                await generateSummary()
+            }
         } catch {
             streamState = .failed(Self.userMessage(for: error))
         }
     }
 
     func leaveRoom() {
-        streamTask?.cancel()
-        streamTask = nil
-        stream?.close()
-        stream = nil
-        room = nil
+        generationTask?.cancel()
+        generationTask = nil
+        generationID = nil
+        summaryTask?.cancel()
+        summaryTask = nil
+        summaryGenerationID = nil
+        isEnding = false
+        repository.leaveRoom()
         streamState = .idle
         turnState = .idle
+        summaryState = .idle
+        summaryError = nil
+        summaryNeedsLocalFlag = false
+        scheduledTurn = nil
+        failureCode = nil
+        failureRetryable = false
+        reportedFailureTurnIDs.removeAll()
+        isFirstRoundRunning = false
+        isCreatingFollowUp = false
+        controlError = nil
+        contentSafetyNotice = nil
+        contentSafetyError = nil
+        isRoomPresented = false
+        isCreatingRoundtable = false
+        reloadCachedHistory()
     }
 
-    // MARK: - Helpers
-
-    static var defaultBaseURL: URL {
-        if let raw = ProcessInfo.processInfo.environment["RT_API_BASE_URL"],
-           let url = URL(string: raw) {
-            return url
-        }
-        if let raw = Bundle.main.object(forInfoDictionaryKey: "RTAPIBaseURL") as? String,
-           let url = URL(string: raw) {
-            return url
-        }
-        return URL(string: "http://localhost:8000")!
+    func markVisibleMessage(_ messageID: UUID) {
+        guard room?.lastVisibleMessageID != messageID else { return }
+        try? repository.markVisibleMessage(messageID)
     }
 
-    /// Single mapping from any error to copy shown in the UI. Provider errors
-    /// already carry actionable text (PRD 7.13), so they win over the fallback.
-    static func userMessage(for error: Error) -> String {
-        if let providerError = error as? ProviderError {
-            return providerError.message
-        }
-        if let validation = error as? ProviderValidationError {
-            return validation.message
-        }
-        if let keychain = error as? KeychainError {
-            return keychain.message
-        }
-        if let apiError = error as? APIError {
-            return apiError.message
-        }
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain {
-            return "网络请求失败：\(nsError.localizedDescription)"
-        }
-        return error.localizedDescription
+    func resetAfterRoomDeletion() {
+        streamState = .idle
+        turnState = .idle
+        summaryState = .idle
+        summaryError = nil
+        summaryNeedsLocalFlag = false
+        scheduledTurn = nil
+        failureCode = nil
+        failureRetryable = false
+        reportedFailureTurnIDs.removeAll()
+        isFirstRoundRunning = false
+        isEnding = false
+        contentSafetyNotice = nil
+        contentSafetyError = nil
     }
+
 }

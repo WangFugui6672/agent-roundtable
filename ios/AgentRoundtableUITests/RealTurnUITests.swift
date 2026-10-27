@@ -11,7 +11,10 @@ final class RealTurnUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
         app.launchEnvironment["RT_RESET_PROVIDER_STATE"] = "1"
+        app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
+        app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let providerEntry = app.buttons["create.provider"]
         XCTAssertTrue(
@@ -37,16 +40,23 @@ final class RealTurnUITests: XCTestCase {
         topic.tap()
         topic.typeText("该不该把验证周期压缩到两周？")
         dismissKeyboard(in: app)
-        app.buttons["create.start"].tap()
+        app.startRoundtable()
 
         XCTAssertTrue(
             app.staticTexts["room.empty"].waitForExistence(timeout: 25),
             "没有进入空圆桌：\(app.debugDescription)"
         )
 
-        let speak = app.buttons["room.speak.0"]
-        XCTAssertTrue(speak.waitForExistence(timeout: 5))
-        speak.tap()
+        let startRound = app.buttons["room.round.start"]
+        XCTAssertTrue(startRound.waitForExistence(timeout: 5))
+        startRound.tap()
+
+        let dataNotice = app.buttons["provider.dataNotice.confirm"]
+        XCTAssertTrue(
+            dataNotice.waitForExistence(timeout: 5),
+            "首次真实 Provider 调用前没有显示数据发送提示：\(app.debugDescription)"
+        )
+        dataNotice.tap()
 
         let error = app.descendants(matching: .any).matching(identifier: "room.turn.error").firstMatch
         XCTAssertTrue(

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import uuid
+
 from django.db import models
+from django.utils import timezone
+
+from apps.roundtables.protocol import iso8601_millis
 
 
 class GuestSession(models.Model):
@@ -74,8 +79,15 @@ class Roundtable(models.Model):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.READY)
     mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.DECISION)
     max_rounds = models.PositiveSmallIntegerField(default=2)
+    max_agent_messages = models.PositiveSmallIntegerField(default=6)
+    max_reported_tokens = models.PositiveIntegerField(default=2400)
+    reported_tokens = models.PositiveIntegerField(default=0)
+    max_duration_seconds = models.PositiveSmallIntegerField(default=90)
     current_round = models.PositiveSmallIntegerField(default=0)
     event_sequence = models.BigIntegerField(default=0)
+    pause_pending = models.BooleanField(default=False)
+    started_at = models.DateTimeField(null=True, blank=True)
+    budget_exhausted_reason = models.CharField(max_length=32, blank=True, default="")
     # Provider metadata snapshot (Issue #3). Only non-secret fields are stored:
     # the API key lives in the iOS Keychain and must never reach Django.
     provider_kind = models.CharField(
@@ -83,15 +95,45 @@ class Roundtable(models.Model):
     )
     provider_base_url = models.CharField(max_length=300, blank=True, default="")
     provider_model = models.CharField(max_length=120, blank=True, default="")
+    parent_roundtable = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="follow_ups",
+        null=True,
+        blank=True,
+    )
+    source_summary = models.ForeignKey(
+        "RoundSummary",
+        on_delete=models.SET_NULL,
+        related_name="follow_ups",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    last_activity_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:
         db_table = "roundtable"
         ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(max_rounds__gt=0, max_rounds__lte=2),
+                name="roundtable_max_two_rounds",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"{self.topic[:20]} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        # Every direct roundtable mutation is user-visible activity. Retention
+        # follows this one anchor instead of loosely combining child timestamps.
+        self.last_activity_at = timezone.now()
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "last_activity_at" not in update_fields:
+            kwargs["update_fields"] = [*update_fields, "last_activity_at"]
+        super().save(*args, **kwargs)
 
 
 class RoundtableAgent(models.Model):
@@ -127,6 +169,58 @@ class RoundtableAgent(models.Model):
         return f"{self.agent_profile.name}@{self.position}"
 
 
+class Turn(models.Model):
+    """One server-issued speaking assignment executed by the iOS Provider."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "待完成"
+        COMPLETED = "completed", "已完成"
+        PASSED = "passed", "已沉默"
+        FAILED = "failed", "失败"
+        CANCELLED = "cancelled", "已取消"
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="turns")
+    roundtable_agent = models.ForeignKey(
+        RoundtableAgent, on_delete=models.PROTECT, related_name="turns"
+    )
+    round_number = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    failure_code = models.CharField(max_length=64, blank=True, default="")
+    failure_message = models.TextField(blank=True, default="")
+    failure_partial = models.TextField(blank=True, default="")
+    retryable = models.BooleanField(default=False)
+    deadline_at = models.DateTimeField(null=True, blank=True)
+    replaces_message = models.OneToOneField(
+        "Message",
+        on_delete=models.PROTECT,
+        related_name="regeneration_turn",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "turn"
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["roundtable_agent", "round_number"],
+                condition=models.Q(replaces_message__isnull=True),
+                name="unique_turn_per_agent_round",
+            ),
+            models.UniqueConstraint(
+                fields=["roundtable"],
+                condition=models.Q(status="pending"),
+                name="unique_pending_turn_per_roundtable",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.roundtable_agent}@{self.round_number}:{self.status}"
+
+
 class Message(models.Model):
     """One structured agent utterance (GLOSSARY: 结构化发言)."""
 
@@ -138,6 +232,11 @@ class Message(models.Model):
         QUESTION = "question", "提出问题"
         PASS = "pass", "选择沉默"
         SUMMARY = "summary", "总结"
+        USER_MESSAGE = "user_message", "用户消息"
+
+    class AuthorType(models.TextChoices):
+        AGENT = "agent", "Agent"
+        USER = "user", "用户"
 
     class Stance(models.TextChoices):
         SUPPORT = "support", "支持"
@@ -147,15 +246,42 @@ class Message(models.Model):
 
     id = models.UUIDField(primary_key=True, editable=False)
     roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="messages")
-    roundtable_agent = models.ForeignKey(
-        RoundtableAgent, on_delete=models.PROTECT, related_name="messages"
+    author_type = models.CharField(
+        max_length=16, choices=AuthorType.choices, default=AuthorType.AGENT
     )
-    message_type = models.CharField(max_length=16, choices=Type.choices)
-    claim = models.CharField(max_length=80)
+    roundtable_agent = models.ForeignKey(
+        RoundtableAgent,
+        on_delete=models.PROTECT,
+        related_name="messages",
+        null=True,
+        blank=True,
+    )
+    turn = models.ForeignKey(
+        Turn, on_delete=models.PROTECT, related_name="messages", null=True, blank=True
+    )
+    round_number = models.PositiveSmallIntegerField(default=0)
+    message_type = models.CharField(max_length=16, choices=Type.choices, blank=True, default="")
+    claim = models.CharField(max_length=80, blank=True, default="")
     body = models.TextField(blank=True, default="")
     stance = models.CharField(max_length=16, choices=Stance.choices, blank=True, default="")
     references = models.ManyToManyField("self", symmetrical=False, related_name="referenced_by")
-    confidence = models.FloatField(default=0.6)
+    challenge_target = models.ForeignKey(
+        RoundtableAgent,
+        on_delete=models.PROTECT,
+        related_name="challenged_by_messages",
+        null=True,
+        blank=True,
+    )
+    confidence = models.FloatField(default=0.6, null=True, blank=True)
+    mentioned_agent_ids = models.JSONField(default=list, blank=True)
+    is_key_point = models.BooleanField(default=False)
+    supersedes = models.OneToOneField(
+        "self",
+        on_delete=models.PROTECT,
+        related_name="superseded_by",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -164,6 +290,113 @@ class Message(models.Model):
 
     def __str__(self) -> str:
         return f"{self.message_type}: {self.claim[:20]}"
+
+    @property
+    def superseded_by_message_id(self) -> uuid.UUID | None:
+        try:
+            return self.superseded_by.id
+        except Message.DoesNotExist:
+            return None
+
+
+class MessageReport(models.Model):
+    """A user-submitted concern about one AI message.
+
+    Reports are not moderation verdicts. The MVP has no server-side model audit,
+    so every report stays in the ``submitted`` state until a human handles it.
+    """
+
+    class Reason(models.TextChoices):
+        HARASSMENT = "harassment", "骚扰或攻击"
+        HATE = "hate", "仇恨内容"
+        DANGEROUS = "dangerous", "危险内容"
+        SEXUAL = "sexual", "不适宜内容"
+        IMPERSONATION = "impersonation", "冒充公众人物"
+        OTHER = "other", "其他问题"
+
+    class State(models.TextChoices):
+        SUBMITTED = "submitted", "已提交"
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="reports")
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="reports")
+    guest_session = models.ForeignKey(
+        GuestSession, on_delete=models.CASCADE, related_name="message_reports"
+    )
+    reason = models.CharField(max_length=24, choices=Reason.choices)
+    details = models.CharField(max_length=500, blank=True, default="")
+    state = models.CharField(max_length=16, choices=State.choices, default=State.SUBMITTED)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "message_report"
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["guest_session", "message"],
+                name="unique_report_per_session_message",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.message_id}:{self.reason}"
+
+
+class UsageRecord(models.Model):
+    """Per-turn observability without storing prompts, responses, or secrets."""
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.ForeignKey(Roundtable, on_delete=models.CASCADE, related_name="usages")
+    turn = models.OneToOneField(Turn, on_delete=models.CASCADE, related_name="usage")
+    roundtable_agent = models.ForeignKey(
+        RoundtableAgent, on_delete=models.PROTECT, related_name="usages"
+    )
+    provider_kind = models.CharField(max_length=16, blank=True, default="")
+    provider_model = models.CharField(max_length=120, blank=True, default="")
+    input_tokens = models.PositiveIntegerField(null=True, blank=True)
+    output_tokens = models.PositiveIntegerField(null=True, blank=True)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    failure_code = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "usage_record"
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["roundtable", "created_at"]),
+            models.Index(fields=["roundtable_agent", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.roundtable_agent}@{iso8601_millis(self.created_at)}"
+
+
+class RoundSummary(models.Model):
+    """Structured final result; deliberately separate from ordinary messages."""
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    roundtable = models.OneToOneField(
+        Roundtable,
+        on_delete=models.CASCADE,
+        related_name="summary",
+    )
+    consensus = models.JSONField(default=list)
+    dissent = models.JSONField(default=list)
+    recommendations = models.JSONField(default=list)
+    unresolved = models.JSONField(default=list)
+    degraded = models.BooleanField(default=False)
+    version = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "round_summary"
+
+    def __str__(self) -> str:
+        return f"summary:{self.roundtable_id}:v{self.version}"
 
 
 class RoomEvent(models.Model):

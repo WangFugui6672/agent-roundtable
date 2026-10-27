@@ -3,30 +3,39 @@ import Foundation
 /// Structured utterance assembled on the client and validated by the backend
 /// (PRD 7.7). The API key is never part of this payload.
 public struct MessageSubmission: Codable, Equatable, Sendable {
+    public let turnId: UUID
     public let roundtableAgentId: UUID
     public let messageType: MessageType
     public let claim: String
     public let body: String
     public let stance: Stance?
     public let references: [UUID]
+    public let challengeTargetAgentId: UUID?
     public let confidence: Double
+    public var usage: ProviderUsageReport?
 
     public init(
+        turnId: UUID,
         roundtableAgentId: UUID,
         messageType: MessageType,
         claim: String,
         body: String,
         stance: Stance?,
         references: [UUID],
-        confidence: Double
+        challengeTargetAgentId: UUID? = nil,
+        confidence: Double,
+        usage: ProviderUsageReport? = nil
     ) {
+        self.turnId = turnId
         self.roundtableAgentId = roundtableAgentId
         self.messageType = messageType
         self.claim = claim
         self.body = body
         self.stance = stance
         self.references = references
+        self.challengeTargetAgentId = challengeTargetAgentId
         self.confidence = confidence
+        self.usage = usage
     }
 }
 
@@ -43,10 +52,19 @@ public enum MessageComposer {
         public static let defaultConfidence = 0.6
     }
 
-    public static func compose(participant: Participant, text: String) -> MessageSubmission {
+    public static func isPass(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "PASS"
+    }
+
+    public static func compose(
+        participant: Participant,
+        text: String,
+        turn: ScheduledTurn
+    ) -> MessageSubmission {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let (messageType, stance) = mapping(for: participant.agent.key)
         return MessageSubmission(
+            turnId: turn.turnId,
             roundtableAgentId: participant.id,
             messageType: messageType,
             claim: claim(from: trimmed),

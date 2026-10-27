@@ -15,8 +15,17 @@ ROOM_JOINED = "room.joined"
 ROUND_STARTED = "round.started"
 AGENT_THINKING = "agent.thinking"
 AGENT_TYPING = "agent.typing"
+AGENT_PASSED = "agent.passed"
+AGENT_FAILED = "agent.failed"
 MESSAGE_COMPLETED = "message.completed"
 ROUND_COMPLETED = "round.completed"
+SUMMARY_STARTED = "summary.started"
+SUMMARY_COMPLETED = "summary.completed"
+ROOM_BUDGET_EXHAUSTED = "budget.exhausted"
+ROOM_PAUSE_PENDING = "room.pause_pending"
+ROOM_PAUSED = "room.paused"
+ROOM_RESUMED = "room.resumed"
+ROOM_ENDED = "room.ended"
 
 #: ``room.joined`` is an ephemeral snapshot, not a log entry, so it must never
 #: move the client's resume cursor.
@@ -27,9 +36,30 @@ CLAIM_MAX_CHARS = 80
 DEFAULT_CONFIDENCE = 0.6
 MAX_REFERENCES = 3
 BODY_HARD_MAX_CHARS = 2000
+SUMMARY_TEXT_MAX_CHARS = 400
+SUMMARY_MAX_ITEMS_PER_SECTION = 8
+SUMMARY_MAX_REFERENCES_PER_ITEM = 3
 
-#: Client -> server command that plays one scripted mock round.
-#: TODO(#5): the turn scheduler replaces this bridge; clients stop sending it.
+FAILURE_CODES = frozenset(
+    {
+        "provider_unauthorized",
+        "provider_insufficient_balance",
+        "provider_model_not_found",
+        "provider_rate_limited",
+        "provider_timeout",
+        "provider_network",
+        "provider_empty_reply",
+        "provider_invalid_response",
+        "provider_server_error",
+        "provider_error",
+        "provider_not_configured",
+        "content_policy_blocked",
+        "client_request_failed",
+        "scheduler_invalid_agent",
+    }
+)
+
+#: Client -> server command that plays one scripted mock round for demos and tests.
 MOCK_RUN = "mock.run"
 
 
