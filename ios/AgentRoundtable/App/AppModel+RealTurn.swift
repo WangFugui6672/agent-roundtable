@@ -233,7 +233,7 @@ extension AppModel {
         let collector = ProviderTextCollector()
 
         do {
-            let text = try await collectFirstRoundText(
+            let text = try await consumeProviderStream(
                 participantID: participant.id,
                 stream: ProviderStreamContext(
                     configuration: configuration,
@@ -241,7 +241,8 @@ extension AppModel {
                     prompt: prompt,
                     collector: collector,
                     metrics: metrics
-                )
+                ),
+                typingText: { $0 }
             )
 
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -292,9 +293,10 @@ extension AppModel {
         }
     }
 
-    private func collectFirstRoundText(
+    func consumeProviderStream(
         participantID: UUID,
-        stream: ProviderStreamContext
+        stream: ProviderStreamContext,
+        typingText: (String) -> String
     ) async throws -> String {
         turnState = .thinking(agentID: participantID)
         for try await event in chatClient.streamEvents(
@@ -305,7 +307,10 @@ extension AppModel {
             stream.metrics.consume(event)
             if case let .delta(delta) = event {
                 stream.collector.text += delta
-                turnState = .typing(agentID: participantID, text: stream.collector.text)
+                turnState = .typing(
+                    agentID: participantID,
+                    text: typingText(stream.collector.text)
+                )
             }
         }
         return stream.collector.text

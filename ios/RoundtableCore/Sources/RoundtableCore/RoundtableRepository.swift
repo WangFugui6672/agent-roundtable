@@ -6,16 +6,28 @@ public protocol RoundtableRoomStore {
     func save(_ state: StoredRoomState) throws
     func load(roomID: UUID) throws -> StoredRoomState?
     func loadMostRecent() throws -> StoredRoomState?
+    func loadAll() throws -> [StoredRoomState]
+    func markDeleted(roomID: UUID) throws
     func delete(roomID: UUID) throws
+}
+
+public extension RoundtableRoomStore {
+    func loadAll() throws -> [StoredRoomState] {
+        try loadMostRecent().map { [$0] } ?? []
+    }
+
+    func markDeleted(roomID: UUID) throws {}
 }
 
 @MainActor
 public final class InMemoryRoomStore: RoundtableRoomStore {
     private var rooms: [UUID: StoredRoomState] = [:]
+    private var deletedRoomIDs: Set<UUID> = []
 
     public init() {}
 
     public func save(_ state: StoredRoomState) throws {
+        guard !deletedRoomIDs.contains(state.snapshot.id) else { return }
         rooms[state.snapshot.id] = state
     }
 
@@ -27,7 +39,17 @@ public final class InMemoryRoomStore: RoundtableRoomStore {
         rooms.values.max { $0.savedAt < $1.savedAt }
     }
 
+    public func loadAll() throws -> [StoredRoomState] {
+        rooms.values.filter { !deletedRoomIDs.contains($0.snapshot.id) }
+            .sorted { $0.savedAt > $1.savedAt }
+    }
+
+    public func markDeleted(roomID: UUID) throws {
+        deletedRoomIDs.insert(roomID)
+    }
+
     public func delete(roomID: UUID) throws {
+        try markDeleted(roomID: roomID)
         rooms[roomID] = nil
     }
 }
@@ -40,7 +62,7 @@ public final class RoundtableRepository {
     public var connectionStateHandler: ((RoundtableConnectionState) -> Void)?
 
     private var api: APIClient
-    private let store: any RoundtableRoomStore
+    let store: any RoundtableRoomStore
     private let socketFactory: any RoundtableSocketFactory
     private let reconnectPolicy: ReconnectPolicy
     private let reconnectSleep: RoundtableStream.Sleep
@@ -81,6 +103,21 @@ public final class RoundtableRepository {
 
     public func fetchAgentProfiles() async throws -> [AgentProfile] {
         try await api.fetchAgentProfiles()
+    }
+
+    public func fetchHistory() async throws -> [RoundtableSnapshot] {
+        try await api.fetchRoundtables()
+    }
+
+    public func rotateGuestSession() async throws -> GuestSession {
+        let session = try await api.rotateGuestSession()
+        api = api.withGuestSession(session.id)
+        return session
+    }
+
+    public func deleteGuestSession() async throws {
+        try await api.deleteGuestSession()
+        api = api.withGuestSession(nil)
     }
 
     public func createRoundtable(
@@ -141,6 +178,31 @@ public final class RoundtableRepository {
             roundtableID: roundtableID,
             submission: submission
         )
+    }
+
+    public func regenerateMessage(
+        roundtableID: UUID,
+        messageID: UUID
+    ) async throws -> RegenerationResponse {
+        try await api.regenerateMessage(
+            roundtableID: roundtableID,
+            messageID: messageID
+        )
+    }
+
+    public func setKeyPoint(
+        roundtableID: UUID,
+        messageID: UUID,
+        isKeyPoint: Bool
+    ) async throws {
+        let updated = try await api.setKeyPoint(
+            roundtableID: roundtableID,
+            messageID: messageID,
+            isKeyPoint: isKeyPoint
+        )
+        guard room?.snapshot?.id == roundtableID else { return }
+        room?.setKeyPoint(updated.id, isKeyPoint: updated.isKeyPoint)
+        try persist()
     }
 
     public func submitSummary(
@@ -211,6 +273,18 @@ public final class RoundtableRepository {
         return true
     }
 
+    public func restore(roomID: UUID) throws -> Bool {
+        guard let state = try store.load(roomID: roomID) else { return false }
+        let room = RoundtableRoomModel()
+        room.restore(state)
+        self.room = room
+        return true
+    }
+
+    public func loadCachedRooms() throws -> [StoredRoomState] {
+        try store.loadAll()
+    }
+
     public func present(_ snapshot: RoundtableSnapshot, cursor: Int? = nil) throws {
         let room = RoundtableRoomModel()
         room.seed(snapshot, cursor: cursor)
@@ -256,44 +330,6 @@ public final class RoundtableRepository {
         try persist()
     }
 
-    public func markVisibleMessage(_ messageID: UUID?) throws {
-        guard let room else { return }
-        room.setLastVisibleMessage(messageID)
-        try persist()
-    }
-
-    public func flagMessage(_ messageID: UUID) throws {
-        guard let room else { return }
-        room.flagMessage(messageID)
-        try persist()
-    }
-
-    public func hideMessage(_ messageID: UUID) throws {
-        guard let room else { return }
-        room.hideMessage(messageID)
-        try persist()
-    }
-
-    public func showMessage(_ messageID: UUID) throws {
-        guard let room else { return }
-        room.showMessage(messageID)
-        try persist()
-    }
-
-    public func flagSummary(_ summaryID: UUID) throws {
-        guard let room, room.summary?.id == summaryID else { return }
-        room.flagSummary(summaryID)
-        try persist()
-    }
-
-    public func save() throws {
-        try persist()
-    }
-
-    public func load(roomID: UUID) throws -> StoredRoomState? {
-        try store.load(roomID: roomID)
-    }
-
     public func delete(roomID: UUID) throws {
         try store.delete(roomID: roomID)
         if room?.snapshot?.id == roomID {
@@ -304,14 +340,26 @@ public final class RoundtableRepository {
     public func deleteRoundtable(roomID: UUID) async throws {
         do {
             try await api.deleteRoundtable(id: roomID)
+        } catch let error as APIError where error.statusCode == 404 {
+            // The server already has no data; local cleanup must still finish.
         } catch {
             throw RoundtableDeletionError.server(error)
         }
         do {
+            try store.markDeleted(roomID: roomID)
             try store.delete(roomID: roomID)
         } catch {
             throw RoundtableDeletionError.local(error)
         }
+        if room?.snapshot?.id == roomID {
+            disconnect(reason: nil)
+            room = nil
+        }
+    }
+
+    public func deleteLocalRoom(roomID: UUID) throws {
+        try store.markDeleted(roomID: roomID)
+        try store.delete(roomID: roomID)
         if room?.snapshot?.id == roomID {
             disconnect(reason: nil)
             room = nil
@@ -400,7 +448,7 @@ public final class RoundtableRepository {
         room = nil
     }
 
-    private func persist() throws {
+    func persist() throws {
         guard let room else { return }
         try store.save(room.storedState(savedAt: Date()))
     }

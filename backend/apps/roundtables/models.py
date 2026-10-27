@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import uuid
+
 from django.db import models
 from django.utils import timezone
+
+from apps.roundtables.protocol import iso8601_millis
 
 
 class GuestSession(models.Model):
@@ -187,6 +191,13 @@ class Turn(models.Model):
     failure_partial = models.TextField(blank=True, default="")
     retryable = models.BooleanField(default=False)
     deadline_at = models.DateTimeField(null=True, blank=True)
+    replaces_message = models.OneToOneField(
+        "Message",
+        on_delete=models.PROTECT,
+        related_name="regeneration_turn",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -196,6 +207,7 @@ class Turn(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["roundtable_agent", "round_number"],
+                condition=models.Q(replaces_message__isnull=True),
                 name="unique_turn_per_agent_round",
             ),
             models.UniqueConstraint(
@@ -262,6 +274,14 @@ class Message(models.Model):
     )
     confidence = models.FloatField(default=0.6, null=True, blank=True)
     mentioned_agent_ids = models.JSONField(default=list, blank=True)
+    is_key_point = models.BooleanField(default=False)
+    supersedes = models.OneToOneField(
+        "self",
+        on_delete=models.PROTECT,
+        related_name="superseded_by",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -270,6 +290,13 @@ class Message(models.Model):
 
     def __str__(self) -> str:
         return f"{self.message_type}: {self.claim[:20]}"
+
+    @property
+    def superseded_by_message_id(self) -> uuid.UUID | None:
+        try:
+            return self.superseded_by.id
+        except Message.DoesNotExist:
+            return None
 
 
 class MessageReport(models.Model):
@@ -344,7 +371,7 @@ class UsageRecord(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"{self.roundtable_agent}@{self.created_at.isoformat()}"
+        return f"{self.roundtable_agent}@{iso8601_millis(self.created_at)}"
 
 
 class RoundSummary(models.Model):

@@ -12,6 +12,7 @@ final class UserControlUITests: XCTestCase {
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let topic = element(in: app, "create.topic")
         XCTAssertTrue(topic.waitForExistence(timeout: 20), app.debugDescription)

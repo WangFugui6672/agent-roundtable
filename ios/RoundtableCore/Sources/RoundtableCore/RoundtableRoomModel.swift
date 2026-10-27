@@ -86,47 +86,6 @@ public final class RoundtableRoomModel {
         bufferedEvents = [:]
     }
 
-    public func setLastVisibleMessage(_ messageID: UUID?) {
-        guard let messageID else {
-            lastVisibleMessageID = nil
-            return
-        }
-        guard seenMessageIds.contains(messageID) else { return }
-        lastVisibleMessageID = messageID
-    }
-
-    public func flagMessage(_ messageID: UUID) {
-        guard seenMessageIds.contains(messageID), !flaggedMessageIDs.contains(messageID) else {
-            return
-        }
-        flaggedMessageIDs.append(messageID)
-    }
-
-    public func hideMessage(_ messageID: UUID) {
-        guard seenMessageIds.contains(messageID), !hiddenMessageIDs.contains(messageID) else {
-            return
-        }
-        hiddenMessageIDs.append(messageID)
-    }
-
-    public func showMessage(_ messageID: UUID) {
-        hiddenMessageIDs.removeAll { $0 == messageID }
-    }
-
-    public func markMessageReported(_ messageID: UUID) {
-        guard seenMessageIds.contains(messageID), !reportedMessageIDs.contains(messageID) else {
-            return
-        }
-        reportedMessageIDs.append(messageID)
-    }
-
-    public func flagSummary(_ summaryID: UUID) {
-        guard summary?.id == summaryID, !flaggedSummaryIDs.contains(summaryID) else {
-            return
-        }
-        flaggedSummaryIDs.append(summaryID)
-    }
-
     public func storedState(savedAt: Date) -> StoredRoomState {
         guard let snapshot else {
             preconditionFailure("A room must be seeded before it can be stored.")
@@ -354,6 +313,10 @@ public final class RoundtableRoomModel {
     }
 
     private func appendMessage(_ message: Message) {
+        if let supersededID = message.supersedesMessageId,
+           let index = messages.firstIndex(where: { $0.id == supersededID }) {
+            messages[index] = messages[index].superseded(by: message.id)
+        }
         guard seenMessageIds.insert(message.id).inserted else { return }
         messages.append(message)
     }
@@ -401,5 +364,58 @@ public final class RoundtableRoomModel {
             agentKey: participant.agent.key,
             agentName: participant.agent.name
         )
+    }
+}
+
+extension RoundtableRoomModel {
+    public func setLastVisibleMessage(_ messageID: UUID?) {
+        guard let messageID else {
+            lastVisibleMessageID = nil
+            return
+        }
+        guard seenMessageIds.contains(messageID) else { return }
+        lastVisibleMessageID = messageID
+    }
+
+    public func flagMessage(_ messageID: UUID) {
+        guard seenMessageIds.contains(messageID), !flaggedMessageIDs.contains(messageID) else {
+            return
+        }
+        flaggedMessageIDs.append(messageID)
+    }
+
+    public func setKeyPoint(_ messageID: UUID, isKeyPoint: Bool) {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }),
+              messages[index].author.type == .agent,
+              messages[index].isKeyPoint != isKeyPoint
+        else {
+            return
+        }
+        messages[index] = messages[index].settingKeyPoint(isKeyPoint)
+    }
+
+    public func hideMessage(_ messageID: UUID) {
+        guard seenMessageIds.contains(messageID), !hiddenMessageIDs.contains(messageID) else {
+            return
+        }
+        hiddenMessageIDs.append(messageID)
+    }
+
+    public func showMessage(_ messageID: UUID) {
+        hiddenMessageIDs.removeAll { $0 == messageID }
+    }
+
+    public func markMessageReported(_ messageID: UUID) {
+        guard seenMessageIds.contains(messageID), !reportedMessageIDs.contains(messageID) else {
+            return
+        }
+        reportedMessageIDs.append(messageID)
+    }
+
+    public func flagSummary(_ summaryID: UUID) {
+        guard summary?.id == summaryID, !flaggedSummaryIDs.contains(summaryID) else {
+            return
+        }
+        flaggedSummaryIDs.append(summaryID)
     }
 }

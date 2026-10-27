@@ -263,6 +263,21 @@ struct MessageRow: View {
                     .foregroundStyle(.secondary)
                 if message.author.type == .agent {
                     Menu {
+                        if message.supersededByMessageId == nil {
+                            Button(
+                                message.isKeyPoint ? "取消关键观点" : "标记关键观点"
+                            ) {
+                                Task { await model.toggleKeyPoint(message.id) }
+                            }
+                            if model.room?.messages.last(where: {
+                                $0.author.type == .agent
+                            })?.id == message.id {
+                                Button("重新生成这条回复") {
+                                    Task { await model.regenerateMessage(message.id) }
+                                }
+                            }
+                            Divider()
+                        }
                         Menu("举报") {
                             ForEach(MessageReportReason.allCases, id: \.self) { reason in
                                 Button(reason.displayName) {
@@ -301,6 +316,24 @@ struct MessageRow: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.orange)
+            }
+
+            if message.isKeyPoint {
+                Label("关键观点", systemImage: "star.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("room.message.key-point")
+            }
+
+            if message.supersededByMessageId != nil {
+                Label("旧版本，仍供引用与历史恢复", systemImage: "clock.arrow.circlepath")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("room.message.superseded")
+            } else if message.supersedesMessageId != nil {
+                Label("重新生成的版本", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             if let claim = message.claim, !claim.isEmpty {

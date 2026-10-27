@@ -55,6 +55,26 @@ final class SwiftDataRoomStoreTests: XCTestCase {
         XCTAssertNil(try afterDelete.loadMostRecent())
     }
 
+    func testDeletionTombstoneSurvivesReopenAndHidesAnUnremovedPayload() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("rooms.store")
+        let state = try storedState()
+
+        do {
+            let store = try SwiftDataRoomStore(storeURL: storeURL)
+            try store.save(state)
+            try store.markDeleted(roomID: state.snapshot.id)
+        }
+
+        let reopened = try SwiftDataRoomStore(storeURL: storeURL)
+        XCTAssertNil(try reopened.load(roomID: state.snapshot.id))
+        XCTAssertNil(try reopened.loadMostRecent())
+        XCTAssertTrue(try reopened.loadAll().isEmpty)
+    }
+
     private func storedState() throws -> StoredRoomState {
         let joined = try EventEnvelope.decode(
             from: Fixtures.envelope(

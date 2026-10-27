@@ -55,15 +55,16 @@ extension AppModel {
             ]
         let collector = ProviderTextCollector()
         do {
-            let text = try await collectSecondRoundText(
-                context: context,
+            let text = try await consumeProviderStream(
+                participantID: context.participant.id,
                 stream: ProviderStreamContext(
                     configuration: context.configuration,
                     apiKey: context.apiKey,
                     prompt: prompt,
                     collector: collector,
                     metrics: metrics
-                )
+                ),
+                typingText: { _ in "正在组织引用与立场…" }
             )
 
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -181,25 +182,4 @@ extension AppModel {
         return true
     }
 
-    private func collectSecondRoundText(
-        context: SecondRoundContext,
-        stream: ProviderStreamContext
-    ) async throws -> String {
-        turnState = .thinking(agentID: context.participant.id)
-        for try await event in chatClient.streamEvents(
-            configuration: stream.configuration,
-            apiKey: stream.apiKey,
-            messages: stream.prompt
-        ) {
-            stream.metrics.consume(event)
-            if case let .delta(delta) = event {
-                stream.collector.text += delta
-                turnState = .typing(
-                    agentID: context.participant.id,
-                    text: "正在组织引用与立场…"
-                )
-            }
-        }
-        return stream.collector.text
-    }
 }

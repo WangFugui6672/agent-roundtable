@@ -75,8 +75,25 @@ public struct APIClient: Sendable {
         try await send(makeRequest(path: "api/v1/guest-sessions", method: "POST"))
     }
 
+    public func rotateGuestSession() async throws -> GuestSession {
+        try await send(makeRequest(path: "api/v1/guest-sessions/rotate", method: "POST"))
+    }
+
+    public func deleteGuestSession() async throws {
+        let response = try await transport.send(
+            makeRequest(path: "api/v1/guest-sessions/current", method: "DELETE")
+        )
+        guard (200..<300).contains(response.statusCode) else {
+            throw error(from: response)
+        }
+    }
+
     public func fetchAgentProfiles() async throws -> [AgentProfile] {
         try await send(makeRequest(path: "api/v1/agent-profiles", method: "GET"))
+    }
+
+    public func fetchRoundtables() async throws -> [RoundtableSnapshot] {
+        try await send(makeRequest(path: "api/v1/roundtables", method: "GET"))
     }
 
     public func createRoundtable(
@@ -126,6 +143,40 @@ public struct APIClient: Sendable {
             makeRequest(
                 path: "api/v1/roundtables/\(roundtableID.uuidString.lowercased())/messages",
                 method: "POST",
+                body: body
+            )
+        )
+    }
+
+    public func regenerateMessage(
+        roundtableID: UUID,
+        messageID: UUID
+    ) async throws -> RegenerationResponse {
+        try await send(
+            makeRequest(
+                path:
+                    "api/v1/roundtables/\(roundtableID.uuidString.lowercased())"
+                    + "/messages/\(messageID.uuidString.lowercased())/regenerate",
+                method: "POST"
+            )
+        )
+    }
+
+    public func setKeyPoint(
+        roundtableID: UUID,
+        messageID: UUID,
+        isKeyPoint: Bool
+    ) async throws -> Message {
+        struct Body: Encodable {
+            let isKeyPoint: Bool
+        }
+        let body = try JSONEncoder.roundtable.encode(Body(isKeyPoint: isKeyPoint))
+        return try await send(
+            makeRequest(
+                path:
+                    "api/v1/roundtables/\(roundtableID.uuidString.lowercased())"
+                    + "/messages/\(messageID.uuidString.lowercased())/key-point",
+                method: "PATCH",
                 body: body
             )
         )
