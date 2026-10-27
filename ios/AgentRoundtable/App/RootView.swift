@@ -31,10 +31,12 @@ struct RootView: View {
                 .buttonStyle(.borderedProminent)
             }
         case .ready:
-            if let room = model.room {
+            if model.isRoomPresented, let room = model.room {
                 RoundtableView(room: room)
-            } else {
+            } else if model.isCreatingRoundtable {
                 CreateRoundtableView()
+            } else {
+                HomeView()
             }
         }
     }

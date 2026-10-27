@@ -10,11 +10,18 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.roundtables.annotations import set_key_point
 from apps.roundtables.budget import (
     ACTIVE_STATUSES,
     MAX_ACTIVE_ROUNDTABLES,
     MAX_MOCK_ROUNDTABLES_PER_DAY,
     utc_day_bounds,
+)
+from apps.roundtables.commands import TurnFailureCommand
+from apps.roundtables.history import (
+    delete_guest_session,
+    list_roundtables,
+    rotate_guest_session,
 )
 from apps.roundtables.models import (
     AgentProfile,
@@ -24,18 +31,22 @@ from apps.roundtables.models import (
     RoundtableAgent,
 )
 from apps.roundtables.protocol import iso8601_millis
+from apps.roundtables.regeneration import request_regeneration
 from apps.roundtables.serializers import (
     AgentProfileSerializer,
     FollowUpCreateSerializer,
+    KeyPointUpdateSerializer,
     MessageCreateSerializer,
     MessageReportCreateSerializer,
     MessageReportSerializer,
+    MessageSerializer,
     RoundSummaryCreateSerializer,
     RoundSummarySerializer,
     RoundtableCreateSerializer,
     RoundtableSerializer,
     TurnFailSerializer,
     TurnPassSerializer,
+    TurnSerializer,
     UserMessageCreateSerializer,
 )
 from apps.roundtables.services import (
@@ -91,6 +102,25 @@ class GuestSessionCreateView(APIView):
         )
 
 
+class GuestSessionRotateView(APIView):
+    def post(self, request: Request) -> Response:
+        session = resolve_guest_session(request)
+        replacement = rotate_guest_session(session)
+        return Response(
+            {
+                "id": str(replacement.id),
+                "created_at": iso8601_millis(replacement.created_at),
+            }
+        )
+
+
+class GuestSessionDeleteView(APIView):
+    def delete(self, request: Request) -> Response:
+        session = resolve_guest_session(request)
+        delete_guest_session(session)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class AgentProfileListView(APIView):
     def get(self, request: Request) -> Response:
         profiles = AgentProfile.objects.all()
@@ -98,6 +128,11 @@ class AgentProfileListView(APIView):
 
 
 class RoundtableListCreateView(APIView):
+    def get(self, request: Request) -> Response:
+        session = resolve_guest_session(request)
+        rooms = list_roundtables(session)
+        return Response(RoundtableSerializer(rooms, many=True).data)
+
     def post(self, request: Request) -> Response:
         session = resolve_guest_session(request)
         body = RoundtableCreateSerializer(data=request.data)
@@ -306,6 +341,58 @@ class MessageReportCreateView(APIView):
         )
 
 
+class MessageKeyPointUpdateView(APIView):
+    def patch(
+        self,
+        request: Request,
+        roundtable_id: uuid.UUID,
+        message_id: uuid.UUID,
+    ) -> Response:
+        session = resolve_guest_session(request)
+        room = Roundtable.objects.filter(
+            id=roundtable_id,
+            guest_session=session,
+        ).first()
+        if room is None:
+            raise RoundtableNotFound()
+        body = KeyPointUpdateSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        message = set_key_point(
+            room,
+            str(message_id),
+            body.validated_data["is_key_point"],
+        )
+        return Response(MessageSerializer(message).data)
+
+
+class MessageRegenerateView(APIView):
+    def post(
+        self,
+        request: Request,
+        roundtable_id: uuid.UUID,
+        message_id: uuid.UUID,
+    ) -> Response:
+        session = resolve_guest_session(request)
+        result = request_regeneration(
+            str(roundtable_id),
+            str(session.id),
+            str(message_id),
+        )
+        if result is None:
+            raise RoundtableNotFound()
+        return Response(
+            {
+                "round": result.round,
+                "turn": TurnSerializer(result.turn).data if result.turn else None,
+                "replacement_message_id": (
+                    str(result.replacement_message_id) if result.replacement_message_id else None
+                ),
+                "events": result.events,
+            },
+            status=status.HTTP_201_CREATED if result.created else status.HTTP_200_OK,
+        )
+
+
 class RoundtablePauseView(APIView):
     def post(self, request: Request, roundtable_id: uuid.UUID) -> Response:
         session = resolve_guest_session(request)
@@ -389,13 +476,7 @@ class RoundtableTurnFailView(APIView):
         envelope = fail_turn(
             str(roundtable_id),
             str(session.id),
-            str(body.validated_data["turn_id"]),
-            str(body.validated_data["roundtable_agent_id"]),
-            body.validated_data["failure_code"],
-            body.validated_data["message"],
-            body.validated_data["retryable"],
-            body.validated_data["partial"],
-            body.validated_data.get("usage"),
+            TurnFailureCommand.from_validated(body.validated_data),
         )
         if envelope is None:
             raise RoundtableNotFound()

@@ -14,6 +14,7 @@ final class RecoveryUITests: XCTestCase {
         first.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         first.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         first.launch()
+        first.openCreateIfNeeded()
 
         let topicField = first.descendants(matching: .any)
             .matching(identifier: "create.topic")
@@ -46,6 +47,9 @@ final class RecoveryUITests: XCTestCase {
         let restored = XCUIApplication()
         restored.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
         restored.launch()
+        let historyTopic = restored.staticTexts[topic]
+        XCTAssertTrue(historyTopic.waitForExistence(timeout: 15), restored.debugDescription)
+        historyTopic.tap()
 
         XCTAssertTrue(
             restored.staticTexts.containing(

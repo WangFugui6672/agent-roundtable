@@ -124,8 +124,9 @@ public enum StructuredSummaryParser {
     }
 
     public static func eligibleMessages(from transcript: [Message]) -> [Message] {
-        transcript.filter { message in
+        let eligible = transcript.filter { message in
             guard message.author.type == .agent else { return false }
+            guard message.supersededByMessageId == nil else { return false }
             guard [.proposal, .support, .challenge, .supplement, .question]
                 .contains(message.messageType)
             else {
@@ -135,6 +136,7 @@ public enum StructuredSummaryParser {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
         }
+        return eligible.filter(\.isKeyPoint) + eligible.filter { !$0.isKeyPoint }
     }
 }
 

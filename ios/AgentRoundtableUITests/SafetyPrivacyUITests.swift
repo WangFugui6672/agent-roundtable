@@ -12,6 +12,7 @@ final class SafetyPrivacyUITests: XCTestCase {
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         let topic = element(in: app, "create.topic")
         XCTAssertTrue(topic.waitForExistence(timeout: 20), app.debugDescription)
@@ -57,8 +58,17 @@ final class SafetyPrivacyUITests: XCTestCase {
         app.buttons["room.delete"].tap()
         app.buttons["删除圆桌和本机缓存"].tap()
         XCTAssertTrue(
-            element(in: app, "create.topic").waitForExistence(timeout: 15),
-            "删除后没有回到创建页：\(app.debugDescription)"
+            app.buttons["home.create"].waitForExistence(timeout: 15),
+            "删除后没有回到首页：\(app.debugDescription)"
+        )
+        app.terminate()
+        let restored = XCUIApplication()
+        restored.launchEnvironment["RT_API_BASE_URL"] = "http://localhost:8000"
+        restored.launch()
+        XCTAssertTrue(restored.buttons["home.create"].waitForExistence(timeout: 20))
+        XCTAssertFalse(
+            restored.staticTexts["隐私设置应该如何影响圆桌讨论？"].exists,
+            "服务端已删除的圆桌不能从本地缓存复活"
         )
     }
 
@@ -69,6 +79,7 @@ final class SafetyPrivacyUITests: XCTestCase {
         app.launchEnvironment["RT_RESET_GUEST_SESSION"] = "1"
         app.launchEnvironment["RT_RESET_PERSISTED_ROOM"] = "1"
         app.launch()
+        app.openCreateIfNeeded()
 
         XCTAssertTrue(
             app.buttons["create.provider"].waitForExistence(timeout: 20),
