@@ -41,4 +41,18 @@ extension XCUIApplication {
         )
         start.tap()
     }
+
+    @discardableResult
+    func scrollUntilExists(
+        _ element: XCUIElement,
+        maxSwipes: Int = 10
+    ) -> Bool {
+        for _ in 0 ..< maxSwipes {
+            if element.exists {
+                return true
+            }
+            swipeUp()
+        }
+        return element.exists
+    }
 }

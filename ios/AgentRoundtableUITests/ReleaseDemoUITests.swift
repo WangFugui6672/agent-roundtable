@@ -72,10 +72,9 @@ final class ReleaseDemoUITests: XCTestCase {
         )
         attachScreenshot(named: "04-second-round", app: app)
 
-        XCTAssertTrue(
-            app.staticTexts["summary.degraded"].waitForExistence(timeout: 25),
-            app.debugDescription
-        )
+        let degraded = app.staticTexts["summary.degraded"]
+        app.scrollUntilExists(degraded)
+        XCTAssertTrue(degraded.waitForExistence(timeout: 25), app.debugDescription)
         let cardButton = app.buttons["summary.card.open"]
         scrollToElement(cardButton, in: app)
         XCTAssertTrue(cardButton.waitForExistence(timeout: 5))

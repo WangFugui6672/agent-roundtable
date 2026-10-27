@@ -69,6 +69,7 @@ final class CreateRoundtableUITests: XCTestCase {
 
     private func assertSummaryCardAndRestart(_ app: XCUIApplication) throws {
         let degraded = app.staticTexts["summary.degraded"]
+        app.scrollUntilExists(degraded)
         XCTAssertTrue(
             degraded.waitForExistence(timeout: 25),
             "第二轮后没有自动进入降级总结：\(app.debugDescription)"
