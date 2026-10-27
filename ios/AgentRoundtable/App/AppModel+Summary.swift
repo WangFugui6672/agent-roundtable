@@ -179,7 +179,8 @@ extension AppModel {
                     configuration: configuration,
                     apiKey: apiKey,
                     messages: prompt,
-                    maxTokens: 1_200
+                    maxTokens: 1_200,
+                    conversationID: room.snapshot?.id
                 ) {
                     guard !Task.isCancelled else { throw CancellationError() }
                     text += delta

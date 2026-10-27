@@ -60,6 +60,7 @@ extension AppModel {
                 stream: ProviderStreamContext(
                     configuration: context.configuration,
                     apiKey: context.apiKey,
+                    conversationID: context.roundtableID,
                     prompt: prompt,
                     collector: collector,
                     metrics: metrics

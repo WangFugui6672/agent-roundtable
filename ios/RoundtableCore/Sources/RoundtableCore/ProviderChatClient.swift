@@ -140,7 +140,8 @@ public struct ProviderChatClient: Sendable {
         configuration: ProviderConfiguration,
         apiKey: String,
         messages: [ChatMessage],
-        maxTokens: Int = 400
+        maxTokens: Int = 400,
+        conversationID: UUID? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -149,7 +150,8 @@ public struct ProviderChatClient: Sendable {
                         configuration: configuration,
                         apiKey: apiKey,
                         messages: messages,
-                        maxTokens: maxTokens
+                        maxTokens: maxTokens,
+                        conversationID: conversationID
                     ) {
                         if case let .delta(delta) = event {
                             continuation.yield(delta)
@@ -168,7 +170,8 @@ public struct ProviderChatClient: Sendable {
         configuration: ProviderConfiguration,
         apiKey: String,
         messages: [ChatMessage],
-        maxTokens: Int = 400
+        maxTokens: Int = 400,
+        conversationID: UUID? = nil
     ) -> AsyncThrowingStream<ProviderStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -177,7 +180,8 @@ public struct ProviderChatClient: Sendable {
                         configuration: configuration,
                         apiKey: apiKey,
                         messages: messages,
-                        maxTokens: maxTokens
+                        maxTokens: maxTokens,
+                        conversationID: conversationID
                     )
                     let response = try await streaming.stream(request)
                     guard (200 ..< 300).contains(response.statusCode) else {
@@ -231,7 +235,8 @@ public struct ProviderChatClient: Sendable {
         configuration: ProviderConfiguration,
         apiKey: String,
         messages: [ChatMessage],
-        maxTokens: Int
+        maxTokens: Int,
+        conversationID: UUID? = nil
     ) throws -> URLRequest {
         guard let url = ProviderURL.endpoint(baseURL: configuration.baseURL, path: "chat/completions")
         else {
@@ -243,6 +248,12 @@ public struct ProviderChatClient: Sendable {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        if let conversationID, Self.isOpenCodeGo(url) {
+            request.setValue(
+                conversationID.uuidString,
+                forHTTPHeaderField: "x-opencode-session"
+            )
+        }
 
         let body = ChatRequestBody(
             model: configuration.model,
@@ -254,6 +265,16 @@ public struct ProviderChatClient: Sendable {
         )
         request.httpBody = try JSONEncoder().encode(body)
         return request
+    }
+
+    private static func isOpenCodeGo(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let host = components.host?.lowercased()
+        else {
+            return false
+        }
+        return (host == "opencode.ai" || host.hasSuffix(".opencode.ai"))
+            && components.path.contains("/zen/go/")
     }
 
     private static func collectText(_ lines: AsyncThrowingStream<String, Error>) async -> String {

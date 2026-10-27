@@ -238,6 +238,7 @@ extension AppModel {
                 stream: ProviderStreamContext(
                     configuration: configuration,
                     apiKey: apiKey,
+                    conversationID: failureContext.roundtableID,
                     prompt: prompt,
                     collector: collector,
                     metrics: metrics
@@ -302,7 +303,8 @@ extension AppModel {
         for try await event in chatClient.streamEvents(
             configuration: stream.configuration,
             apiKey: stream.apiKey,
-            messages: stream.prompt
+            messages: stream.prompt,
+            conversationID: stream.conversationID
         ) {
             stream.metrics.consume(event)
             if case let .delta(delta) = event {

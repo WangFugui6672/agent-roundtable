@@ -33,6 +33,7 @@ final class ProviderTextCollector {
 struct ProviderStreamContext {
     let configuration: ProviderConfiguration
     let apiKey: String
+    let conversationID: UUID
     let prompt: [ChatMessage]
     let collector: ProviderTextCollector
     let metrics: ProviderRunMetrics

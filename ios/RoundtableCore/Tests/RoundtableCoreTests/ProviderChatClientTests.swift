@@ -158,6 +158,33 @@ final class ProviderChatClientTests: XCTestCase {
         XCTAssertEqual(messages.last?["role"] as? String, "user")
     }
 
+    func testOpenCodeRequestIncludesConversationSessionHeader() async throws {
+        let transport = StubLineStream(lines: ["data: [DONE]"])
+        let client = ProviderChatClient(streaming: transport)
+        let conversationID = try XCTUnwrap(
+            UUID(uuidString: "D28349F4-A042-4505-8905-B2011BE54FD1")
+        )
+        let openCodeConfiguration = ProviderConfiguration(
+            kind: .custom,
+            baseURL: "https://opencode.ai/zen/go/v1",
+            model: "deepseek-v4.1-flash"
+        )
+
+        for try await _ in client.streamEvents(
+            configuration: openCodeConfiguration,
+            apiKey: "sk-test",
+            messages: [.user("议题：测试")],
+            conversationID: conversationID
+        ) {}
+
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "x-opencode-session"),
+            conversationID.uuidString
+        )
+    }
+
     func testUnauthorizedIsProviderError() async {
         let client = ProviderChatClient(
             streaming: StubLineStream(
