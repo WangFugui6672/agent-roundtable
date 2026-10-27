@@ -64,18 +64,16 @@ final class ReleaseDemoUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["讨论中"].waitForExistence(timeout: 10))
         app.buttons["room.mock"].tap()
 
-        XCTAssertTrue(
-            app.staticTexts.containing(
-                NSPredicate(format: "label CONTAINS %@", "引用 AI · 方案派 的原观点")
-            ).firstMatch.waitForExistence(timeout: 25),
-            app.debugDescription
-        )
+        let quotedClaim = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "引用 AI · 方案派 的原观点")
+        ).firstMatch
+        app.scrollUntilExists(quotedClaim)
+        XCTAssertTrue(quotedClaim.waitForExistence(timeout: 25), app.debugDescription)
         attachScreenshot(named: "04-second-round", app: app)
 
-        XCTAssertTrue(
-            app.staticTexts["summary.degraded"].waitForExistence(timeout: 25),
-            app.debugDescription
-        )
+        let degraded = app.staticTexts["summary.degraded"]
+        app.scrollUntilExists(degraded)
+        XCTAssertTrue(degraded.waitForExistence(timeout: 25), app.debugDescription)
         let cardButton = app.buttons["summary.card.open"]
         scrollToElement(cardButton, in: app)
         XCTAssertTrue(cardButton.waitForExistence(timeout: 5))
