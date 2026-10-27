@@ -64,6 +64,9 @@ struct RoundtableView: View {
         .onAppear {
             model.startSummaryGenerationIfNeeded()
         }
+        .onChange(of: room.status) {
+            model.startSummaryGenerationIfNeeded()
+        }
         .sheet(isPresented: $showingPrivacy) {
             PrivacySafetyView()
         }

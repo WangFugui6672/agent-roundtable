@@ -2,18 +2,87 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: roundtable
-      POSTGRES_USER: roundtable
-      POSTGRES_PASSWORD: roundtable
+      POSTGRES_DB: ${POSTGRES_DB:-roundtable}
+      POSTGRES_USER: ${POSTGRES_USER:-roundtable}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-roundtable}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U roundtable -d roundtable"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-roundtable} -d ${POSTGRES_DB:-roundtable}",
+        ]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-roundtable}:${POSTGRES_PASSWORD:-roundtable}@db:5432/${POSTGRES_DB:-roundtable}
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-compose-key}
+      DJANGO_DEBUG: "0"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      ROOM_EVENT_REPLAY_WINDOW_DAYS: ${ROOM_EVENT_REPLAY_WINDOW_DAYS:-90}
+      ROUNDTABLE_RETENTION_DAYS: ${ROUNDTABLE_RETENTION_DAYS:-90}
+    command:
+      [
+        "sh",
+        "-c",
+        "python manage.py migrate --noinput && exec daphne -b 0.0.0.0 -p 8000 roundtable.asgi:application",
+      ]
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  purge:
+    profiles: ["ops"]
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-roundtable}:${POSTGRES_PASSWORD:-roundtable}@db:5432/${POSTGRES_DB:-roundtable}
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-compose-key}
+      DJANGO_DEBUG: "0"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      ROUNDTABLE_RETENTION_DAYS: ${ROUNDTABLE_RETENTION_DAYS:-90}
+    command: ["python", "manage.py", "purge_roundtables"]
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   pgdata:
+  redisdata:

@@ -9,6 +9,8 @@ dependencies = [
     "channels>=4.2,<5",
     "psycopg[binary]>=3.2,<4",
     "daphne>=4.2,<5",
+    "channels-redis>=4.2,<5",
+    "redis>=5,<8",
 ]
 
 [dependency-groups]

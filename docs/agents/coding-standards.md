@@ -50,11 +50,13 @@
 - 断言可观察行为；只有「密钥不外泄」这类安全性质才允许断言存储内部结构。
 - 测试替身放测试目标内；跨测试目标重复的小替身可以接受，不为此新建共享库。
 - Keychain 相关测试需要模拟器 ad-hoc 签名（`CODE_SIGNING_ALLOWED=NO` 会得到 `errSecMissingEntitlement`）。
-- UI 测试依赖本地后端（`http://localhost:8000`），CI 只编译不执行；新增 UI 测试时用 `-collect-test-diagnostics never` 避免 xcodebuild 在收尾阶段挂起。
+- UI 测试依赖本地后端（`http://localhost:8000`）；新增 UI 测试时必须配置完整 reset 环境，并用 `-collect-test-diagnostics never` 避免 xcodebuild 在收尾阶段挂起。
 
 ## 工具与 CI
 
 - Swift 代码必须通过 `make ios-lint`（SwiftLint `--strict`），配置见 `ios/.swiftlint.yml`。
 - 后端必须通过 `ruff check` 与 `ruff format --check`。
 - `make verify` 是本机提交前的最小验证：后端 lint + 测试 + iOS 编译 + SwiftLint。
+- `make release-check` 覆盖后端全门禁、RoundtableCore、SwiftLint、App 单测、secret scan 与 Compose 冷启动；`make ios-ui-test` 执行完整 UI 回归，需要先启动后端。
+- CI 执行后端、Compose、secret scan、RoundtableCore、App 单测和完整 UI 回归；失败时上传后端日志与 `.xcresult`。
 - 生成物（`ios/AgentRoundtable.xcodeproj`、`ios/AgentRoundtable/Info.plist`、`.build`）不入库。
