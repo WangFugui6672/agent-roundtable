@@ -62,12 +62,19 @@ TEMPLATES: list[dict[str, object]] = []
 
 ASGI_APPLICATION = "roundtable.asgi.application"
 
-# Redis/Celery arrive with the turn scheduler (Issue #5). Until then a single
-# dev process is the only writer, so the in-memory layer is enough and keeps
-# local setup to Postgres only.
-CHANNEL_LAYERS = {
-    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
-}
+REDIS_URL = env("REDIS_URL")
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [REDIS_URL]},
+        },
+    }
+else:
+    # Unit tests and the single-process development server need only Postgres.
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    }
 WSGI_APPLICATION = "roundtable.wsgi.application"
 
 # WebSocket clients can replay persisted events inside this window. Older

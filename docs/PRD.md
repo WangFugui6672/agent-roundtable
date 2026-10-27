@@ -723,7 +723,7 @@ Agent 输出必须经过后端校验：
 
 - Git 仓库、远程地址和 `main` 分支已建立。
 - `gh` CLI 已登录，PRD Epic、标签和里程碑已创建。
-- GitHub Actions 尚未配置。
+- GitHub Actions 已配置后端、Compose、secret scan、RoundtableCore、App 单测和完整 UI 回归。
 
 ### 18.2 分支与 PR
 
