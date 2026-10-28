@@ -78,7 +78,14 @@ class RoomViewModel(
 
             val transcript = current.entries
                 .filterIsInstance<com.agentroundtable.core.room.RoomEntry.MessageEntry>()
-                .map { com.agentroundtable.core.turn.TranscriptLine(it.message.author.name, it.message.body) }
+                .map {
+                    com.agentroundtable.core.turn.TranscriptLine(
+                        authorName = it.message.author.name,
+                        body = it.message.body,
+                        messageId = it.message.id,
+                        authorAgentId = it.message.author.roundtableAgentId,
+                    )
+                }
 
             val result = runner.runOnce(
                 sessionId = sessionId,

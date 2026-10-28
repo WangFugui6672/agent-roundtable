@@ -23,8 +23,17 @@ data class PromptContext(
     val roundNumber: Int,
 )
 
-/** 讨论记录中的一条发言，用于拼进 user prompt。 */
-data class TranscriptLine(val authorName: String, val body: String)
+/**
+ * 讨论记录中的一条发言。
+ *
+ * [messageId] 与 [authorAgentId] 用于第二轮引用校验；用户消息的 [authorAgentId] 为 null。
+ */
+data class TranscriptLine(
+    val authorName: String,
+    val body: String,
+    val messageId: String = "",
+    val authorAgentId: String? = null,
+)
 
 /**
  * 把一位参与者与讨论记录转成两条消息。
@@ -66,6 +75,18 @@ object AgentPrompt {
             return "议题：" + context.topic + "\n\n讨论尚未开始，请给出你的第一个观点。"
         }
         val history = transcript.joinToString("\n") { "${it.authorName}：${it.body}" }
+        if (context.roundNumber >= 2) {
+            val candidates = transcript
+                .filter { it.authorAgentId != null && it.messageId.isNotBlank() }
+                .mapIndexed { index, line ->
+                    "${index + 1}. author=${line.authorName} agent_id=${line.authorAgentId} " +
+                        "message_id=${line.messageId} 主张=${line.body.take(40)}"
+                }
+                .joinToString("\n")
+            return "议题：" + context.topic + "\n\n讨论记录：\n" + history +
+                "\n\n可引用的候选观点：\n" + candidates.ifBlank { "（没有可引用的观点）" } +
+                "\n\n请引用其中一条，并按要求返回 JSON。"
+        }
         return "议题：" + context.topic + "\n\n讨论记录：\n" + history +
             "\n\n请基于以上讨论说出你的观点。"
     }

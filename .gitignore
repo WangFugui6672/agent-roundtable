@@ -55,3 +55,6 @@ android/captures/
 android/.externalNativeBuild/
 android/.cxx/
 *.iml
+
+# Agent worktrees
+.claude/worktrees/

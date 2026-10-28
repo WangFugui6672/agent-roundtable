@@ -51,12 +51,15 @@ class TurnRunner(
                 retryable = false,
             )
 
+        // 轮次以服务端签发 Turn 时给出的为准，界面上的 currentRound 可能还没更新。
+        val turnContext = context.copy(roundNumber = next.round)
+
         val builder = StringBuilder()
         var streamError: String? = null
         chat.stream(
             configuration = configuration,
             apiKey = apiKey,
-            messages = AgentPrompt.messages(context.copy(roundNumber = next.round), transcript),
+            messages = AgentPrompt.messages(turnContext, transcript),
         ).collect { event ->
             when (event) {
                 is ChatStreamEvent.Delta -> {
@@ -87,13 +90,44 @@ class TurnRunner(
                 retryable = true,
             )
         }
-        if (MessageComposer.isPass(text)) {
-            return when (
-                val result = api.passTurn(sessionId, roundtableId, turn.turnId, turn.roundtableAgentId)
-            ) {
-                is ApiResult.Success -> TurnRunResult.Passed
-                is ApiResult.Failure -> TurnRunResult.Failed(result.message, retryable = true)
+        // 第二轮起必须返回结构化 JSON，并引用一条更早的其他参与者观点。
+        if (turnContext.roundNumber >= 2) {
+            when (val parsed = StructuredReplyParser.parse(text, transcript, turn.roundtableAgentId)) {
+                ReplyParseResult.Pass -> return passTurn(sessionId, roundtableId, turn)
+                is ReplyParseResult.Invalid -> return failTurn(
+                    sessionId, roundtableId, turn,
+                    code = "provider_invalid_response",
+                    message = parsed.reason,
+                    retryable = true,
+                )
+                is ReplyParseResult.Valid -> {
+                    val reply = parsed.reply
+                    val submission = MessageSubmission(
+                        turnId = turn.turnId,
+                        roundtableAgentId = turn.roundtableAgentId,
+                        messageType = reply.messageType,
+                        claim = reply.claim.take(MessageSubmission.CLAIM_LIMIT),
+                        body = reply.body.take(turnContext.maxReplyChars),
+                        stance = reply.stance ?: reply.messageType,
+                        references = listOfNotNull(reply.referenceMessageId),
+                        challengeTargetAgentId = reply.challengeTargetAgentId,
+                        confidence = reply.confidence ?: MessageSubmission.DEFAULT_CONFIDENCE,
+                    )
+                    return when (val result = api.submitMessage(sessionId, roundtableId, submission)) {
+                        is ApiResult.Success -> TurnRunResult.Spoke(text)
+                        is ApiResult.Failure -> failTurn(
+                            sessionId, roundtableId, turn,
+                            code = "submit_failed",
+                            message = result.message,
+                            retryable = true,
+                        )
+                    }
+                }
             }
+        }
+
+        if (MessageComposer.isPass(text)) {
+            return passTurn(sessionId, roundtableId, turn)
         }
 
         val submission = MessageComposer.compose(
@@ -101,7 +135,7 @@ class TurnRunner(
             roundtableAgentId = turn.roundtableAgentId,
             agentKey = turn.agentKey,
             text = text,
-            maxReplyChars = context.maxReplyChars,
+            maxReplyChars = turnContext.maxReplyChars,
         )
         return when (val result = api.submitMessage(sessionId, roundtableId, submission)) {
             is ApiResult.Success -> TurnRunResult.Spoke(text)
@@ -115,6 +149,16 @@ class TurnRunner(
             }
         }
     }
+
+    private suspend fun passTurn(
+        sessionId: String,
+        roundtableId: String,
+        turn: ScheduledTurn,
+    ): TurnRunResult =
+        when (val result = api.passTurn(sessionId, roundtableId, turn.turnId, turn.roundtableAgentId)) {
+            is ApiResult.Success -> TurnRunResult.Passed
+            is ApiResult.Failure -> TurnRunResult.Failed(result.message, retryable = true)
+        }
 
     private suspend fun failTurn(
         sessionId: String,

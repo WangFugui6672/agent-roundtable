@@ -50,22 +50,24 @@ class ProviderChatClient(private val source: StreamSource) {
             body = body,
         )
 
-        var emitted = false
-        source.open(request).collect { raw ->
-            val line = raw.trim()
-            if (line.isEmpty() || !line.startsWith(DATA_PREFIX)) return@collect
-            val payload = line.removePrefix(DATA_PREFIX).trim()
-            if (payload == DONE) {
-                emit(ChatStreamEvent.Completed(null))
-                return@collect
+        try {
+            source.open(request).collect { raw ->
+                val line = raw.trim()
+                if (line.isEmpty() || !line.startsWith(DATA_PREFIX)) return@collect
+                val payload = line.removePrefix(DATA_PREFIX).trim()
+                if (payload == DONE) {
+                    emit(ChatStreamEvent.Completed(null))
+                    return@collect
+                }
+                val text = extractDelta(payload) ?: return@collect
+                if (text.isNotEmpty()) emit(ChatStreamEvent.Delta(text))
             }
-            val text = extractDelta(payload) ?: return@collect
-            if (text.isNotEmpty()) {
-                emitted = true
-                emit(ChatStreamEvent.Delta(text))
-            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // 网络中断、DNS 失败、TLS 错误都在这里收敛为可展示的失败，不让异常冒到 UI 层。
+            emit(ChatStreamEvent.Failed(error.message ?: "网络请求失败。"))
         }
-        if (!emitted) return@flow
     }
 
     private fun extractDelta(payload: String): String? = runCatching {
