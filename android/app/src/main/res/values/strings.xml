@@ -8,6 +8,24 @@
     <string name="home_retry">重试</string>
     <string name="home_loading">正在读取圆桌…</string>
     <string name="home_provider">Provider</string>
+    <string name="home_library">资料库</string>
+
+    <string name="library_title">资料库</string>
+    <string name="library_back">返回</string>
+    <string name="library_import">导入文档</string>
+    <string name="library_import_progress">正在读取、解析并切分文档…</string>
+    <string name="library_local_notice">资料库只保存在本机，不会上传，也不会跨设备同步。</string>
+    <string name="library_formats">支持 PDF、TXT、Markdown。</string>
+    <string name="library_docx_notice">DOCX 暂不支持：解析 .docx 需要额外的 OOXML 组件。请先另存为 PDF、TXT 或 Markdown 再导入。</string>
+    <string name="library_empty_title">资料库还是空的</string>
+    <string name="library_empty_body">导入 PDF、TXT 或 Markdown 文档，讨论时可以从本机资料库检索参考资料。</string>
+    <string name="library_document_meta">%1$s · %2$d 个文档块</string>
+    <string name="library_delete">删除</string>
+    <string name="library_delete_dialog_title">删除这篇文档？</string>
+    <string name="library_delete_dialog_body">《%1$s》及其 %2$d 个文档块将从本机删除，无法恢复。</string>
+    <string name="library_delete_confirm">删除</string>
+    <string name="library_delete_cancel">取消</string>
+    <string name="library_error_dismiss">知道了</string>
 
     <string name="create_title">新建圆桌</string>
     <string name="create_topic_label">议题</string>
