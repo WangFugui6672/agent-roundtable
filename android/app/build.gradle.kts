@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.agentroundtable.app"
     compileSdk = 37
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.agentroundtable.app"
@@ -22,6 +23,21 @@ android {
             "BACKEND_BASE_URL",
             "\"${project.findProperty("backendBaseUrl") ?: "http://10.0.2.2:8000"}\"",
         )
+        externalNativeBuild {
+            cmake {
+                arguments += listOf(
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DANDROID_STL=c++_shared",
+                )
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.31.6"
+        }
     }
 
     buildTypes {
@@ -73,4 +89,19 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+}
+
+/**
+ * llama.cpp 源码不入库。首次构建时由脚本拉取固定版本；已存在时脚本立即返回，
+ * Gradle 也会根据 outputs 跳过任务。
+ */
+val fetchLlamaCpp = tasks.register<Exec>("fetchLlamaCpp") {
+    workingDir = rootProject.projectDir
+    commandLine("bash", "scripts/fetch_llama_cpp.sh")
+    inputs.file(rootProject.file("scripts/fetch_llama_cpp.sh"))
+    outputs.dir(file("src/main/cpp/llama.cpp"))
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(fetchLlamaCpp)
 }

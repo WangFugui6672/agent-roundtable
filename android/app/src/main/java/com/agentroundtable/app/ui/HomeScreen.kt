@@ -46,6 +46,7 @@ fun HomeScreen(
     onCreateClicked: () -> Unit,
     onOpenRoom: (String) -> Unit = {},
     onOpenProvider: () -> Unit = {},
+    onOpenLocal: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -54,6 +55,10 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.home_title)) },
                 actions = {
+                    TextButton(
+                        onClick = onOpenLocal,
+                        modifier = Modifier.testTag("home.local"),
+                    ) { Text(stringResource(R.string.home_local)) }
                     TextButton(
                         onClick = onOpenProvider,
                         modifier = Modifier.testTag("home.provider"),
