@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -20,6 +21,9 @@ import com.agentroundtable.app.ui.HomeScreen
 import com.agentroundtable.app.ui.create.CreateScreen
 import com.agentroundtable.app.ui.create.CreateViewModel
 import com.agentroundtable.app.ui.home.HomeViewModel
+import com.agentroundtable.app.ui.room.RoomScreen
+import com.agentroundtable.app.ui.room.RoomViewModel
+import com.agentroundtable.core.room.RoomController
 import com.agentroundtable.app.ui.theme.AgentRoundtableTheme
 
 class MainActivity : ComponentActivity() {
@@ -35,23 +39,60 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable
-private fun AgentRoundtableApp(container: AppContainer) {
-    var showCreate by rememberSaveable { mutableStateOf(false) }
-
-    if (showCreate) {
-        CreateRoute(
-            container = container,
-            onBack = { showCreate = false },
-            onCreated = { showCreate = false },
-        )
-    } else {
-        HomeRoute(container = container, onCreateClicked = { showCreate = true })
-    }
+private sealed interface AppRoute {
+    data object Home : AppRoute
+    data object Create : AppRoute
+    data class Room(val roundtableId: String) : AppRoute
 }
 
 @Composable
-private fun HomeRoute(container: AppContainer, onCreateClicked: () -> Unit) {
+private fun AgentRoundtableApp(container: AppContainer) {
+    var route by rememberSaveable(stateSaver = RouteSaver) {
+        mutableStateOf<AppRoute>(AppRoute.Home)
+    }
+
+    when (val current = route) {
+        AppRoute.Home -> HomeRoute(
+            container = container,
+            onCreateClicked = { route = AppRoute.Create },
+            onOpenRoom = { route = AppRoute.Room(it) },
+        )
+        AppRoute.Create -> CreateRoute(
+            container = container,
+            onBack = { route = AppRoute.Home },
+            onCreated = { route = AppRoute.Home },
+        )
+        is AppRoute.Room -> RoomRoute(
+            container = container,
+            roundtableId = current.roundtableId,
+            onBack = { route = AppRoute.Home },
+        )
+    }
+}
+
+private val RouteSaver = listSaver<AppRoute, String>(
+    save = { route ->
+        when (route) {
+            AppRoute.Home -> listOf("home")
+            AppRoute.Create -> listOf("create")
+            is AppRoute.Room -> listOf("room", route.roundtableId)
+        }
+    },
+    restore = { saved ->
+        when (saved.first()) {
+            "create" -> AppRoute.Create
+            "room" -> AppRoute.Room(saved.getOrElse(1) { "" })
+            else -> AppRoute.Home
+        }
+    },
+)
+
+@Composable
+private fun HomeRoute(
+    container: AppContainer,
+    onCreateClicked: () -> Unit,
+    onOpenRoom: (String) -> Unit,
+) {
     val factory = remember(container) {
         viewModelFactory { initializer { HomeViewModel(container.homeRepository) } }
     }
@@ -60,7 +101,7 @@ private fun HomeRoute(container: AppContainer, onCreateClicked: () -> Unit) {
 
     LaunchedEffect(Unit) { viewModel.refresh() }
 
-    HomeScreen(state = state, onCreateClicked = onCreateClicked)
+    HomeScreen(state = state, onCreateClicked = onCreateClicked, onOpenRoom = onOpenRoom)
 }
 
 @Composable
@@ -95,4 +136,29 @@ private fun CreateRoute(
         onSubmit = viewModel::submit,
         onBack = onBack,
     )
+}
+
+
+@Composable
+private fun RoomRoute(
+    container: AppContainer,
+    roundtableId: String,
+    onBack: () -> Unit,
+) {
+    val factory = remember(container, roundtableId) {
+        viewModelFactory {
+            initializer {
+                RoomViewModel(
+                    roundtableId = roundtableId,
+                    controller = RoomController(container.socketFactory),
+                    sessionProvider = { container.guestSessionStore.read() },
+                )
+            }
+        }
+    }
+    val viewModel: RoomViewModel = viewModel(key = roundtableId, factory = factory)
+    val view by viewModel.view.collectAsStateWithLifecycle()
+    val connection by viewModel.connection.collectAsStateWithLifecycle()
+
+    RoomScreen(view = view, connection = connection, onBack = onBack)
 }

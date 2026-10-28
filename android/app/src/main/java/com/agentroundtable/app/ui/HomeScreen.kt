@@ -43,6 +43,7 @@ import com.agentroundtable.core.model.RoundtableStatus
 fun HomeScreen(
     state: HomeState,
     onCreateClicked: () -> Unit,
+    onOpenRoom: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -66,7 +67,7 @@ fun HomeScreen(
             when (state) {
                 HomeState.Loading -> LoadingHome()
                 HomeState.Empty -> EmptyHome(onCreateClicked)
-                is HomeState.Rooms -> RoomList(state.items)
+                is HomeState.Rooms -> RoomList(state.items, onOpenRoom)
                 is HomeState.Failed -> FailedHome(state.message)
             }
         }
@@ -118,21 +119,26 @@ private fun FailedHome(message: String) {
 }
 
 @Composable
-private fun RoomList(items: List<RoundtableCard>) {
+private fun RoomList(items: List<RoundtableCard>, onOpenRoom: (String) -> Unit) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(items, key = { it.id }) { card ->
-            RoomCard(card)
+            RoomCard(card, onOpenRoom)
         }
     }
 }
 
 @Composable
-private fun RoomCard(card: RoundtableCard) {
-    Card(modifier = Modifier.fillMaxWidth().clickable { }) {
+private fun RoomCard(card: RoundtableCard, onOpenRoom: (String) -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpenRoom(card.id) }
+            .testTag("home.room.${card.id}"),
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
                 text = card.topic,

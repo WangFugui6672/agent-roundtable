@@ -28,4 +28,8 @@ class AppContainer(context: Context) {
     val homeRepository: HomeRepository by lazy {
         HomeRepository(api = apiClient, sessions = guestSessionStore)
     }
+
+    val socketFactory: OkHttpSocketFactory by lazy {
+        OkHttpSocketFactory(baseUrl = BuildConfig.BACKEND_BASE_URL)
+    }
 }

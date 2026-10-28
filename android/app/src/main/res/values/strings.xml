@@ -27,4 +27,30 @@
     <string name="status_failed">已失败</string>
     <string name="status_archived">已归档</string>
     <string name="status_unknown">未知状态</string>
+
+    <string name="room_connecting">连接中…</string>
+    <string name="room_connected">已连接</string>
+    <string name="room_reconnecting">重连中…</string>
+    <string name="room_closed">连接已断开</string>
+    <string name="room_back">返回</string>
+    <string name="room_round_indicator">第 %1$d / %2$d 轮</string>
+    <string name="room_quoted_from">引用 %1$s：%2$s</string>
+    <string name="room_stance_support">支持</string>
+    <string name="room_stance_challenge">质疑</string>
+    <string name="room_stance_supplement">补充</string>
+    <string name="room_stance_question">追问</string>
+    <string name="room_notice_round_started">第 %1$d 轮开始</string>
+    <string name="room_notice_round_completed">第 %1$d 轮结束</string>
+    <string name="room_notice_thinking">%1$s 正在思考…</string>
+    <string name="room_notice_passed">%1$s 选择沉默</string>
+    <string name="room_notice_typing">%1$s 正在输入…</string>
+    <string name="room_notice_failed">%1$s 发言失败：%2$s</string>
+    <string name="room_notice_failed_retryable">%1$s 发言失败：%2$s（可重试）</string>
+    <string name="room_notice_pause_pending">将在当前发言完成后暂停</string>
+    <string name="room_notice_paused">讨论已暂停</string>
+    <string name="room_notice_resumed">讨论已继续</string>
+    <string name="room_notice_ended">讨论已结束</string>
+    <string name="room_notice_budget">讨论已达预算上限：%1$s</string>
+    <string name="room_notice_summary_started">正在生成结论…</string>
+    <string name="room_empty">等待第一位 Agent 发言…</string>
 </resources>
