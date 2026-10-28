@@ -64,6 +64,7 @@ fun RoomScreen(
     onResume: () -> Unit = {},
     onEnd: () -> Unit = {},
     onSendMessage: (String, List<String>) -> Unit = { _, _ -> },
+    onRetry: () -> Unit = {},
     controlMessage: String? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -195,7 +196,7 @@ fun RoomScreen(
                 items(view.entries, key = { it.key }) { entry ->
                     when (entry) {
                         is RoomEntry.MessageEntry -> MessageCard(entry)
-                        is RoomEntry.Notice -> NoticeRow(entry)
+                        is RoomEntry.Notice -> NoticeRow(entry, onRetry = onRetry)
                     }
                 }
                 streaming?.takeIf { it.isNotBlank() }?.let { text ->
@@ -403,7 +404,7 @@ private fun StreamingCard(text: String) {
 }
 
 @Composable
-private fun NoticeRow(entry: RoomEntry.Notice) {
+private fun NoticeRow(entry: RoomEntry.Notice, onRetry: () -> Unit) {
     val text = when (entry.kind) {
         NoticeKind.RoundStarted -> stringResource(R.string.room_notice_round_started, entry.round)
         NoticeKind.RoundCompleted -> stringResource(R.string.room_notice_round_completed, entry.round)
@@ -422,12 +423,29 @@ private fun NoticeRow(entry: RoomEntry.Notice) {
         NoticeKind.BudgetExhausted -> stringResource(R.string.room_notice_budget, entry.detail.orEmpty())
         NoticeKind.SummaryStarted -> stringResource(R.string.room_notice_summary_started)
     }
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-    )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        )
+        // 部分输出与完整发言区分展示，避免被误认为已经提交。
+        entry.partial?.takeIf { it.isNotBlank() }?.let { partial ->
+            Text(
+                text = partial,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+            )
+        }
+        if (entry.kind == NoticeKind.Failed && entry.retryable) {
+            TextButton(
+                onClick = onRetry,
+                modifier = Modifier.testTag("room.retry"),
+            ) { Text(stringResource(R.string.home_retry)) }
+        }
+    }
 }
 
 @Composable

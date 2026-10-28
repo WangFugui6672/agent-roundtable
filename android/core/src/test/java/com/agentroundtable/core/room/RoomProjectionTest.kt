@@ -117,6 +117,41 @@ class RoomProjectionTest {
     }
 
     @Test
+    fun `a partial failure keeps the generated text separate from a completed message`() {
+        projection.present(joined(), localCursor = 0)
+        projection.apply(
+            eventOf(
+                """{"round":1,"agent_name":"体验派","failure_code":"provider_timeout",
+                   "message":"请求超时。","retryable":true,"partial":"已经生成的半段观点"}""",
+                "agent.failed",
+                8,
+            ),
+        )
+
+        val notice = projection.snapshot().entries.filterIsInstance<RoomEntry.Notice>().single()
+        assertEquals("已经生成的半段观点", notice.partial)
+        assertTrue(notice.retryable)
+        // 部分输出不产生普通发言。
+        assertEquals(0, projection.snapshot().entries.filterIsInstance<RoomEntry.MessageEntry>().count { it.message.body == "已经生成的半段观点" })
+    }
+
+    @Test
+    fun `a non-retryable failure offers no retry`() {
+        projection.present(joined(), localCursor = 0)
+        projection.apply(
+            eventOf(
+                """{"round":1,"agent_name":"方案派","failure_code":"provider_unauthorized",
+                   "message":"API Key 无效。","retryable":false}""",
+                "agent.failed",
+                9,
+            ),
+        )
+
+        val notice = projection.snapshot().entries.filterIsInstance<RoomEntry.Notice>().single()
+        assertFalse(notice.retryable)
+    }
+
+    @Test
     fun `pause and resume change the roundtable status`() {
         projection.present(joined(), localCursor = 0)
         projection.apply(eventOf("""{"status":"paused"}""", "room.paused", 5))

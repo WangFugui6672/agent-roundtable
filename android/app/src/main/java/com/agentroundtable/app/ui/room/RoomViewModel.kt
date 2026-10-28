@@ -61,6 +61,12 @@ class RoomViewModel(
         }
     }
 
+    /** 失败后重试：重新启动 Turn 循环，沿用服务端已签发的下一个 Turn。 */
+    fun retryTurns() {
+        _controlMessage.value = null
+        startTurns()
+    }
+
     fun pause() = control { api.pauseRoundtable(it, roundtableId) }
 
     fun resume() {

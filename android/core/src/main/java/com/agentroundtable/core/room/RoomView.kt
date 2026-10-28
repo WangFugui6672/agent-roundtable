@@ -41,6 +41,8 @@ sealed interface RoomEntry {
         val round: Int = 0,
         val detail: String? = null,
         val retryable: Boolean = false,
+        /** 失败时已经生成的部分内容，与完整发言区分展示。 */
+        val partial: String? = null,
     ) : RoomEntry {
         override val key: String get() = "notice:$id"
     }

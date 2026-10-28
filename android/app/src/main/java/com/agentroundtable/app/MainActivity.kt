@@ -221,6 +221,7 @@ private fun RoomRoute(
         onResume = viewModel::resume,
         onEnd = viewModel::endDiscussion,
         onSendMessage = viewModel::sendUserMessage,
+        onRetry = viewModel::retryTurns,
         controlMessage = controlMessage,
     )
 }

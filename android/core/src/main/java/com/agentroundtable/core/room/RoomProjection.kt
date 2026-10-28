@@ -185,7 +185,11 @@ class RoomProjection(
             agentName = data.agentName,
             round = data.round,
             detail = data.message.ifBlank { data.failureCode },
-            retryable = data.retryable,
+            retryable = com.agentroundtable.core.turn.FailureKind.retryable(
+                data.failureCode,
+                data.retryable,
+            ),
+            partial = data.partial,
         )
         return true
     }
@@ -227,6 +231,7 @@ class RoomProjection(
         round: Int = 0,
         detail: String? = null,
         retryable: Boolean = false,
+        partial: String? = null,
     ) {
         entries += RoomEntry.Notice(
             id = id,
@@ -235,6 +240,7 @@ class RoomProjection(
             round = round,
             detail = detail,
             retryable = retryable,
+            partial = partial,
         )
     }
 
