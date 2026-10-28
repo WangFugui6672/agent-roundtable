@@ -33,19 +33,51 @@ public struct KeychainStore: SecretStore {
     /// Single source of truth for the service name; `ProviderStore` reuses it.
     public static let defaultService = "com.wangfugui.agentroundtable.provider"
 
+#if targetEnvironment(macCatalyst)
+    private static let ephemeralLock = NSLock()
+    private static var ephemeralSecrets: [String: String] = [:]
+    private static var ephemeralStorageUsed = false
+#endif
+
     public let service: String
+
+    /// True only when an unsigned Mac Catalyst build cannot access either
+    /// Keychain implementation and falls back to process-local storage.
+    public static var isUsingEphemeralStorage: Bool {
+#if targetEnvironment(macCatalyst)
+        ephemeralLock.lock()
+        defer { ephemeralLock.unlock() }
+        return ephemeralStorageUsed
+#else
+        return false
+#endif
+    }
 
     public init(service: String = KeychainStore.defaultService) {
         self.service = service
     }
 
     public func secret(for account: String) throws -> String? {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var lookup = makeQuery(account: account, useDataProtection: true)
+        lookup[kSecReturnData as String] = true
+        lookup[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        var status = SecItemCopyMatching(lookup as CFDictionary, &item)
+        if status == errSecMissingEntitlement {
+            lookup = makeQuery(account: account, useDataProtection: false)
+            lookup[kSecReturnData as String] = true
+            lookup[kSecMatchLimit as String] = kSecMatchLimitOne
+            status = SecItemCopyMatching(lookup as CFDictionary, &item)
+            if status == errSecMissingEntitlement {
+#if targetEnvironment(macCatalyst)
+                // Ad-hoc Catalyst builds have no application identifier
+                // entitlement. Keep demo secrets process-local, never on disk.
+                markEphemeralStorageUsed()
+                return ephemeralSecret(for: account)
+#endif
+            }
+        }
         if status == errSecItemNotFound {
             return nil
         }
@@ -60,12 +92,24 @@ public struct KeychainStore: SecretStore {
 
     public func setSecret(_ secret: String, for account: String) throws {
         let data = Data(secret.utf8)
-        let query = baseQuery(account: account)
+        let lookup = makeQuery(account: account, useDataProtection: true)
 
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary,
+        var updateStatus = SecItemUpdate(
+            lookup as CFDictionary,
             [kSecValueData as String: data] as CFDictionary
         )
+        if updateStatus == errSecMissingEntitlement {
+            updateStatus = SecItemUpdate(
+                makeQuery(account: account, useDataProtection: false) as CFDictionary,
+                [kSecValueData as String: data] as CFDictionary
+            )
+            if updateStatus == errSecMissingEntitlement {
+#if targetEnvironment(macCatalyst)
+                setEphemeralSecret(secret, for: account)
+                return
+#endif
+            }
+        }
         if updateStatus == errSecSuccess {
             return
         }
@@ -73,27 +117,89 @@ public struct KeychainStore: SecretStore {
             throw KeychainError(status: updateStatus)
         }
 
-        var attributes = query
+        var attributes = lookup
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let addStatus = SecItemAdd(attributes as CFDictionary, nil)
+        var addStatus = SecItemAdd(attributes as CFDictionary, nil)
+        if addStatus == errSecMissingEntitlement {
+            attributes = makeQuery(account: account, useDataProtection: false)
+            attributes[kSecValueData as String] = data
+            addStatus = SecItemAdd(attributes as CFDictionary, nil)
+            if addStatus == errSecMissingEntitlement {
+#if targetEnvironment(macCatalyst)
+                setEphemeralSecret(secret, for: account)
+                return
+#endif
+            }
+        }
         guard addStatus == errSecSuccess else {
             throw KeychainError(status: addStatus)
         }
     }
 
     public func removeSecret(for account: String) throws {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
+        var status = SecItemDelete(
+            makeQuery(account: account, useDataProtection: true) as CFDictionary
+        )
+        if status == errSecMissingEntitlement {
+            status = SecItemDelete(
+                makeQuery(account: account, useDataProtection: false) as CFDictionary
+            )
+            if status == errSecMissingEntitlement {
+#if targetEnvironment(macCatalyst)
+                removeEphemeralSecret(for: account)
+                return
+#endif
+            }
+        }
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError(status: status)
         }
     }
 
-    private func baseQuery(account: String) -> [String: Any] {
-        [
+    private func makeQuery(account: String, useDataProtection: Bool) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+#if targetEnvironment(macCatalyst)
+        query[kSecUseDataProtectionKeychain as String] = useDataProtection
+#else
+        _ = useDataProtection
+#endif
+        return query
     }
+
+#if targetEnvironment(macCatalyst)
+    private var ephemeralKeyPrefix: String {
+        "\(service)|"
+    }
+
+    private func ephemeralSecret(for account: String) -> String? {
+        Self.ephemeralLock.lock()
+        defer { Self.ephemeralLock.unlock() }
+        return Self.ephemeralSecrets[ephemeralKeyPrefix + account]
+    }
+
+    private func setEphemeralSecret(_ secret: String, for account: String) {
+        Self.ephemeralLock.lock()
+        Self.ephemeralStorageUsed = true
+        Self.ephemeralSecrets[ephemeralKeyPrefix + account] = secret
+        Self.ephemeralLock.unlock()
+    }
+
+    private func removeEphemeralSecret(for account: String) {
+        Self.ephemeralLock.lock()
+        Self.ephemeralStorageUsed = true
+        Self.ephemeralSecrets.removeValue(forKey: ephemeralKeyPrefix + account)
+        Self.ephemeralLock.unlock()
+    }
+
+    private func markEphemeralStorageUsed() {
+        Self.ephemeralLock.lock()
+        Self.ephemeralStorageUsed = true
+        Self.ephemeralLock.unlock()
+    }
+#endif
 }

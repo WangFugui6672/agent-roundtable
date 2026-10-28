@@ -130,9 +130,12 @@ struct CreateRoundtableView: View {
         if let incomplete = model.providerIncompleteMessage {
             return incomplete
         }
-        return model.hasConfiguredProvider
-            ? "API Key 保存在本机 Keychain，不会上传。"
-            : "配置后可改用你自己的模型 Key。"
+        if model.hasConfiguredProvider {
+            return KeychainStore.isUsingEphemeralStorage
+                ? "未签名 Mac Demo：API Key 仅在本次运行内保留。"
+                : "API Key 保存在本机 Keychain，不会上传。"
+        }
+        return "配置后可改用你自己的模型 Key。"
     }
 
     private var providerSection: some View {

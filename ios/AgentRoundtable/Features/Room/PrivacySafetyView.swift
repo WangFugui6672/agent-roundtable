@@ -1,3 +1,4 @@
+import RoundtableCore
 import SwiftUI
 
 struct PrivacySafetyView: View {
@@ -52,14 +53,13 @@ struct PrivacySafetyView: View {
                         icon: "trash",
                         body:
                             "删除圆桌会立即清理服务端消息、事件、结论、用量、举报，以及本机缓存、"
-                            + "隐藏状态和恢复游标。Keychain 中的 API Key 仅在你主动删除 Provider 时移除。"
+                            + "隐藏状态和恢复游标。"
+                            + apiKeyRetentionDescription
                     )
                     section(
                         title: "匿名会话",
                         icon: "person.badge.key",
-                        body:
-                            "匿名会话标识由后端生成并保存在本机 Keychain（WhenUnlockedThisDeviceOnly）。"
-                            + "旧版本留在 UserDefaults 的标识会在下次启动时迁移到 Keychain。"
+                        body: anonymousSessionDescription
                     )
                     sessionActions
                 }
@@ -79,7 +79,10 @@ struct PrivacySafetyView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("服务端圆桌与消息会立即删除，本机缓存和游标也会清除；Keychain 中的 Provider API Key 保留。")
+            Text(
+                "服务端圆桌与消息会立即删除，本机缓存和游标也会清除；"
+                + apiKeyRetentionDescription
+            )
         }
         .confirmationDialog(
             "轮换匿名会话标识？",
@@ -120,6 +123,21 @@ struct PrivacySafetyView: View {
             .disabled(model.isManagingSession)
             .accessibilityIdentifier("privacy.session.delete")
         }
+    }
+
+    private var apiKeyRetentionDescription: String {
+        if KeychainStore.isUsingEphemeralStorage {
+            return "未签名 Mac Demo 的 Provider API Key 只在本次运行内保留。"
+        }
+        return "Keychain 中的 API Key 仅在你主动删除 Provider 时移除。"
+    }
+
+    private var anonymousSessionDescription: String {
+        if KeychainStore.isUsingEphemeralStorage {
+            return "未签名 Mac Demo 的匿名会话标识只保留在本次运行内，重启后会创建新的会话标识。"
+        }
+        return "匿名会话标识由后端生成并保存在本机 Keychain（WhenUnlockedThisDeviceOnly）。"
+            + "旧版本留在 UserDefaults 的标识会在下次启动时迁移到 Keychain。"
     }
 
     private func section(title: String, icon: String, body: String) -> some View {

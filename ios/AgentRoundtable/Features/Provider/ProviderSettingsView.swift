@@ -132,17 +132,31 @@ struct ProviderSettingsView: View {
             }
 
             fieldGroup("API Key") {
-                SecureField(isConfigured ? "已保存在 Keychain，留空则不修改" : "sk-…", text: $apiKey)
+                SecureField(
+                    isConfigured
+                        ? (KeychainStore.isUsingEphemeralStorage
+                            ? "已保存在本次运行中，留空则不修改"
+                            : "已保存在 Keychain，留空则不修改")
+                        : "sk-…",
+                    text: $apiKey
+                )
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .apiKey)
                     .providerFieldStyle()
                     .accessibilityIdentifier("provider.apiKey")
-                Text("Key 只保存在本机 Keychain，不会上传到圆桌后端。")
+                Text(secretStorageDescription)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+
+    private var secretStorageDescription: String {
+        if KeychainStore.isUsingEphemeralStorage {
+            return "未签名 Mac Demo 中，Key 只保留在本次运行内，不会上传或写入磁盘。"
+        }
+        return "Key 只保存在本机 Keychain，不会上传到圆桌后端。"
     }
 
     private func fieldGroup<Content: View>(
@@ -172,7 +186,10 @@ struct ProviderSettingsView: View {
                     .accessibilityIdentifier("provider.checkResult")
             }
             if isConfigured {
-                Label("已保存到 Keychain", systemImage: "checkmark.seal.fill")
+                Label(
+                    KeychainStore.isUsingEphemeralStorage ? "已保存到本次运行" : "已保存到 Keychain",
+                    systemImage: "checkmark.seal.fill"
+                )
                     .font(.footnote)
                     .foregroundStyle(.green)
                     .accessibilityIdentifier("provider.status")

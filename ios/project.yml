@@ -45,6 +45,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.wangfugui.agentroundtable
         PRODUCT_NAME: AgentRoundtable
         TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: YES
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        "CODE_SIGN_STYLE[sdk=macosx*]": Manual
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+        "TARGETED_DEVICE_FAMILY[sdk=macosx*]": "6"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_VERSION: "5.0"
