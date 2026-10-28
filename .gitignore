@@ -54,7 +54,13 @@ android/.idea/
 android/captures/
 android/.externalNativeBuild/
 android/.cxx/
+android/**/.externalNativeBuild/
+android/**/.cxx/
 *.iml
 
 # Agent worktrees
 .claude/worktrees/
+# 端侧模型与 llama.cpp 源码：均不入库
+*.gguf
+*.gguf.part
+android/app/src/main/cpp/llama.cpp/

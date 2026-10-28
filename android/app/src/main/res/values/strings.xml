@@ -121,4 +121,35 @@
     <string name="room_delete_confirm">删除这个圆桌？本机与服务器的讨论记录都会移除。</string>
     <string name="room_delete_cancel">取消</string>
     <string name="room_delete_confirm_action">删除</string>
+
+    <string name="home_local">端侧</string>
+    <string name="local_title">端侧推理</string>
+    <string name="local_back">返回</string>
+    <string name="local_intro">模型文件不随安装包分发，下载或导入后按 SHA256 校验；推理完全在本机完成，不依赖网络。</string>
+    <string name="local_model_section">模型</string>
+    <string name="local_download">下载</string>
+    <string name="local_load">加载</string>
+    <string name="local_unload">卸载</string>
+    <string name="local_generate">生成</string>
+    <string name="local_stop">停止</string>
+    <string name="local_import">导入本地 GGUF</string>
+    <string name="local_prompt">输入内容</string>
+    <string name="local_status_downloading">下载中 %1$d%%</string>
+    <string name="local_presence_ready">文件已校验</string>
+    <string name="local_presence_missing">未下载</string>
+    <string name="local_presence_verifying">校验中</string>
+    <string name="local_output">输出</string>
+    <string name="local_output_empty">生成结果会显示在这里。</string>
+    <string name="local_metrics">实测指标</string>
+    <string name="local_metric_load">模型加载耗时</string>
+    <string name="local_metric_ttft">首字延迟</string>
+    <string name="local_metric_decode">解码速度</string>
+    <string name="local_metric_size">模型体积</string>
+    <string name="local_metric_memory">推理峰值内存</string>
+    <string name="local_metric_definition">首字延迟从开始生成到出现第一个 token；解码速度只统计首 token 之后的生成阶段。峰值内存取进程 VmHWM。</string>
+    <string name="local_quant_section">量化对比</string>
+    <string name="local_quant_unverified">未验证</string>
+    <string name="local_quant_note">体积来自模型清单；解码速度为本机实测。FP16 版本可能与 Q4_K_M 使用同一模型的不同量化文件，模型未下载或未运行时显示「未验证」。</string>
+    <string name="local_unavailable">端侧推理不可用</string>
+    <string name="local_footer">模型来源为 Qwen2.5 0.5B Instruct（Apache-2.0）；推理引擎为 llama.cpp（MIT）。模型文件不入库，也不随 APK 分发。</string>
 </resources>

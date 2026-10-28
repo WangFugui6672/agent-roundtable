@@ -15,6 +15,12 @@ import com.agentroundtable.app.data.provider.PreferencesProviderStorage
 import com.agentroundtable.core.knowledge.DocumentParser
 import com.agentroundtable.core.knowledge.DocumentStore
 import com.agentroundtable.core.knowledge.KnowledgeBase
+import com.agentroundtable.app.local.AndroidDeviceMemoryProbe
+import com.agentroundtable.app.local.AndroidLocalModelStore
+import com.agentroundtable.app.local.DeviceMemoryProbe
+import com.agentroundtable.app.local.LlamaCppEngine
+import com.agentroundtable.app.local.LocalModelStore
+import com.agentroundtable.core.local.LocalInferenceEngine
 import com.agentroundtable.core.provider.ProviderProbe
 import com.agentroundtable.core.turn.ProviderChatClient
 import com.agentroundtable.core.turn.TurnRunner
@@ -103,5 +109,18 @@ class AppContainer(context: Context) {
 
     val socketFactory: OkHttpSocketFactory by lazy {
         OkHttpSocketFactory(baseUrl = BuildConfig.BACKEND_BASE_URL)
+    }
+
+    val localModelStore: LocalModelStore by lazy {
+        AndroidLocalModelStore(applicationContext)
+    }
+
+    val deviceMemory: DeviceMemoryProbe by lazy {
+        AndroidDeviceMemoryProbe(applicationContext)
+    }
+
+    /** 端侧引擎与云端 Provider 完全独立；本地失败不会影响圆桌讨论。 */
+    val localInferenceEngine: LocalInferenceEngine by lazy {
+        LlamaCppEngine(peakMemoryBytes = { deviceMemory.peakMemoryBytes() })
     }
 }

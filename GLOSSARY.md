@@ -251,3 +251,27 @@ Bring Your Own Key。用户提供自己的模型服务凭据，产品不提供�
 ## 相似度阈值（Match Threshold）
 
 判定一条文档块是否构成检索结果的最低相似度。低于阈值的文档块不进入 Agent 上下文；阈值由产品统一设定，不对用户暴露为可调参数。
+
+## 端侧推理（On-device Inference）
+
+模型在用户设备本地加载并生成文本，不经过服务端，也不调用云端 Provider。端侧推理与圆桌讨论中的 Provider 直连是两条独立路径，本地失败不影响圆桌讨论。
+
+## 端侧模型（Local Model）
+
+以 GGUF 等形式存放在设备本地的模型文件。端侧模型不进入仓库、不打进安装包，通过 Release 资产或用户导入获得。
+
+## 模型清单（Model Catalog）
+
+端侧模型的不可变元数据集合：文件名、体积、SHA256、下载地址和上下文窗口。模型清单是校验与展示的唯一依据。
+
+## 首字延迟（TTFT）
+
+从发起一次端侧生成到第一个输出 token 出现的时间，包含 prompt 预填充。
+
+## 解码速度（Decode Speed）
+
+首 token 之后的生成速度，单位为 tokens/s；不含 prompt 预填充阶段。
+
+## 推理峰值内存（Peak Inference Memory）
+
+一次端侧推理期间进程的峰值常驻内存，Android 上取 `/proc/self/status` 的 `VmHWM`。

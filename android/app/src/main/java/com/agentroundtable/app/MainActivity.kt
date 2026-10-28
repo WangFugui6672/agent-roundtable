@@ -19,6 +19,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.agentroundtable.app.data.AppContainer
+import com.agentroundtable.app.local.LocalInferenceScreen
+import com.agentroundtable.app.local.LocalInferenceViewModel
 import com.agentroundtable.app.ui.HomeScreen
 import com.agentroundtable.app.ui.create.CreateScreen
 import com.agentroundtable.app.ui.create.CreateViewModel
@@ -51,6 +53,7 @@ private sealed interface AppRoute {
     data object Create : AppRoute
     data object Provider : AppRoute
     data object Library : AppRoute
+    data object Local : AppRoute
     data class Room(val roundtableId: String) : AppRoute
 }
 
@@ -67,12 +70,17 @@ private fun AgentRoundtableApp(container: AppContainer) {
             onOpenRoom = { route = AppRoute.Room(it) },
             onOpenProvider = { route = AppRoute.Provider },
             onOpenLibrary = { route = AppRoute.Library },
+            onOpenLocal = { route = AppRoute.Local },
         )
         AppRoute.Provider -> ProviderRoute(
             container = container,
             onBack = { route = AppRoute.Home },
         )
         AppRoute.Library -> LibraryRoute(
+            container = container,
+            onBack = { route = AppRoute.Home },
+        )
+        AppRoute.Local -> LocalRoute(
             container = container,
             onBack = { route = AppRoute.Home },
         )
@@ -96,6 +104,7 @@ private val RouteSaver = listSaver<AppRoute, String>(
             AppRoute.Create -> listOf("create")
             AppRoute.Provider -> listOf("provider")
             AppRoute.Library -> listOf("library")
+            AppRoute.Local -> listOf("local")
             is AppRoute.Room -> listOf("room", route.roundtableId)
         }
     },
@@ -104,6 +113,7 @@ private val RouteSaver = listSaver<AppRoute, String>(
             "create" -> AppRoute.Create
             "provider" -> AppRoute.Provider
             "library" -> AppRoute.Library
+            "local" -> AppRoute.Local
             "room" -> AppRoute.Room(saved.getOrElse(1) { "" })
             else -> AppRoute.Home
         }
@@ -117,6 +127,7 @@ private fun HomeRoute(
     onOpenRoom: (String) -> Unit,
     onOpenProvider: () -> Unit,
     onOpenLibrary: () -> Unit,
+    onOpenLocal: () -> Unit,
 ) {
     val factory = remember(container) {
         viewModelFactory { initializer { HomeViewModel(container.homeRepository) } }
@@ -132,6 +143,7 @@ private fun HomeRoute(
         onOpenRoom = onOpenRoom,
         onOpenProvider = onOpenProvider,
         onOpenLibrary = onOpenLibrary,
+        onOpenLocal = onOpenLocal,
     )
 }
 
@@ -260,6 +272,37 @@ private fun LibraryRoute(container: AppContainer, onBack: () -> Unit) {
         onBack = onBack,
     )
 }
+
+@Composable
+private fun LocalRoute(container: AppContainer, onBack: () -> Unit) {
+    val factory = remember(container) {
+        viewModelFactory {
+            initializer {
+                LocalInferenceViewModel(
+                    engine = container.localInferenceEngine,
+                    modelStore = container.localModelStore,
+                    deviceMemory = container.deviceMemory,
+                )
+            }
+        }
+    }
+    val viewModel: LocalInferenceViewModel = viewModel(factory = factory)
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    LocalInferenceScreen(
+        state = state,
+        onBack = onBack,
+        onSelect = viewModel::selectModel,
+        onDownload = viewModel::download,
+        onImport = viewModel::importModel,
+        onLoad = viewModel::loadSelected,
+        onGenerate = viewModel::generate,
+        onStop = viewModel::stopGeneration,
+        onUnload = viewModel::unload,
+        onPromptChange = viewModel::updatePrompt,
+    )
+}
+
 
 @Composable
 private fun ProviderRoute(container: AppContainer, onBack: () -> Unit) {
