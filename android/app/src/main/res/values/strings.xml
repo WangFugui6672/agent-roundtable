@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">圆桌</string>
+    <string name="home_title">圆桌</string>
+    <string name="home_empty_title">还没有圆桌</string>
+    <string name="home_empty_body">从一个具体议题开始，让三位立场不同的 AI 讨论出共识与分歧。</string>
+    <string name="home_create">新建圆桌</string>
+</resources>

@@ -45,3 +45,13 @@ tmp/
 # XcodeGen outputs
 ios/AgentRoundtable.xcodeproj/
 ios/AgentRoundtable/Info.plist
+
+# Android / Gradle
+android/local.properties
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+*.iml
