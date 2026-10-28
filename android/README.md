@@ -35,6 +35,16 @@ cd android
 
 调试包只包含 `arm64-v8a`，`minSdk 26`，包名 `com.agentroundtable.app`。
 
+## 连接后端
+
+默认后端地址是 `http://10.0.2.2:8000`（Android 模拟器访问宿主机的固定地址）。用其他地址构建：
+
+```bash
+./gradlew :app:assembleDebug -PbackendBaseUrl=http://127.0.0.1:8000
+```
+
+配合 `adb reverse tcp:8000 tcp:8000` 可以在真机上直接连本机后端。
+
 ## 依赖解析说明
 
 若构建时出现 `Remote host terminated the handshake`，属于本机到 Maven 仓库的瞬时 TLS 失败，重试即可；Gradle 会缓存已完成的下载。

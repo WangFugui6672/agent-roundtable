@@ -5,4 +5,26 @@
     <string name="home_empty_title">还没有圆桌</string>
     <string name="home_empty_body">从一个具体议题开始，让三位立场不同的 AI 讨论出共识与分歧。</string>
     <string name="home_create">新建圆桌</string>
+    <string name="home_retry">重试</string>
+    <string name="home_loading">正在读取圆桌…</string>
+
+    <string name="create_title">新建圆桌</string>
+    <string name="create_topic_label">议题</string>
+    <string name="create_topic_placeholder">例如：该不该把验证周期压缩到两周？</string>
+    <string name="create_agents_label">选择三位 Agent</string>
+    <string name="create_selected_count">已选 %1$d / 3</string>
+    <string name="create_submit">开始讨论</string>
+    <string name="create_submitting">正在创建…</string>
+    <string name="create_back">返回</string>
+    <string name="create_mock_hint">未配置 Provider 时以 Mock 模式演示，事件稳定且不消耗额度。</string>
+
+    <string name="status_draft">草稿</string>
+    <string name="status_ready">待开始</string>
+    <string name="status_running">进行中</string>
+    <string name="status_paused">已暂停</string>
+    <string name="status_summarizing">生成结论中</string>
+    <string name="status_completed">已结束</string>
+    <string name="status_failed">已失败</string>
+    <string name="status_archived">已归档</string>
+    <string name="status_unknown">未知状态</string>
 </resources>
