@@ -2,15 +2,27 @@ package com.agentroundtable.core.turn
 
 import com.agentroundtable.core.api.ApiClient
 import com.agentroundtable.core.api.ApiResult
+import com.agentroundtable.core.knowledge.RetrievalHit
 import com.agentroundtable.core.provider.ProviderConfiguration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 一次 Turn 执行的结果。 */
 sealed interface TurnRunResult {
     /** 当前没有可发言的参与者。 */
     data object NoTurn : TurnRunResult
 
-    /** 已提交一条发言。 */
-    data class Spoke(val text: String) : TurnRunResult
+    /**
+     * 已提交一条发言。
+     *
+     * [turnId] 用于把本地检索结果关联到服务端随后产生的消息；
+     * [references] 是本次发言实际注入 prompt 的参考资料。
+     */
+    data class Spoke(
+        val text: String,
+        val turnId: String = "",
+        val references: List<RetrievalHit> = emptyList(),
+    ) : TurnRunResult
 
     /** Agent 明确选择沉默。 */
     data object Passed : TurnRunResult
@@ -23,10 +35,14 @@ sealed interface TurnRunResult {
  * 执行一次完整的 Agent 发言：取 Turn → 组装 prompt → 直连 Provider 流式生成 → 提交或关闭 Turn。
  *
  * 密钥只用于直连 Provider 的请求；提交给服务端的请求体不含任何密钥字段。
+ *
+ * [retrieval] 是可选的本机资料库检索接缝。不传时不发起任何检索，prompt 与接入资料库
+ * 之前完全一致；传入但检索为空、超时或失败时同样降级为无检索，不阻塞发言。
  */
 class TurnRunner(
     private val api: ApiClient,
     private val chat: ProviderChatClient,
+    private val retrieval: Retrieval? = null,
 ) {
     suspend fun runOnce(
         sessionId: String,
@@ -54,12 +70,15 @@ class TurnRunner(
         // 轮次以服务端签发 Turn 时给出的为准，界面上的 currentRound 可能还没更新。
         val turnContext = context.copy(roundNumber = next.round)
 
+        // 检索在发起 Provider 请求前完成；失败、超时或空资料库都降级为空列表。
+        val references = retrieveReferences(turnContext, transcript)
+
         val builder = StringBuilder()
         var streamError: String? = null
         chat.stream(
             configuration = configuration,
             apiKey = apiKey,
-            messages = AgentPrompt.messages(turnContext, transcript),
+            messages = AgentPrompt.messages(turnContext, transcript, references),
         ).collect { event ->
             when (event) {
                 is ChatStreamEvent.Delta -> {
@@ -114,7 +133,7 @@ class TurnRunner(
                         confidence = reply.confidence ?: MessageSubmission.DEFAULT_CONFIDENCE,
                     )
                     return when (val result = api.submitMessage(sessionId, roundtableId, submission)) {
-                        is ApiResult.Success -> TurnRunResult.Spoke(text)
+                        is ApiResult.Success -> TurnRunResult.Spoke(text, turn.turnId, references)
                         is ApiResult.Failure -> failTurn(
                             sessionId, roundtableId, turn,
                             code = "submit_failed",
@@ -138,7 +157,7 @@ class TurnRunner(
             maxReplyChars = turnContext.maxReplyChars,
         )
         return when (val result = api.submitMessage(sessionId, roundtableId, submission)) {
-            is ApiResult.Success -> TurnRunResult.Spoke(text)
+            is ApiResult.Success -> TurnRunResult.Spoke(text, turn.turnId, references)
             is ApiResult.Failure -> {
                 failTurn(
                     sessionId, roundtableId, turn,
@@ -147,6 +166,40 @@ class TurnRunner(
                     retryable = true,
                 )
             }
+        }
+    }
+
+    /**
+     * 本次发言的检索查询：优先使用最近一条用户消息，让用户插话能影响后续发言；
+     * 没有用户消息时退回议题。
+     */
+    internal fun retrievalQuery(
+        context: PromptContext,
+        transcript: List<TranscriptLine>,
+    ): String =
+        transcript.lastOrNull { it.authorAgentId == null }?.body?.takeIf { it.isNotBlank() }
+            ?: context.topic
+
+    /**
+     * 检索失败、超时或未注入时统一返回空列表，调用方无需为「无检索」写分支。
+     */
+    private suspend fun retrieveReferences(
+        context: PromptContext,
+        transcript: List<TranscriptLine>,
+    ): List<RetrievalHit> {
+        val retrieval = retrieval ?: return emptyList()
+        val query = retrievalQuery(context, transcript)
+        if (query.isBlank()) return emptyList()
+
+        return try {
+            withTimeoutOrNull(RETRIEVAL_TIMEOUT_MS) { retrieval.retrieve(query) }
+                ?.let(AgentPrompt::selectReferences)
+                .orEmpty()
+        } catch (error: CancellationException) {
+            // 圆桌整体取消时不应被降级逻辑吞掉。
+            throw error
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
@@ -180,5 +233,13 @@ class TurnRunner(
             partial = partial,
         )
         return TurnRunResult.Failed(message, retryable)
+    }
+
+    private companion object {
+        /**
+         * 检索超时上限。端侧嵌入首次加载约数百毫秒，留出余量后仍能在
+         * 明显拖慢发言前降级为无检索。
+         */
+        const val RETRIEVAL_TIMEOUT_MS = 1_500L
     }
 }

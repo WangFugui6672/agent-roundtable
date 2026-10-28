@@ -46,6 +46,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.agentroundtable.app.R
 import com.agentroundtable.app.ui.theme.AgentRoundtableTheme
+import com.agentroundtable.core.knowledge.RetrievalHit
 import com.agentroundtable.core.model.RoundSummary
 import com.agentroundtable.core.model.SummaryItem
 import com.agentroundtable.core.room.ConnectionState
@@ -63,6 +64,7 @@ fun RoomScreen(
     view: RoomView,
     connection: ConnectionState,
     streaming: String? = null,
+    retrievalReferences: Map<String, List<RetrievalHit>> = emptyMap(),
     onBack: () -> Unit,
     onDelete: () -> Unit = {},
     deleteError: String? = null,
@@ -210,7 +212,12 @@ fun RoomScreen(
             ) {
                 items(view.entries, key = { it.key }) { entry ->
                     when (entry) {
-                        is RoomEntry.MessageEntry -> MessageCard(entry)
+                        is RoomEntry.MessageEntry -> MessageCard(
+                            entry = entry,
+                            references = entry.message.turnId
+                                ?.let(retrievalReferences::get)
+                                .orEmpty(),
+                        )
                         is RoomEntry.Notice -> NoticeRow(entry, onRetry = onRetry)
                     }
                 }
@@ -289,9 +296,10 @@ private fun ConnectionBanner(connection: ConnectionState) {
 }
 
 @Composable
-private fun MessageCard(entry: RoomEntry.MessageEntry) {
+private fun MessageCard(entry: RoomEntry.MessageEntry, references: List<RetrievalHit>) {
     val message = entry.message
     val stance = Stance.fromWire(message.stance)
+    var referencesExpanded by remember(message.id) { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth().testTag("room.message.${message.id}")) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -317,6 +325,48 @@ private fun MessageCard(entry: RoomEntry.MessageEntry) {
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            // 只有本次发言真正注入了参考资料时才出现；点击展开文档块原文与来源文档。
+            if (references.isNotEmpty()) {
+                TextButton(
+                    onClick = { referencesExpanded = !referencesExpanded },
+                    modifier = Modifier.testTag("room.references.${message.id}"),
+                ) {
+                    Text(
+                        text = stringResource(R.string.room_references_count, references.size),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                if (referencesExpanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("room.references.details.${message.id}"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        references.forEachIndexed { index, hit ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("room.reference.${message.id}.$index"),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.room_reference_source,
+                                        hit.documentName,
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    text = hit.text,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
