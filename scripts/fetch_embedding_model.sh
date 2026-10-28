@@ -19,7 +19,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST_DIR="${1:-$ROOT_DIR/android/app/src/main/assets/models/bge-small-zh-v1.5-int8}"
-BASE_URL="${EMBEDDING_MODEL_BASE_URL:-https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/75c43b069aac4d136ba6bc1122f995fedcfd2781}"
+HF_REVISION="75c43b069aac4d136ba6bc1122f995fedcfd2781"
+BASE_URL="${EMBEDDING_MODEL_BASE_URL:-https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/$HF_REVISION}"
+# 模型位于 onnx/ 子目录，词表位于仓库根目录，两者路径不同。
+MODEL_BASE_URL="${BASE_URL%/}/onnx"
+VOCAB_BASE_URL="${BASE_URL%/}"
 
 MODEL_FILE="model_int8.onnx"
 MODEL_SHA256="b9837c19ce154ff0726d398ee77abbc03a7faf0476c6f93016c84e531be7ebb5"
@@ -37,6 +41,7 @@ sha256_of() {
 fetch() {
     local name="$1"
     local expected="$2"
+    local base="$3"
     local target="$DEST_DIR/$name"
 
     if [[ -f "$target" ]] && [[ "$(sha256_of "$target")" == "$expected" ]]; then
@@ -47,7 +52,7 @@ fetch() {
     mkdir -p "$DEST_DIR"
     local temporary="$target.download"
     printf '下载 %s ...\n' "$name"
-    curl -fL --retry 5 --retry-delay 2 -o "$temporary" "$BASE_URL/$name"
+    curl -fL --retry 5 --retry-delay 2 -o "$temporary" "$base/$name"
 
     local actual
     actual="$(sha256_of "$temporary")"
@@ -61,8 +66,8 @@ fetch() {
     printf '校验通过：%s\n' "$target"
 }
 
-fetch "$MODEL_FILE" "$MODEL_SHA256"
-fetch "$VOCAB_FILE" "$VOCAB_SHA256"
+fetch "$MODEL_FILE" "$MODEL_SHA256" "$MODEL_BASE_URL"
+fetch "$VOCAB_FILE" "$VOCAB_SHA256" "$VOCAB_BASE_URL"
 
 cat <<'NOTE'
 

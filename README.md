@@ -12,7 +12,62 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 
 截图来自 iPhone 17 模拟器上的 UI 测试（`AgentRoundtableUITests`），走的是真实本地 Django + WebSocket。
 
+## 平台能力矩阵
+
+同一套协议（`docs/protocol.md`）、两个原生客户端。下表说明每项能力当前在哪些端可用。
+
+| 能力 | iOS | Android |
+| --- | :---: | :---: |
+| 创建圆桌、选择三位 Agent | ✅ | ✅ |
+| WebSocket 实时讨论、游标补发、事件去重 | ✅ | ✅ |
+| 断线重连与进程重启恢复 | ✅ | ✅ |
+| 用户控制：暂停 / 继续 / 插话 / 点名 / 结束 | ✅ | ✅ |
+| BYOK 直连 Provider 的真实 Turn 执行 | ✅ | ✅ |
+| 第二轮引用式互评 | ✅ | ✅ |
+| 结论生成与展示 | ✅ | ✅ |
+| Mock 演示 | ✅ | ✅ |
+| 结论卡保存与分享 | ✅ | — |
+| 消息举报、本地隐藏、关键观点、重新生成 | ✅ | — |
+| 继续追问（follow-up） | ✅ | — |
+| 资料库：本地文档导入与文档块切分 | — | ✅ |
+| 端侧向量化检索（RAG） | — | ✅ |
+| 端侧大模型推理（llama.cpp + 量化） | — | ✅ |
+
+各端细节：[`ios/README.md`](ios/README.md) · [`android/README.md`](android/README.md)
+
+资料库与端侧推理是 Android 独有能力，不作为跨端功能宣传；原因见 [`docs/adr/0006-on-device-rag-in-client.md`](docs/adr/0006-on-device-rag-in-client.md)。
+
+## 端侧实测数据
+
+以下数据来自 **Android 模拟器**（Medium_Phone，arm64-v8a，API 37，4 GB RAM），**不是真机**，仅用于验证链路可用性：
+
+| 指标 | 数值 |
+| --- | --- |
+| 模型加载（Qwen2.5 0.5B Instruct Q4_K_M） | 828 ms |
+| 首字延迟 | 1140–1957 ms |
+| 解码速度 | 16.96–27.78 tokens/s |
+| 推理峰值内存 | 762 MB |
+| 模型体积（Q4_K_M / FP16） | 468.6 MiB / 1.18 GiB |
+| 嵌入模型加载（bge-small-zh-v1.5 int8） | 131–226 ms |
+| 单条文本向量化 | 7–27 ms |
+
+真机数据尚未采集；模型文件不入库，需运行 `scripts/fetch_embedding_model.sh` 或从 Release 资产下载。
+
 ## 已完成的能力（切片）
+
+### Android 客户端
+
+- Kotlin + Jetpack Compose，`:app` 与 `:core` 两模块，`:core` 为纯 JVM 协议层。
+- 创建圆桌、WebSocket 实时讨论、事件投影与按游标补发、进程重启恢复、删除墓碑。
+- Provider 配置与探测；API Key 经 Android Keystore 加密后存入私有偏好，配置与密钥分离。
+- 真实 Turn 执行：客户端组装 prompt、直连 Provider 流式生成、提交发言或选择沉默。
+- 第二轮引用式互评：结构化 JSON 解析，校验类型、立场、引用归属与质疑目标。
+- 用户控制：暂停（在途发言完成后生效）、继续、插话、点名、提前结束。
+- 结论生成与展示，模型失败时规则化降级并明确标注。
+- 资料库：PDF / TXT / Markdown 导入与文档块切分；端侧向量化与检索；检索结果注入 system prompt。
+- 端侧推理：llama.cpp + Qwen2.5 0.5B Q4_K_M，展示加载耗时、首字延迟、解码速度与峰值内存。
+
+### iOS 客户端
 
 - iOS 输入议题，选择固定的三个预设 Agent（方案派 / 质疑派 / 体验派）。
 - Django 提供匿名会话、预设 Agent、圆桌、turn 和用户控制 REST 接口。
@@ -84,7 +139,12 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 backend/                  Django + DRF + Channels
   roundtable/             项目配置（settings / asgi / urls）
   apps/roundtables/       领域模型、REST、WebSocket consumer、Mock 脚本、测试
+android/
+  app/                    Compose 界面、平台能力、Provider、资料库与端侧推理
+  core/                   纯 JVM 协议层、事件投影、RAG 与失败分类
+  scripts/                llama.cpp 源码拉取
 ios/
+  README.md               iOS 构建、测试与录屏说明
   project.yml             XcodeGen 工程定义（生成的 .xcodeproj 不入库）
   AgentRoundtable/        SwiftUI App（创建页、Provider 设置、圆桌页、AppModel）
   AgentRoundtableTests/   App 单元测试（Keychain 集成）
@@ -94,7 +154,8 @@ docs/
   PRD.md                  产品需求
   protocol.md             REST + WebSocket 协议（唯一接口契约）
   architecture.md         信任边界、运行时和数据流
-  demo.md                 三个演示议题与录制脚本
+  demo.md                 三个演示议题与录制脚本（iOS）
+  demo-android.md         Android / 双端并排录制脚本
   content-safety.md       本地内容规则与隐私边界
   releases/               版本发布说明
   adr/                    架构决策记录
@@ -147,53 +208,32 @@ make backend-purge    # 可选：删除最后活动超过 90 天的圆桌
 
 ### iOS
 
-需要 Xcode 16+（含 iOS 17 模拟器）与 XcodeGen：
+需要 Xcode 16+ 与 XcodeGen，构建、运行、测试与录屏说明见 [`ios/README.md`](ios/README.md)。
 
-```bash
-brew install xcodegen
-make ios-project                 # 生成 ios/AgentRoundtable.xcodeproj
-open ios/AgentRoundtable.xcodeproj
-```
+### Android
 
-后端地址默认 `http://localhost:8000`，可在 scheme 的环境变量 `RT_API_BASE_URL` 覆盖（真机调试时填局域网地址）。Info.plist 只对 `localhost` / `127.0.0.1` 放开 HTTP（`NSExceptionDomains`），上线前必须移除；生产环境要求 HTTPS/WSS。
-
-进入 App 后：首页可打开历史圆桌或新建讨论 → 确认三个参与者 → 开始讨论 → 配置 Provider 后启动自动讨论，或点击 Mock 查看确定性演示事件。圆桌页底部可以发送普通消息、点名 Agent、暂停、继续或提前结束；消息菜单可标记关键观点或重新生成最近一条 AI 回复。二轮结束或提前结束后自动进入结论阶段；Mock 无 Key 演示使用规则化降级摘要。
-
-创建页的「模型 Provider」可以打开 Provider 设置：选 Qwen / DeepSeek / 自定义，填写 BaseURL、Model 与 API Key。API Key 只写入 Keychain，不会出现在 `UserDefaults`、日志或后端请求里；「验证连接」会调用该服务的 `GET /models` 判断 Key 与地址是否可用（不消耗 Token）。未配置 Provider 时仍可用 Mock 演示。
-
-进入圆桌后，iOS 会向服务端获取下一位发言人并用已配置的 Provider 发起真实流式发言：思考 → 逐字输入 → 提交 turn → 获取下一位。用户插话或暂停不会中断正在生成的这一条消息，但完成后会停在暂停边界；继续只重新启动一条自动流程。模型不可达、Key 失效、限流等情况会直接显示稳定错误码、可重试范围和 partial，并回报一次失败；不会自动切换到 Mock 或其他模型。Provider Token 由 iOS 从 SSE usage 中读取并上报，后端只把它当作客户端观测值，不作为精确计费依据。
+需要 JDK 17 与 Android SDK 37，构建、Provider 配置与端侧能力说明见 [`android/README.md`](android/README.md)。
 
 ## 测试矩阵
 
+```bash
 ```bash
 make verify        # 提交前最小检查
 make backend-check # Ruff、format、Django check、migration check、pytest
 make ios-test      # RoundtableCore XCTest
 make ios-lint      # SwiftLint --strict
-make ios-app-test  # App 单测（Keychain、Provider、turn、总结、安全）
-make ios-ui-test   # 完整 UI 回归（创建、控制、恢复、安全、结论卡与演示流程）
+make ios-app-test  # App 单测
+make ios-ui-test   # 完整 UI 回归
 make docker-smoke  # 隔离 Compose 冷启动 + 迁移 + Redis + health + guest session
 make secret-scan   # 密钥、.env 与生成物扫描
 make release-check # 发布静态、后端、Core、App 与 Compose 门禁
+
+cd android && ./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug
 ```
 
-完整 UI 回归覆盖创建、第一轮、用户点名、暂停/继续、第二轮引用、结论卡、进程恢复、安全和 Provider 错误路径。它连接 `http://localhost:8000`，所以先启动后端：
+iOS 的测试细节、签名要求与录屏步骤见 [`ios/README.md`](ios/README.md)；Android 的模块划分与端侧能力见 [`android/README.md`](android/README.md)。
 
-```bash
-make docker-up
-make ios-ui-test
-make docker-down
-```
-
-完整录屏：
-
-```bash
-make docker-up
-make record-demo
-make docker-down
-```
-
-`-collect-test-diagnostics never` 已内置于 Makefile 和 CI，避免 Xcode 在测试结束后卡在诊断收集。Keychain 测试需要模拟器 ad-hoc 签名，不能设置 `CODE_SIGNING_ALLOWED=NO`。GitHub Actions 在 macOS runner 上启动 PostgreSQL、Redis、Django 后端，实际执行 App 单测和完整 `AgentRoundtableUITests` 回归。
+GitHub Actions 并行执行五个 job：后端检查、Compose 冷启动、仓库卫生扫描、Android 构建与单元测试、iOS 单测与完整 UI 回归。
 
 ## 协议
 
@@ -247,6 +287,10 @@ make docker-down
 - 匿名会话 ID 存在独立 Keychain service；旧 `UserDefaults` 值会在下次启动时迁移后删除。
 - 本地内容规则是有限第一道过滤，不能覆盖所有语义变体；服务端不做模型审核，举报仅进入人工处理队列。
 - TestFlight 未配置，需要 Apple Developer Program、App Store Connect、签名证书和 Provisioning Profile，不阻塞 MVP。
+- **资料库、端侧向量化检索与端侧推理目前只在 Android 实现**，iOS 未接入；见 [`docs/adr/0006-on-device-rag-in-client.md`](docs/adr/0006-on-device-rag-in-client.md)。
+- Android v1 未实现结论卡导出、消息举报、本地隐藏、关键观点、重新生成与继续追问；协议已支持，属后续切片。
+- 端侧性能数据来自 Android 模拟器（arm64-v8a），**未做真机标定**；模型文件不入库，需运行拉取脚本或从 Release 资产下载。
+- Android 的圆桌缓存使用 Room 单表存 JSON；iOS 使用 SwiftData，两端字段对齐，改字段需同时更新两侧解码器。
 
 ## 部署与隐私
 
