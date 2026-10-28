@@ -18,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -51,6 +52,7 @@ fun LibraryScreen(
     onImportClicked: () -> Unit,
     onDelete: (String) -> Unit,
     onDismissError: () -> Unit,
+    onDismissNotice: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -123,6 +125,35 @@ fun LibraryScreen(
             if (state.isImporting) {
                 item {
                     ImportingRow()
+                }
+            }
+
+            state.vectorization?.let { vectorization ->
+                item {
+                    VectorizingRow(vectorization)
+                }
+            }
+
+            state.noticeMessage?.let { message ->
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("library.notice"),
+                        )
+                        TextButton(
+                            onClick = onDismissNotice,
+                            modifier = Modifier.testTag("library.dismissNotice"),
+                        ) { Text(stringResource(R.string.library_notice_dismiss)) }
+                    }
+                }
+            }
+
+            if (state.embedding.hasMeasurements) {
+                item {
+                    EmbeddingCard(state.embedding)
                 }
             }
 
@@ -207,6 +238,79 @@ private fun ImportingRow() {
 }
 
 @Composable
+private fun VectorizingRow(progress: VectorizationUiState) {
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag("library.vectorizing"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = stringResource(
+                R.string.library_vectorizing,
+                progress.documentName,
+                progress.completedChunks,
+                progress.totalChunks,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        LinearProgressIndicator(
+            progress = { progress.fraction },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun EmbeddingCard(embedding: EmbeddingUiState) {
+    Card(modifier = Modifier.fillMaxWidth().testTag("library.embedding")) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.library_embedding_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            if (!embedding.available) {
+                Text(
+                    text = stringResource(R.string.library_embedding_unavailable),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else {
+                embedding.modelLoadMillis?.let { millis ->
+                    Text(
+                        text = stringResource(R.string.library_embedding_model_load, millis),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                embedding.inferenceMillis?.let { millis ->
+                    Text(
+                        text = stringResource(R.string.library_embedding_inference, millis),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                val documentName = embedding.lastDocumentName
+                val duration = embedding.lastDocumentDurationMillis
+                if (documentName != null && duration != null) {
+                    Text(
+                        text = stringResource(
+                            R.string.library_embedding_document_time,
+                            documentName,
+                            embedding.lastDocumentChunkCount,
+                            duration,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun EmptyLibrary() {
     Column(
         modifier = Modifier.testTag("library.empty"),
@@ -286,6 +390,7 @@ private fun LibraryPreview() {
             onImportClicked = {},
             onDelete = {},
             onDismissError = {},
+            onDismissNotice = {},
             onBack = {},
         )
     }

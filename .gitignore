@@ -58,6 +58,10 @@ android/**/.externalNativeBuild/
 android/**/.cxx/
 *.iml
 
+# On-device embedding model: downloaded, never committed
+android/app/src/main/assets/models/**/*.onnx
+android/app/src/main/assets/models/**/vocab.txt
+
 # Agent worktrees
 .claude/worktrees/
 # 端侧模型与 llama.cpp 源码：均不入库

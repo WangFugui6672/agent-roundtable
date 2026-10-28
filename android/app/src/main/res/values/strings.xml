@@ -26,6 +26,13 @@
     <string name="library_delete_confirm">删除</string>
     <string name="library_delete_cancel">取消</string>
     <string name="library_error_dismiss">知道了</string>
+    <string name="library_notice_dismiss">知道了</string>
+    <string name="library_vectorizing">正在为《%1$s》生成本地向量 %2$d / %3$d</string>
+    <string name="library_embedding_title">端侧嵌入</string>
+    <string name="library_embedding_unavailable">端侧检索不可用，资料库仍可正常使用。</string>
+    <string name="library_embedding_model_load">模型加载耗时 %1$d ms</string>
+    <string name="library_embedding_inference">单条文本推理平均耗时 %1$d ms</string>
+    <string name="library_embedding_document_time">《%1$s》%2$d 个文档块向量化用时 %3$d ms</string>
 
     <string name="create_title">新建圆桌</string>
     <string name="create_topic_label">议题</string>

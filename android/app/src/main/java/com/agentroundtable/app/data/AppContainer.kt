@@ -7,11 +7,15 @@ import com.agentroundtable.app.data.cache.RoomCacheRepository
 import com.agentroundtable.app.data.knowledge.AndroidDocumentParser
 import com.agentroundtable.app.data.knowledge.ContentResolverDocumentSourceReader
 import com.agentroundtable.app.data.knowledge.DocumentSourceReader
+import com.agentroundtable.app.data.knowledge.EmbeddingStats
 import com.agentroundtable.app.data.knowledge.KnowledgeDatabase
+import com.agentroundtable.app.data.knowledge.OnnxEmbeddingBackend
 import com.agentroundtable.app.data.knowledge.RoomDocumentStore
 import com.agentroundtable.app.data.provider.KeystoreSecretStore
 import com.agentroundtable.app.data.provider.PreferencesNoticeStore
 import com.agentroundtable.app.data.provider.PreferencesProviderStorage
+import com.agentroundtable.core.knowledge.ChunkVectorStore
+import com.agentroundtable.core.knowledge.DocumentIndexer
 import com.agentroundtable.core.knowledge.DocumentParser
 import com.agentroundtable.core.knowledge.DocumentStore
 import com.agentroundtable.core.knowledge.KnowledgeBase
@@ -21,6 +25,7 @@ import com.agentroundtable.app.local.DeviceMemoryProbe
 import com.agentroundtable.app.local.LlamaCppEngine
 import com.agentroundtable.app.local.LocalModelStore
 import com.agentroundtable.core.local.LocalInferenceEngine
+import com.agentroundtable.core.knowledge.KnowledgeSearch
 import com.agentroundtable.core.provider.ProviderProbe
 import com.agentroundtable.core.turn.ProviderChatClient
 import com.agentroundtable.core.turn.TurnRunner
@@ -63,11 +68,41 @@ class AppContainer(context: Context) {
 
     private val knowledgeDatabase: KnowledgeDatabase by lazy {
         Room.databaseBuilder(applicationContext, KnowledgeDatabase::class.java, "knowledge.db")
+            .addMigrations(KnowledgeDatabase.MIGRATION_1_2)
             .build()
     }
 
-    /** 资料库存储；#32 的检索直接复用这个接缝。 */
-    val documentStore: DocumentStore by lazy { RoomDocumentStore(knowledgeDatabase) }
+    private val roomDocumentStore: RoomDocumentStore by lazy {
+        RoomDocumentStore(knowledgeDatabase)
+    }
+
+    /** 资料库存储；检索与向量化复用同一个 Room 存储。 */
+    val documentStore: DocumentStore get() = roomDocumentStore
+
+    val chunkVectorStore: ChunkVectorStore get() = roomDocumentStore
+
+    /** ONNX 嵌入后端；模型只在首次真正需要向量时加载。 */
+    val embeddingBackend: OnnxEmbeddingBackend by lazy {
+        OnnxEmbeddingBackend(applicationContext.assets)
+    }
+
+    val documentIndexer: DocumentIndexer by lazy {
+        DocumentIndexer(
+            store = documentStore,
+            vectorStore = chunkVectorStore,
+            backend = embeddingBackend,
+        )
+    }
+
+    val knowledgeSearch: KnowledgeSearch by lazy {
+        KnowledgeSearch(
+            store = documentStore,
+            vectorStore = chunkVectorStore,
+            backend = embeddingBackend,
+        )
+    }
+
+    val embeddingStats: () -> EmbeddingStats = { embeddingBackend.stats() }
 
     private val documentParser: DocumentParser by lazy {
         AndroidDocumentParser(applicationContext)

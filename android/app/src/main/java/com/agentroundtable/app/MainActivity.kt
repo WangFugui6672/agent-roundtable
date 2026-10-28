@@ -254,6 +254,8 @@ private fun LibraryRoute(container: AppContainer, onBack: () -> Unit) {
                 LibraryViewModel(
                     knowledgeBase = container.knowledgeBase,
                     sourceReader = container.documentSourceReader,
+                    documentIndexer = container.documentIndexer,
+                    embeddingStats = container.embeddingStats,
                 )
             }
         }
@@ -269,6 +271,7 @@ private fun LibraryRoute(container: AppContainer, onBack: () -> Unit) {
         onImportClicked = { picker.launch(DocumentFormat.pickerMimeTypes) },
         onDelete = viewModel::delete,
         onDismissError = viewModel::dismissError,
+        onDismissNotice = viewModel::dismissNotice,
         onBack = onBack,
     )
 }
