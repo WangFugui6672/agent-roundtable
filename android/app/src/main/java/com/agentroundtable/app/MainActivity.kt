@@ -177,6 +177,8 @@ private fun RoomRoute(
                     api = container.apiClient,
                     cache = container.roomCache,
                     sessionProvider = { container.guestSessionStore.read() },
+                    turnRunner = container.turnRunner,
+                    providerSettings = container.providerSettings,
                 )
             }
         }
@@ -186,6 +188,7 @@ private fun RoomRoute(
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val deleted by viewModel.deleted.collectAsStateWithLifecycle()
     val deleteError by viewModel.deleteError.collectAsStateWithLifecycle()
+    val streaming by viewModel.streaming.collectAsStateWithLifecycle()
 
     LaunchedEffect(deleted) {
         if (deleted) onBack()
@@ -194,6 +197,7 @@ private fun RoomRoute(
     RoomScreen(
         view = view,
         connection = connection,
+        streaming = streaming,
         onBack = onBack,
         onDelete = viewModel::delete,
         deleteError = deleteError,

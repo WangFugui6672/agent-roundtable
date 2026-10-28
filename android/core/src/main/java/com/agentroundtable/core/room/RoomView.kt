@@ -9,6 +9,13 @@ data class ParticipantView(
     val name: String,
     val key: String,
     val state: String,
+    val tagline: String = "",
+    val expertise: String = "",
+    val goal: String = "",
+    val defaultStance: String = "",
+    val style: String = "",
+    val bannedBehaviors: List<String> = emptyList(),
+    val maxReplyChars: Int = 180,
 )
 
 /** 实时连接状态。 */
@@ -67,14 +74,32 @@ data class RoomView(
     val cursorExpired: Boolean = false,
     /** 未配置 Provider 的圆桌由客户端驱动 Mock 脚本。 */
     val isMock: Boolean = false,
+    /** 是否已经收到过 `room.joined` 快照；缓存恢复的视图为 false。 */
+    val hasSnapshot: Boolean = false,
     val diagnostic: String? = null,
 )
 
-/** 参与者快照中的 Agent 定义。 */
-internal fun AgentProfile.toParticipant(position: Int, state: String) = ParticipantView(
-    id = id,
+/**
+ * 参与者快照转成界面模型。
+ *
+ * [participantId] 必须是 RoundtableAgent 的 id（Turn 与引用都用它），
+ * 不是 AgentProfile 的 id。
+ */
+internal fun AgentProfile.toParticipant(
+    participantId: String,
+    position: Int,
+    state: String,
+) = ParticipantView(
+    id = participantId,
     position = position,
     name = name,
     key = key,
     state = state,
+    tagline = tagline,
+    expertise = expertise,
+    goal = goal,
+    defaultStance = defaultStance,
+    style = style,
+    bannedBehaviors = bannedBehaviors,
+    maxReplyChars = maxReplyChars,
 )

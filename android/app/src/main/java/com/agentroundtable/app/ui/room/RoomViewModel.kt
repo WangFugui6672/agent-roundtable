@@ -8,7 +8,12 @@ import com.agentroundtable.core.room.ConnectionState
 import com.agentroundtable.core.room.RoomCache
 import com.agentroundtable.core.room.RoomController
 import com.agentroundtable.core.room.RoomView
+import com.agentroundtable.core.provider.ProviderSettings
+import com.agentroundtable.core.turn.TurnRunner
+import com.agentroundtable.core.turn.TurnRunResult
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -19,6 +24,8 @@ class RoomViewModel(
     private val api: ApiClient,
     private val cache: RoomCache,
     private val sessionProvider: suspend () -> String?,
+    private val turnRunner: TurnRunner? = null,
+    private val providerSettings: ProviderSettings? = null,
 ) : ViewModel() {
     val view: StateFlow<RoomView> = controller.view
     val connection: StateFlow<ConnectionState> = controller.connection
@@ -29,6 +36,10 @@ class RoomViewModel(
     private val _deleteError = MutableStateFlow<String?>(null)
     val deleteError: StateFlow<String?> = _deleteError.asStateFlow()
 
+    /** 正在流式生成中的文本；提交后由 `message.completed` 事件替换为正式发言。 */
+    private val _streaming = MutableStateFlow<String?>(null)
+    val streaming: StateFlow<String?> = _streaming.asStateFlow()
+
     init {
         viewModelScope.launch {
             val sessionId = sessionProvider() ?: return@launch
@@ -37,7 +48,77 @@ class RoomViewModel(
                 roundtableId = roundtableId,
                 sessionId = sessionId,
             )
+            runTurns(sessionId)
         }
+    }
+
+    /**
+     * 只要圆桌使用真实 Provider 就持续申请并执行 Turn。
+     *
+     * Mock 圆桌由服务端脚本驱动，客户端不参与生成。
+     */
+    private suspend fun runTurns(sessionId: String) {
+        val runner = turnRunner ?: return
+        val settings = providerSettings ?: return
+        val state = settings.load()
+        val configuration = state.configuration ?: return
+        if (!state.isComplete) return
+        val apiKey = settings.apiKey() ?: return
+
+        // 等 `room.joined` 到达：缓存恢复的视图没有参与者上下文，装不出 prompt。
+        withTimeoutOrNull(READY_TIMEOUT_MS) {
+            controller.view.first { it.hasSnapshot && it.participants.isNotEmpty() }
+        } ?: return
+
+        repeat(MAX_TURNS_PER_VISIT) {
+            val current = controller.view.value
+            if (current.isMock) return
+            if (current.status in TERMINAL_STATUSES) return
+            if (controller.connection.value == ConnectionState.Closed) return
+
+            val transcript = current.entries
+                .filterIsInstance<com.agentroundtable.core.room.RoomEntry.MessageEntry>()
+                .map { com.agentroundtable.core.turn.TranscriptLine(it.message.author.name, it.message.body) }
+
+            val result = runner.runOnce(
+                sessionId = sessionId,
+                roundtableId = roundtableId,
+                configuration = configuration,
+                apiKey = apiKey,
+                transcript = transcript,
+                contextFor = { agentId ->
+                    current.participants.firstOrNull { it.id == agentId }?.let { participant ->
+                        com.agentroundtable.core.turn.PromptContext(
+                            topic = current.topic,
+                            agentName = participant.name,
+                            tagline = participant.tagline,
+                            expertise = participant.expertise,
+                            goal = participant.goal,
+                            defaultStance = participant.defaultStance,
+                            style = participant.style,
+                            bannedBehaviors = participant.bannedBehaviors,
+                            maxReplyChars = participant.maxReplyChars,
+                            roundNumber = current.currentRound,
+                        )
+                    }
+                },
+                onDelta = { delta ->
+                    _streaming.value = (_streaming.value ?: "") + delta
+                },
+            )
+            _streaming.value = null
+
+            when (result) {
+                TurnRunResult.NoTurn, is TurnRunResult.Failed -> return
+                is TurnRunResult.Spoke, TurnRunResult.Passed -> Unit
+            }
+        }
+    }
+
+    private companion object {
+        const val MAX_TURNS_PER_VISIT = 12
+        const val READY_TIMEOUT_MS = 20_000L
+        val TERMINAL_STATUSES = setOf("completed", "failed", "archived")
     }
 
     /**

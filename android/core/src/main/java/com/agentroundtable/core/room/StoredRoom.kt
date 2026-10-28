@@ -10,6 +10,13 @@ data class StoredParticipant(
     val name: String,
     val key: String,
     val state: String,
+    val tagline: String = "",
+    val expertise: String = "",
+    val goal: String = "",
+    val defaultStance: String = "",
+    val style: String = "",
+    val bannedBehaviors: List<String> = emptyList(),
+    val maxReplyChars: Int = 180,
 )
 
 /**

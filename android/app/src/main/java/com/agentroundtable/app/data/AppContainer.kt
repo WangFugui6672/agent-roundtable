@@ -8,6 +8,8 @@ import com.agentroundtable.app.data.provider.KeystoreSecretStore
 import com.agentroundtable.app.data.provider.PreferencesNoticeStore
 import com.agentroundtable.app.data.provider.PreferencesProviderStorage
 import com.agentroundtable.core.provider.ProviderProbe
+import com.agentroundtable.core.turn.ProviderChatClient
+import com.agentroundtable.core.turn.TurnRunner
 import com.agentroundtable.core.provider.ProviderSettings
 import com.agentroundtable.app.data.cache.RoundtableDatabase
 import com.agentroundtable.core.HomeRepository
@@ -61,6 +63,10 @@ class AppContainer(context: Context) {
     }
 
     val providerProbe: ProviderProbe by lazy { ProviderProbe(OkHttpTransport()) }
+
+    val chatClient: ProviderChatClient by lazy { ProviderChatClient(OkHttpStreamSource()) }
+
+    val turnRunner: TurnRunner by lazy { TurnRunner(apiClient, chatClient) }
 
     val socketFactory: OkHttpSocketFactory by lazy {
         OkHttpSocketFactory(baseUrl = BuildConfig.BACKEND_BASE_URL)

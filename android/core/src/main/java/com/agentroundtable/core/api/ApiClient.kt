@@ -4,6 +4,11 @@ import com.agentroundtable.core.model.AgentProfile
 import com.agentroundtable.core.model.GuestSession
 import com.agentroundtable.core.model.ProviderMetadata
 import com.agentroundtable.core.model.Roundtable
+import com.agentroundtable.core.turn.FailTurnRequest
+import com.agentroundtable.core.turn.MessageSubmission
+import com.agentroundtable.core.turn.NextTurnResponse
+import com.agentroundtable.core.turn.PassTurnRequest
+import com.agentroundtable.core.turn.SubmitMessageRequest
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -76,6 +81,71 @@ class ApiClient(
             ),
             decode = { json.decodeFromString<Roundtable>(it) },
         )
+
+    suspend fun nextTurn(sessionId: String, roundtableId: String): ApiResult<NextTurnResponse> =
+        call(
+            path = "/api/v1/roundtables/$roundtableId/turns/next",
+            method = "POST",
+            sessionId = sessionId,
+            body = "",
+            decode = { json.decodeFromString<NextTurnResponse>(it) },
+        )
+
+    suspend fun submitMessage(
+        sessionId: String,
+        roundtableId: String,
+        submission: MessageSubmission,
+    ): ApiResult<Unit> = call(
+        path = "/api/v1/roundtables/$roundtableId/messages",
+        method = "POST",
+        sessionId = sessionId,
+        body = json.encodeToString(
+            SubmitMessageRequest(
+                turnId = submission.turnId,
+                roundtableAgentId = submission.roundtableAgentId,
+                messageType = submission.messageType,
+                claim = submission.claim,
+                body = submission.body,
+                stance = submission.stance,
+                references = submission.references,
+                challengeTargetAgentId = submission.challengeTargetAgentId,
+                confidence = submission.confidence,
+            ),
+        ),
+        decode = { },
+    )
+
+    suspend fun passTurn(
+        sessionId: String,
+        roundtableId: String,
+        turnId: String,
+        roundtableAgentId: String,
+    ): ApiResult<Unit> = call(
+        path = "/api/v1/roundtables/$roundtableId/turns/pass",
+        method = "POST",
+        sessionId = sessionId,
+        body = json.encodeToString(PassTurnRequest(turnId, roundtableAgentId)),
+        decode = { },
+    )
+
+    suspend fun failTurn(
+        sessionId: String,
+        roundtableId: String,
+        turnId: String,
+        roundtableAgentId: String,
+        failureCode: String,
+        message: String,
+        retryable: Boolean,
+        partial: String? = null,
+    ): ApiResult<Unit> = call(
+        path = "/api/v1/roundtables/$roundtableId/turns/fail",
+        method = "POST",
+        sessionId = sessionId,
+        body = json.encodeToString(
+            FailTurnRequest(turnId, roundtableAgentId, failureCode, message, retryable, partial),
+        ),
+        decode = { },
+    )
 
     /** 删除圆桌。成功返回 null 值，失败返回错误信封。 */
     suspend fun deleteRoundtable(sessionId: String, roundtableId: String): ApiResult<Unit> {

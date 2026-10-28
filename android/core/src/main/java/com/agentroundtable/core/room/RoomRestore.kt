@@ -10,7 +10,20 @@ fun StoredRoom.toRoomView(): RoomView {
         currentRound = currentRound,
         maxRounds = maxRounds,
         participants = participants.map {
-            ParticipantView(it.id, it.position, it.name, it.key, it.state)
+            ParticipantView(
+                id = it.id,
+                position = it.position,
+                name = it.name,
+                key = it.key,
+                state = it.state,
+                tagline = it.tagline,
+                expertise = it.expertise,
+                goal = it.goal,
+                defaultStance = it.defaultStance,
+                style = it.style,
+                bannedBehaviors = it.bannedBehaviors,
+                maxReplyChars = it.maxReplyChars,
+            )
         },
         entries = messages.map { message ->
             RoomEntry.MessageEntry(
@@ -30,7 +43,20 @@ fun RoomView.toStoredRoom(savedAt: Long): StoredRoom = StoredRoom(
     currentRound = currentRound,
     maxRounds = maxRounds,
     participants = participants.map {
-        StoredParticipant(it.id, it.position, it.name, it.key, it.state)
+        StoredParticipant(
+            id = it.id,
+            position = it.position,
+            name = it.name,
+            key = it.key,
+            state = it.state,
+            tagline = it.tagline,
+            expertise = it.expertise,
+            goal = it.goal,
+            defaultStance = it.defaultStance,
+            style = it.style,
+            bannedBehaviors = it.bannedBehaviors,
+            maxReplyChars = it.maxReplyChars,
+        )
     },
     messages = entries.filterIsInstance<RoomEntry.MessageEntry>().map { it.message },
     lastSequence = lastSequence,

@@ -63,11 +63,9 @@ class RoomProjection(
             currentRound = payload.roundtable.currentRound,
             maxRounds = payload.roundtable.maxRounds,
             participants = payload.roundtable.participants.map {
-                ParticipantView(
-                    id = it.id,
+                it.agent.toParticipant(
+                    participantId = it.id,
                     position = it.position,
-                    name = it.agent.name,
-                    key = it.agent.key,
                     state = it.state,
                 )
             },
@@ -75,6 +73,7 @@ class RoomProjection(
             lastSequence = cursor,
             cursorExpired = cursorExpired,
             isMock = payload.roundtable.provider == null,
+            hasSnapshot = true,
         )
         return view
     }

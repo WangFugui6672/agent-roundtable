@@ -52,6 +52,7 @@ import com.agentroundtable.core.room.Stance
 fun RoomScreen(
     view: RoomView,
     connection: ConnectionState,
+    streaming: String? = null,
     onBack: () -> Unit,
     onDelete: () -> Unit = {},
     deleteError: String? = null,
@@ -163,6 +164,9 @@ fun RoomScreen(
                         is RoomEntry.Notice -> NoticeRow(entry)
                     }
                 }
+                streaming?.takeIf { it.isNotBlank() }?.let { text ->
+                    item(key = "streaming") { StreamingCard(text) }
+                }
             }
         }
     }
@@ -247,6 +251,22 @@ private fun MessageCard(entry: RoomEntry.MessageEntry) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun StreamingCard(text: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("room.streaming"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(14.dp),
+        )
     }
 }
 
