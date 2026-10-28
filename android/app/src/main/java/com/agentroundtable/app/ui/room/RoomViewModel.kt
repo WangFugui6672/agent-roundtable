@@ -11,6 +11,7 @@ import com.agentroundtable.core.room.RoomView
 import com.agentroundtable.core.provider.ProviderSettings
 import com.agentroundtable.core.turn.TurnRunner
 import com.agentroundtable.core.turn.TurnRunResult
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -40,16 +41,71 @@ class RoomViewModel(
     private val _streaming = MutableStateFlow<String?>(null)
     val streaming: StateFlow<String?> = _streaming.asStateFlow()
 
+    /** 控制命令失败时的可展示信息。 */
+    private val _controlMessage = MutableStateFlow<String?>(null)
+    val controlMessage: StateFlow<String?> = _controlMessage.asStateFlow()
+
+    private var sessionId: String? = null
+    private var turnsJob: Job? = null
+
     init {
         viewModelScope.launch {
             val sessionId = sessionProvider() ?: return@launch
+            this@RoomViewModel.sessionId = sessionId
             controller.connect(
                 scope = viewModelScope,
                 roundtableId = roundtableId,
                 sessionId = sessionId,
             )
-            runTurns(sessionId)
+            startTurns()
         }
+    }
+
+    fun pause() = control { api.pauseRoundtable(it, roundtableId) }
+
+    fun resume() {
+        control { api.resumeRoundtable(it, roundtableId) }
+        startTurns()
+    }
+
+    /** 提前结束：服务端取消在途 Turn，本地同时停止生成。 */
+    fun endDiscussion() {
+        turnsJob?.cancel()
+        turnsJob = null
+        _streaming.value = null
+        control { api.endRoundtable(it, roundtableId) }
+    }
+
+    fun sendUserMessage(body: String, mentionedAgentIds: List<String>) {
+        val trimmed = body.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            val session = sessionId ?: return@launch
+            when (val result = api.sendUserMessage(session, roundtableId, trimmed, mentionedAgentIds)) {
+                is ApiResult.Failure -> _controlMessage.value = result.message
+                is ApiResult.Success -> controller.applyEvents(result.value.events)
+            }
+        }
+    }
+
+    fun consumeControlMessage() {
+        _controlMessage.value = null
+    }
+
+    private fun control(action: suspend (String) -> ApiResult<com.agentroundtable.core.turn.ControlResponse>) {
+        viewModelScope.launch {
+            val session = sessionId ?: return@launch
+            when (val result = action(session)) {
+                is ApiResult.Failure -> _controlMessage.value = result.message
+                is ApiResult.Success -> controller.applyEvents(result.value.events)
+            }
+        }
+    }
+
+    private fun startTurns() {
+        if (turnsJob?.isActive == true) return
+        val session = sessionId ?: return
+        turnsJob = viewModelScope.launch { runTurns(session) }
     }
 
     /**
@@ -74,6 +130,8 @@ class RoomViewModel(
             val current = controller.view.value
             if (current.isMock) return
             if (current.status in TERMINAL_STATUSES) return
+            // 暂停期间不签发新 Turn；继续时由 resume 重新启动本循环。
+            if (current.status == "paused") return
             if (controller.connection.value == ConnectionState.Closed) return
 
             val transcript = current.entries

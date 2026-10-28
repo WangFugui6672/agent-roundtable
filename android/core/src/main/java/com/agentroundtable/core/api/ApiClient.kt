@@ -4,11 +4,13 @@ import com.agentroundtable.core.model.AgentProfile
 import com.agentroundtable.core.model.GuestSession
 import com.agentroundtable.core.model.ProviderMetadata
 import com.agentroundtable.core.model.Roundtable
+import com.agentroundtable.core.turn.ControlResponse
 import com.agentroundtable.core.turn.FailTurnRequest
 import com.agentroundtable.core.turn.MessageSubmission
 import com.agentroundtable.core.turn.NextTurnResponse
 import com.agentroundtable.core.turn.PassTurnRequest
 import com.agentroundtable.core.turn.SubmitMessageRequest
+import com.agentroundtable.core.turn.UserMessageRequest
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -145,6 +147,44 @@ class ApiClient(
             FailTurnRequest(turnId, roundtableAgentId, failureCode, message, retryable, partial),
         ),
         decode = { },
+    )
+
+    /** 暂停圆桌。已暂停时重复调用是幂等的。 */
+    suspend fun pauseRoundtable(sessionId: String, roundtableId: String): ApiResult<ControlResponse> =
+        control(sessionId, roundtableId, "pause")
+
+    /** 继续圆桌。 */
+    suspend fun resumeRoundtable(sessionId: String, roundtableId: String): ApiResult<ControlResponse> =
+        control(sessionId, roundtableId, "resume")
+
+    /** 提前结束圆桌，进入总结。 */
+    suspend fun endRoundtable(sessionId: String, roundtableId: String): ApiResult<ControlResponse> =
+        control(sessionId, roundtableId, "end")
+
+    /** 发送用户消息；点名的唯一依据是 [mentionedAgentIds]。 */
+    suspend fun sendUserMessage(
+        sessionId: String,
+        roundtableId: String,
+        body: String,
+        mentionedAgentIds: List<String> = emptyList(),
+    ): ApiResult<ControlResponse> = call(
+        path = "/api/v1/roundtables/$roundtableId/user-messages",
+        method = "POST",
+        sessionId = sessionId,
+        body = json.encodeToString(UserMessageRequest(body, mentionedAgentIds)),
+        decode = { json.decodeFromString<ControlResponse>(it) },
+    )
+
+    private suspend fun control(
+        sessionId: String,
+        roundtableId: String,
+        action: String,
+    ): ApiResult<ControlResponse> = call(
+        path = "/api/v1/roundtables/$roundtableId/$action",
+        method = "POST",
+        sessionId = sessionId,
+        body = "",
+        decode = { json.decodeFromString<ControlResponse>(it) },
     )
 
     /** 删除圆桌。成功返回 null 值，失败返回错误信封。 */

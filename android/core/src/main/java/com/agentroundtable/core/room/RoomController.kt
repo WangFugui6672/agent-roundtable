@@ -99,6 +99,25 @@ class RoomController(
         _view.value = projection.snapshot()
     }
 
+    /**
+     * 把控制命令响应里带回的事件并入投影。
+     *
+     * 这些事件通常也会经 WebSocket 到达，投影按事件 ID 去重，因此重复并入是安全的；
+     * 连接中断时它们还能保证界面状态正确。
+     */
+    suspend fun applyEvents(envelopes: List<EventEnvelope>) {
+        if (envelopes.isEmpty()) return
+        var changed = false
+        envelopes.forEach { envelope ->
+            if (envelope.eventType == EventTypes.ROOM_JOINED) return@forEach
+            if (projection.apply(envelope)) changed = true
+        }
+        if (changed) {
+            _view.value = projection.snapshot()
+            persist()
+        }
+    }
+
     private suspend fun onText(text: String, tryMockRun: Boolean) {
         val envelope = EventEnvelope.decode(text) ?: return
         if (envelope.eventType == EventTypes.ROOM_JOINED) {

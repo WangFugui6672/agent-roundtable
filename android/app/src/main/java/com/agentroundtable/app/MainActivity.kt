@@ -189,6 +189,7 @@ private fun RoomRoute(
     val deleted by viewModel.deleted.collectAsStateWithLifecycle()
     val deleteError by viewModel.deleteError.collectAsStateWithLifecycle()
     val streaming by viewModel.streaming.collectAsStateWithLifecycle()
+    val controlMessage by viewModel.controlMessage.collectAsStateWithLifecycle()
 
     LaunchedEffect(deleted) {
         if (deleted) onBack()
@@ -201,6 +202,11 @@ private fun RoomRoute(
         onBack = onBack,
         onDelete = viewModel::delete,
         deleteError = deleteError,
+        onPause = viewModel::pause,
+        onResume = viewModel::resume,
+        onEnd = viewModel::endDiscussion,
+        onSendMessage = viewModel::sendUserMessage,
+        controlMessage = controlMessage,
     )
 }
 

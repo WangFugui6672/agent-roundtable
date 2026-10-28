@@ -15,9 +15,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -56,6 +60,11 @@ fun RoomScreen(
     onBack: () -> Unit,
     onDelete: () -> Unit = {},
     deleteError: String? = null,
+    onPause: () -> Unit = {},
+    onResume: () -> Unit = {},
+    onEnd: () -> Unit = {},
+    onSendMessage: (String, List<String>) -> Unit = { _, _ -> },
+    controlMessage: String? = null,
     modifier: Modifier = Modifier,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
@@ -125,6 +134,15 @@ fun RoomScreen(
                 },
             )
         },
+        bottomBar = {
+            RoomControlBar(
+                view = view,
+                onPause = onPause,
+                onResume = onResume,
+                onEnd = onEnd,
+                onSendMessage = onSendMessage,
+            )
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -134,6 +152,22 @@ fun RoomScreen(
         ) {
             ParticipantStrip(view.participants)
             ConnectionBanner(connection)
+            controlMessage?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            if (view.status == "running" && view.entries.any { it is RoomEntry.Notice && it.kind == NoticeKind.PausePending }) {
+                Text(
+                    text = stringResource(R.string.room_pause_pending_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             deleteError?.let {
                 Text(
                     text = it,
@@ -249,6 +283,104 @@ private fun MessageCard(entry: RoomEntry.MessageEntry) {
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoomControlBar(
+    view: RoomView,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onEnd: () -> Unit,
+    onSendMessage: (String, List<String>) -> Unit,
+) {
+    var draft by remember { mutableStateOf("") }
+    var mentions by remember { mutableStateOf(emptyList<String>()) }
+    var confirmEnd by remember { mutableStateOf(false) }
+    val finished = view.status in setOf("completed", "failed", "archived")
+
+    if (confirmEnd) {
+        AlertDialog(
+            onDismissRequest = { confirmEnd = false },
+            title = { Text(stringResource(R.string.room_end)) },
+            text = { Text(stringResource(R.string.room_end_confirm)) },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirmEnd = false; onEnd() },
+                    modifier = Modifier.testTag("room.end.confirm"),
+                ) { Text(stringResource(R.string.room_end)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmEnd = false }) { Text(stringResource(R.string.room_delete_cancel)) }
+            },
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (!finished) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (view.status == "paused") {
+                    OutlinedButton(
+                        onClick = onResume,
+                        modifier = Modifier.testTag("room.resume"),
+                    ) { Text(stringResource(R.string.room_resume)) }
+                } else {
+                    OutlinedButton(
+                        onClick = onPause,
+                        modifier = Modifier.testTag("room.pause"),
+                    ) { Text(stringResource(R.string.room_pause)) }
+                }
+                OutlinedButton(
+                    onClick = { confirmEnd = true },
+                    modifier = Modifier.testTag("room.end"),
+                ) { Text(stringResource(R.string.room_end)) }
+            }
+
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                view.participants.sortedBy { it.position }.forEach { participant ->
+                    FilterChip(
+                        selected = participant.id in mentions,
+                        onClick = {
+                            mentions = if (participant.id in mentions) {
+                                mentions - participant.id
+                            } else {
+                                mentions + participant.id
+                            }
+                        },
+                        label = { Text(participant.name) },
+                        modifier = Modifier.testTag("room.mention.${participant.key}"),
+                    )
+                }
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.weight(1f).testTag("room.composer"),
+                    placeholder = { Text(stringResource(R.string.room_message_hint)) },
+                    maxLines = 3,
+                )
+                Button(
+                    onClick = {
+                        onSendMessage(draft, mentions)
+                        draft = ""
+                        mentions = emptyList()
+                    },
+                    enabled = draft.isNotBlank(),
+                    modifier = Modifier.testTag("room.send"),
+                ) { Text(stringResource(R.string.room_send)) }
             }
         }
     }
