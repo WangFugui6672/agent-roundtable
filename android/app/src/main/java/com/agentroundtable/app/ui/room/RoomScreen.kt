@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,12 +46,16 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.agentroundtable.app.R
 import com.agentroundtable.app.ui.theme.AgentRoundtableTheme
+import com.agentroundtable.core.model.RoundSummary
+import com.agentroundtable.core.model.SummaryItem
 import com.agentroundtable.core.room.ConnectionState
+import com.agentroundtable.core.room.Message
 import com.agentroundtable.core.room.NoticeKind
 import com.agentroundtable.core.room.ParticipantView
 import com.agentroundtable.core.room.RoomEntry
 import com.agentroundtable.core.room.RoomView
 import com.agentroundtable.core.room.Stance
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +71,10 @@ fun RoomScreen(
     onEnd: () -> Unit = {},
     onSendMessage: (String, List<String>) -> Unit = { _, _ -> },
     controlMessage: String? = null,
+    summaryGenerating: Boolean = false,
+    summaryError: String? = null,
+    onGenerateSummary: () -> Unit = {},
+    onRegenerateSummary: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
@@ -88,9 +98,14 @@ fun RoomScreen(
         )
     }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val messagesById = remember(view.entries) {
+        view.entries.filterIsInstance<RoomEntry.MessageEntry>()
+            .associate { it.message.id to it.message }
+    }
 
     // 只有位于底部时才自动跟随新内容，向上翻阅历史时不打断阅读。
-    LaunchedEffect(view.entries.size) {
+    LaunchedEffect(view.entries.size, view.summary?.version, view.status) {
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last >= 0 && listState.firstVisibleItemIndex >= last - 4) {
             listState.animateScrollToItem(view.entries.size)
@@ -198,6 +213,24 @@ fun RoomScreen(
                         is RoomEntry.Notice -> NoticeRow(entry)
                     }
                 }
+                if (view.summary != null || view.status == "summarizing") {
+                    item(key = "room.summary") {
+                        SummaryCard(
+                            summary = view.summary,
+                            messagesById = messagesById,
+                            generating = summaryGenerating,
+                            error = summaryError,
+                            onGenerate = onGenerateSummary,
+                            onRegenerate = onRegenerateSummary,
+                            onReferenceClick = { messageId ->
+                                val index = view.entries.indexOfFirst { it.key == messageId }
+                                if (index >= 0) {
+                                    scope.launch { listState.animateScrollToItem(index) }
+                                }
+                            },
+                        )
+                    }
+                }
                 streaming?.takeIf { it.isNotBlank() }?.let { text ->
                     item(key = "streaming") { StreamingCard(text) }
                 }
@@ -283,6 +316,183 @@ private fun MessageCard(entry: RoomEntry.MessageEntry) {
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryCard(
+    summary: RoundSummary?,
+    messagesById: Map<String, Message>,
+    generating: Boolean,
+    error: String?,
+    onGenerate: () -> Unit,
+    onRegenerate: () -> Unit,
+    onReferenceClick: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().testTag("summary.card")) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.summary_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.weight(1f))
+                summary?.let {
+                    Text(
+                        text = stringResource(R.string.summary_version, it.version),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("summary.version"),
+                    )
+                }
+            }
+
+            if (summary != null) {
+                if (summary.degraded) {
+                    Text(
+                        text = stringResource(R.string.summary_degraded),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("summary.degraded"),
+                    )
+                }
+                SummarySection(
+                    title = stringResource(R.string.summary_consensus),
+                    tag = "consensus",
+                    items = summary.consensus,
+                    messagesById = messagesById,
+                    onReferenceClick = onReferenceClick,
+                )
+                SummarySection(
+                    title = stringResource(R.string.summary_dissent),
+                    tag = "dissent",
+                    items = summary.dissent,
+                    messagesById = messagesById,
+                    onReferenceClick = onReferenceClick,
+                )
+                SummarySection(
+                    title = stringResource(R.string.summary_recommendations),
+                    tag = "recommendations",
+                    items = summary.recommendations,
+                    messagesById = messagesById,
+                    onReferenceClick = onReferenceClick,
+                )
+                SummarySection(
+                    title = stringResource(R.string.summary_unresolved),
+                    tag = "unresolved",
+                    items = summary.unresolved,
+                    messagesById = messagesById,
+                    onReferenceClick = onReferenceClick,
+                )
+                if (!summary.hasContent) {
+                    Text(
+                        text = stringResource(R.string.summary_no_content),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Button(
+                    onClick = onRegenerate,
+                    enabled = !generating,
+                    modifier = Modifier.testTag("summary.regenerate"),
+                ) {
+                    Text(
+                        stringResource(
+                            if (generating) R.string.summary_generating_action else R.string.summary_regenerate,
+                        ),
+                    )
+                }
+            } else {
+                Text(
+                    text = stringResource(
+                        if (generating) R.string.summary_generating else R.string.summary_waiting,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("summary.state"),
+                )
+                Button(
+                    onClick = onGenerate,
+                    enabled = !generating,
+                    modifier = Modifier.testTag("summary.generate"),
+                ) {
+                    Text(
+                        stringResource(
+                            if (generating) R.string.summary_generating_action else R.string.summary_generate,
+                        ),
+                    )
+                }
+            }
+
+            error?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("summary.error"),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummarySection(
+    title: String,
+    tag: String,
+    items: List<SummaryItem>,
+    messagesById: Map<String, Message>,
+    onReferenceClick: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag("summary.section.$tag"),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (items.isEmpty()) {
+            Text(
+                text = stringResource(R.string.summary_empty_section),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        items.forEachIndexed { index, item ->
+            Column(
+                modifier = Modifier.fillMaxWidth().testTag("summary.item.$tag.$index"),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(text = item.text, style = MaterialTheme.typography.bodyMedium)
+                item.referenceMessageIds.forEach { messageId ->
+                    val source = messagesById[messageId]
+                    if (source != null) {
+                        TextButton(
+                            onClick = { onReferenceClick(messageId) },
+                            modifier = Modifier.testTag("summary.reference.$messageId"),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    R.string.summary_reference,
+                                    source.author.name,
+                                    source.claim?.takeIf { it.isNotBlank() } ?: source.body,
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

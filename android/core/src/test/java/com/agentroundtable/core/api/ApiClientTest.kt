@@ -105,7 +105,56 @@ class ApiClientTest {
         assertEquals(ApiErrorCode.Unknown, result.code)
     }
 
+    @Test
+    fun `reading a missing summary returns null`() = runTest {
+        transport.enqueue(200, """{"summary":null}""")
+
+        val result = api.getSummary(sessionId = "8a1f", roundtableId = "c0de")
+
+        result as ApiResult.Success
+        org.junit.Assert.assertNull(result.value.summary)
+        assertEquals("http://backend.test/api/v1/roundtables/c0de/summary", transport.requests.single().url)
+        assertEquals("8a1f", transport.requests.single().headers["X-Guest-Session"])
+    }
+
+    @Test
+    fun `submitting a summary sends the expected version and reference ids`() = runTest {
+        transport.enqueue(201, SUMMARY_RESPONSE_JSON)
+
+        val result = api.submitSummary(
+            sessionId = "8a1f",
+            roundtableId = "c0de",
+            submission = com.agentroundtable.core.model.RoundSummarySubmission(
+                expectedVersion = 2,
+                degraded = true,
+                consensus = listOf(
+                    com.agentroundtable.core.model.SummaryItem("先做实验", listOf("m1")),
+                ),
+                dissent = emptyList(),
+                recommendations = emptyList(),
+                unresolved = emptyList(),
+            ),
+        )
+
+        result as ApiResult.Success
+        assertEquals(3, result.value.summary.version)
+        val request = transport.requests.single()
+        assertEquals("POST", request.method)
+        assertTrue(request.body.orEmpty().contains("\"expected_version\":2"))
+        assertTrue(request.body.orEmpty().contains("\"reference_message_ids\":[\"m1\"]"))
+        assertTrue(request.body.orEmpty().contains("\"degraded\":true"))
+    }
+
     private companion object {
+        const val SUMMARY_RESPONSE_JSON = """
+            {"roundtable":{"id":"c0de","status":"completed","current_round":2,"last_sequence":9},
+             "summary":{"id":"s1","version":3,"degraded":true,
+               "consensus":[{"text":"先做实验","reference_message_ids":["m1"]}],
+               "dissent":[],"recommendations":[],"unresolved":[],
+               "created_at":"2026-10-26T01:05:03.456Z","updated_at":"2026-10-26T01:05:03.456Z"},
+             "events":[]}
+        """
+
         const val ROUNDTABLE_JSON = """
             {"id":"c0de","topic":"该不该把验证周期压缩到两周？","status":"ready","mode":"decision",
              "max_rounds":2,"current_round":0,"last_sequence":0,"pause_pending":false,

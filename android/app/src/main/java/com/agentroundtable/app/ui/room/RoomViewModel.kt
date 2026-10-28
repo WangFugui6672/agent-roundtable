@@ -7,12 +7,16 @@ import com.agentroundtable.core.api.ApiResult
 import com.agentroundtable.core.room.ConnectionState
 import com.agentroundtable.core.room.RoomCache
 import com.agentroundtable.core.room.RoomController
+import com.agentroundtable.core.room.RoomEntry
 import com.agentroundtable.core.room.RoomView
 import com.agentroundtable.core.provider.ProviderSettings
+import com.agentroundtable.core.summary.RoundSummaryGenerator
+import com.agentroundtable.core.summary.SummaryRunResult
 import com.agentroundtable.core.turn.TurnRunner
 import com.agentroundtable.core.turn.TurnRunResult
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +31,7 @@ class RoomViewModel(
     private val sessionProvider: suspend () -> String?,
     private val turnRunner: TurnRunner? = null,
     private val providerSettings: ProviderSettings? = null,
+    private val summaryGenerator: RoundSummaryGenerator? = null,
 ) : ViewModel() {
     val view: StateFlow<RoomView> = controller.view
     val connection: StateFlow<ConnectionState> = controller.connection
@@ -45,8 +50,17 @@ class RoomViewModel(
     private val _controlMessage = MutableStateFlow<String?>(null)
     val controlMessage: StateFlow<String?> = _controlMessage.asStateFlow()
 
+    private val _summaryGenerating = MutableStateFlow(false)
+    val summaryGenerating: StateFlow<Boolean> = _summaryGenerating.asStateFlow()
+
+    /** 结论生成或版本冲突的可展示信息。 */
+    private val _summaryError = MutableStateFlow<String?>(null)
+    val summaryError: StateFlow<String?> = _summaryError.asStateFlow()
+
     private var sessionId: String? = null
     private var turnsJob: Job? = null
+    private var summaryJob: Job? = null
+    private var autoSummaryAttempted = false
 
     init {
         viewModelScope.launch {
@@ -58,6 +72,19 @@ class RoomViewModel(
                 sessionId = sessionId,
             )
             startTurns()
+        }
+        // 讨论自然结束或用户提前结束后，自动生成一次结论；失败后不无限重试，由用户手动触发。
+        viewModelScope.launch {
+            view.collect { current ->
+                if (current.hasSnapshot &&
+                    current.status == SUMMARY_READY_STATUS &&
+                    current.summary == null &&
+                    !autoSummaryAttempted
+                ) {
+                    autoSummaryAttempted = true
+                    launchSummaryGeneration(regenerate = false)
+                }
+            }
         }
     }
 
@@ -90,6 +117,65 @@ class RoomViewModel(
 
     fun consumeControlMessage() {
         _controlMessage.value = null
+    }
+
+    /** 手动生成结论：仅在总结态且尚未保存结论时可用。 */
+    fun startSummaryGenerationIfNeeded() {
+        val current = view.value
+        if (current.status != SUMMARY_READY_STATUS || current.summary != null) return
+        launchSummaryGeneration(regenerate = false)
+    }
+
+    /** 重新生成：携带当前版本，版本过期时服务端返回冲突而不是静默覆盖。 */
+    fun regenerateSummary() {
+        if (view.value.summary == null) return
+        launchSummaryGeneration(regenerate = true)
+    }
+
+    private fun launchSummaryGeneration(regenerate: Boolean) {
+        if (summaryJob?.isActive == true || _summaryGenerating.value) return
+        val generator = summaryGenerator ?: return
+        val snapshot = view.value
+        if (regenerate && snapshot.summary == null) return
+        if (!regenerate && (snapshot.status != SUMMARY_READY_STATUS || snapshot.summary != null)) return
+
+        val expectedVersion = snapshot.summary?.version ?: 0
+        _summaryGenerating.value = true
+        _summaryError.value = null
+        summaryJob = viewModelScope.launch {
+            try {
+                val session = sessionProvider()
+                if (session == null) {
+                    _summaryError.value = "还没有可用的匿名会话。"
+                    return@launch
+                }
+                val providerState = providerSettings?.load()
+                val configuration = providerState?.configuration?.takeIf { providerState.isComplete }
+                val apiKey = if (configuration != null) providerSettings.apiKey() else null
+                val transcript = snapshot.entries
+                    .filterIsInstance<RoomEntry.MessageEntry>()
+                    .map { it.message }
+
+                when (
+                    val result = generator.generateAndSubmit(
+                        sessionId = session,
+                        roundtableId = roundtableId,
+                        topic = snapshot.topic,
+                        transcript = transcript,
+                        expectedVersion = expectedVersion,
+                        configuration = configuration,
+                        apiKey = apiKey,
+                    )
+                ) {
+                    is SummaryRunResult.Saved -> controller.applySummaryResponse(result.response)
+                    is SummaryRunResult.Conflict -> _summaryError.value = result.message
+                    is SummaryRunResult.Failed -> _summaryError.value = result.message
+                }
+            } finally {
+                _summaryGenerating.value = false
+                summaryJob = null
+            }
+        }
     }
 
     private fun control(action: suspend (String) -> ApiResult<com.agentroundtable.core.turn.ControlResponse>) {
@@ -183,7 +269,8 @@ class RoomViewModel(
     private companion object {
         const val MAX_TURNS_PER_VISIT = 12
         const val READY_TIMEOUT_MS = 20_000L
-        val TERMINAL_STATUSES = setOf("completed", "failed", "archived")
+        const val SUMMARY_READY_STATUS = "summarizing"
+        val TERMINAL_STATUSES = setOf("summarizing", "completed", "failed", "archived")
     }
 
     /**
@@ -209,6 +296,8 @@ class RoomViewModel(
     }
 
     override fun onCleared() {
+        summaryJob?.cancel()
+        summaryJob = null
         controller.disconnect()
         super.onCleared()
     }

@@ -29,6 +29,8 @@ data class Message(
     @SerialName("challenge_target_agent_id") val challengeTargetAgentId: String? = null,
     val confidence: Double? = null,
     @SerialName("is_key_point") val isKeyPoint: Boolean = false,
+    @SerialName("supersedes_message_id") val supersedesMessageId: String? = null,
+    @SerialName("superseded_by_message_id") val supersededByMessageId: String? = null,
     @SerialName("created_at") val createdAt: String = "",
 )
 

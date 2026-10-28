@@ -3,7 +3,10 @@ package com.agentroundtable.core.api
 import com.agentroundtable.core.model.AgentProfile
 import com.agentroundtable.core.model.GuestSession
 import com.agentroundtable.core.model.ProviderMetadata
+import com.agentroundtable.core.model.RoundSummarySubmission
 import com.agentroundtable.core.model.Roundtable
+import com.agentroundtable.core.model.SummaryEnvelope
+import com.agentroundtable.core.summary.RoundSummaryResponse
 import com.agentroundtable.core.turn.ControlResponse
 import com.agentroundtable.core.turn.FailTurnRequest
 import com.agentroundtable.core.turn.MessageSubmission
@@ -185,6 +188,28 @@ class ApiClient(
         sessionId = sessionId,
         body = "",
         decode = { json.decodeFromString<ControlResponse>(it) },
+    )
+
+    /** 读取结论；尚未生成时为 `{"summary": null}`。 */
+    suspend fun getSummary(sessionId: String, roundtableId: String): ApiResult<SummaryEnvelope> =
+        call(
+            path = "/api/v1/roundtables/$roundtableId/summary",
+            method = "GET",
+            sessionId = sessionId,
+            decode = { json.decodeFromString<SummaryEnvelope>(it) },
+        )
+
+    /** 提交或重新生成结论；[RoundSummarySubmission.expectedVersion] 必须是当前版本。 */
+    suspend fun submitSummary(
+        sessionId: String,
+        roundtableId: String,
+        submission: RoundSummarySubmission,
+    ): ApiResult<RoundSummaryResponse> = call(
+        path = "/api/v1/roundtables/$roundtableId/summary",
+        method = "POST",
+        sessionId = sessionId,
+        body = json.encodeToString(submission),
+        decode = { json.decodeFromString<RoundSummaryResponse>(it) },
     )
 
     /** 删除圆桌。成功返回 null 值，失败返回错误信封。 */

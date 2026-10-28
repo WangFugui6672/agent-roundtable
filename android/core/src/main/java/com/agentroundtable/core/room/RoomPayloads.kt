@@ -1,6 +1,7 @@
 package com.agentroundtable.core.room
 
 import com.agentroundtable.core.model.AgentProfile
+import com.agentroundtable.core.model.RoundSummary
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -41,6 +42,8 @@ data class ReplayMetadata(
 data class RoomJoinedPayload(
     val roundtable: RoomSnapshot,
     val messages: List<Message> = emptyList(),
+    /** 已完成圆桌的结论；未生成时为 null。 */
+    val summary: RoundSummary? = null,
     val replay: ReplayMetadata? = null,
 )
 
@@ -94,3 +97,6 @@ internal data class RoomStatusPayload(val status: String = "")
 
 @Serializable
 internal data class SummaryStartedPayload(val round: Int = 0)
+
+@Serializable
+internal data class SummaryCompletedPayload(val summary: RoundSummary)

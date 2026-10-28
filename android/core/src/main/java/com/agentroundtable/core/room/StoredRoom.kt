@@ -1,5 +1,6 @@
 package com.agentroundtable.core.room
 
+import com.agentroundtable.core.model.RoundSummary
 import kotlinx.serialization.Serializable
 
 /** 参与者在本机的快照。 */
@@ -34,6 +35,8 @@ data class StoredRoom(
     val maxRounds: Int,
     val participants: List<StoredParticipant>,
     val messages: List<Message>,
+    /** 已保存的结论；旧缓存没有该字段时为 null。 */
+    val summary: RoundSummary? = null,
     /** 已处理到的事件序号，重连时作为 `cursor` 发送。 */
     val lastSequence: Int,
     val savedAt: Long,

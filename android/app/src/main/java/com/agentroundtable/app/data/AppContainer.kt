@@ -19,6 +19,7 @@ import com.agentroundtable.core.provider.ProviderProbe
 import com.agentroundtable.core.turn.ProviderChatClient
 import com.agentroundtable.core.turn.TurnRunner
 import com.agentroundtable.core.provider.ProviderSettings
+import com.agentroundtable.core.summary.RoundSummaryGenerator
 import com.agentroundtable.app.data.cache.RoundtableDatabase
 import com.agentroundtable.core.HomeRepository
 import com.agentroundtable.core.api.ApiClient
@@ -95,6 +96,10 @@ class AppContainer(context: Context) {
     val chatClient: ProviderChatClient by lazy { ProviderChatClient(OkHttpStreamSource()) }
 
     val turnRunner: TurnRunner by lazy { TurnRunner(apiClient, chatClient) }
+
+    val summaryGenerator: RoundSummaryGenerator by lazy {
+        RoundSummaryGenerator(apiClient, chatClient)
+    }
 
     val socketFactory: OkHttpSocketFactory by lazy {
         OkHttpSocketFactory(baseUrl = BuildConfig.BACKEND_BASE_URL)

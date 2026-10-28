@@ -194,6 +194,7 @@ private fun RoomRoute(
                     sessionProvider = { container.guestSessionStore.read() },
                     turnRunner = container.turnRunner,
                     providerSettings = container.providerSettings,
+                    summaryGenerator = container.summaryGenerator,
                 )
             }
         }
@@ -205,6 +206,8 @@ private fun RoomRoute(
     val deleteError by viewModel.deleteError.collectAsStateWithLifecycle()
     val streaming by viewModel.streaming.collectAsStateWithLifecycle()
     val controlMessage by viewModel.controlMessage.collectAsStateWithLifecycle()
+    val summaryGenerating by viewModel.summaryGenerating.collectAsStateWithLifecycle()
+    val summaryError by viewModel.summaryError.collectAsStateWithLifecycle()
 
     LaunchedEffect(deleted) {
         if (deleted) onBack()
@@ -222,6 +225,10 @@ private fun RoomRoute(
         onEnd = viewModel::endDiscussion,
         onSendMessage = viewModel::sendUserMessage,
         controlMessage = controlMessage,
+        summaryGenerating = summaryGenerating,
+        summaryError = summaryError,
+        onGenerateSummary = viewModel::startSummaryGenerationIfNeeded,
+        onRegenerateSummary = viewModel::regenerateSummary,
     )
 }
 

@@ -1,6 +1,7 @@
 package com.agentroundtable.core.room
 
 import com.agentroundtable.core.model.AgentProfile
+import com.agentroundtable.core.model.RoundSummary
 
 /** 圆桌参与者。 */
 data class ParticipantView(
@@ -70,6 +71,8 @@ data class RoomView(
     val maxRounds: Int = 0,
     val participants: List<ParticipantView> = emptyList(),
     val entries: List<RoomEntry> = emptyList(),
+    /** 服务端已保存的结论；重启后从缓存恢复。 */
+    val summary: RoundSummary? = null,
     val lastSequence: Int = 0,
     val cursorExpired: Boolean = false,
     /** 未配置 Provider 的圆桌由客户端驱动 Mock 脚本。 */
