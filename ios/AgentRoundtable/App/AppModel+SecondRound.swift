@@ -1,6 +1,11 @@
 import Foundation
 import RoundtableCore
 
+private enum SecondRoundTokenBudget {
+    static let initial = 1_200
+    static let retry = 2_000
+}
+
 struct SecondRoundContext {
     let participant: Participant
     let configuration: ProviderConfiguration
@@ -43,6 +48,7 @@ extension AppModel {
         basePrompt: [ChatMessage],
         metrics: ProviderRunMetrics
     ) async -> Bool? {
+        metrics.beginAttempt()
         let prompt = attempt == 0
             ? basePrompt
             : basePrompt + [
@@ -63,13 +69,24 @@ extension AppModel {
                     conversationID: context.roundtableID,
                     prompt: prompt,
                     collector: collector,
-                    metrics: metrics
+                    metrics: metrics,
+                    maxTokens: attempt == 0
+                        ? SecondRoundTokenBudget.initial
+                        : SecondRoundTokenBudget.retry
                 ),
                 typingText: { _ in "正在组织引用与立场…" }
             )
 
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { throw ProviderError.emptyReply }
+            if metrics.lastFinishReason == "length" {
+                if attempt == 0 {
+                    return nil
+                }
+                throw ProviderError.invalidResponse(
+                    "模型输出达到 Token 上限，结构化 JSON 被截断。"
+                )
+            }
             let usage = metrics.report(retryCount: attempt)
             return try await handleSecondRoundText(
                 trimmed,

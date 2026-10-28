@@ -57,7 +57,7 @@ public enum AgentPrompt {
             - body：中文正文，不超过 \(agent.maxReplyChars) 字。
             - stance：必须与 message_type 相同。
             - reference_message_id 或 reference_index：引用候选观点中的一条。
-            - challenge_target_agent_id：仅 challenge 时必填，且必须是被引用观点的作者。
+            - challenge_target_agent_id：仅 challenge 时必填，必须原样填写被引用观点作者的 roundtable_agent_id。
             - confidence：0 到 1 之间的数字。
             不得引用自己、用户消息、pass、summary 或候选列表之外的观点。
             如果没有可引用的有效观点，只输出 PASS。
@@ -112,6 +112,7 @@ public enum AgentPrompt {
                 """
                 [\(index)] id=\(message.id.uuidString)
                 作者：\(message.author.name)
+                roundtable_agent_id=\(message.author.roundtableAgentId?.uuidString ?? "")
                 主张：\(message.claim ?? "")
                 正文：\(message.body)
                 """

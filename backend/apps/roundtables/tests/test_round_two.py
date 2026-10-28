@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import pytest
 from rest_framework.exceptions import ValidationError
 
-from apps.roundtables.models import GuestSession, Message, Roundtable, RoundtableAgent
+from apps.roundtables.models import GuestSession, Message, Roundtable, RoundtableAgent, Turn
 from apps.roundtables.services import build_join_envelope, create_message
 from apps.roundtables.tests.factories import create_presets
 
@@ -529,3 +530,60 @@ def test_round_two_completes_once_after_each_participant_reviews(api_client):
         round_two_messages[0]["challenge_target_agent_id"]
         == skeptic_message["author"]["roundtable_agent_id"]
     )
+
+
+def test_round_two_accepts_same_round_view_when_message_commit_timestamp_is_later(api_client):
+    room = make_room()
+    first = request_next_turn(api_client, room).json()["turn"]
+    submit_proposal(api_client, room, first)
+    second = request_next_turn(api_client, room).json()["turn"]
+    skeptic_message = submit_proposal(api_client, room, second)
+    third = request_next_turn(api_client, room).json()["turn"]
+    pass_turn(api_client, room, third)
+
+    round_two_first = request_next_turn(api_client, room).json()["turn"]
+    first_review = api_client.post(
+        f"/api/v1/roundtables/{room.id}/messages",
+        {
+            "turn_id": round_two_first["turn_id"],
+            "roundtable_agent_id": round_two_first["roundtable_agent_id"],
+            "message_type": "challenge",
+            "claim": "验证成本仍然被低估。",
+            "body": "我质疑这个方案，因为它没有计算团队注意力的机会成本。",
+            "stance": "challenge",
+            "references": [skeptic_message["id"]],
+            "challenge_target_agent_id": skeptic_message["author"]["roundtable_agent_id"],
+            "confidence": 0.8,
+        },
+        format="json",
+        HTTP_X_GUEST_SESSION=str(room.guest_session_id),
+    )
+    assert first_review.status_code == 201
+    first_review_message = first_review.json()["payload"]["message"]
+
+    round_two_second = request_next_turn(api_client, room).json()["turn"]
+    next_turn = Turn.objects.get(id=round_two_second["turn_id"])
+    previous_turn = Turn.objects.get(id=first_review_message["turn_id"])
+    assert previous_turn.created_at < next_turn.created_at
+
+    Message.objects.filter(id=first_review_message["id"]).update(
+        created_at=next_turn.created_at + timedelta(seconds=1)
+    )
+    response = api_client.post(
+        f"/api/v1/roundtables/{room.id}/messages",
+        {
+            "turn_id": round_two_second["turn_id"],
+            "roundtable_agent_id": round_two_second["roundtable_agent_id"],
+            "message_type": "support",
+            "claim": "接受成本约束。",
+            "body": "上一轮的质疑成立，成本需要成为实验启动前的检查项。",
+            "stance": "support",
+            "references": [first_review_message["id"]],
+            "confidence": 0.72,
+        },
+        format="json",
+        HTTP_X_GUEST_SESSION=str(room.guest_session_id),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["payload"]["message"]["references"] == [first_review_message["id"]]

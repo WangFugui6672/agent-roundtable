@@ -119,20 +119,27 @@ extension RealTurnTests {
         usageByAttempt: [ProviderUsage?] = [],
         statusCodes: [Int] = [200],
         errorAfterDeltas: Error? = nil,
-        responses: [HTTPResponse] = []
+        responses: [HTTPResponse] = [],
+        streaming: LineStreaming? = nil
     ) -> (AppModel, TurnTransport) {
         let transport = TurnTransport(responses: responses)
         let store = ProviderStore(
             secrets: secrets,
             storage: UserDefaultsProviderStorage(defaults: defaults)
         )
-        let stream = TurnLineStream(
-            deltasByAttempt: deltasByAttempt,
-            usageByAttempt: usageByAttempt,
-            statusCodes: statusCodes,
-            errorAfterDeltas: errorAfterDeltas
-        )
-        lastStream = stream
+        let stream: LineStreaming
+        if let streaming {
+            stream = streaming
+        } else {
+            let turnStream = TurnLineStream(
+                deltasByAttempt: deltasByAttempt,
+                usageByAttempt: usageByAttempt,
+                statusCodes: statusCodes,
+                errorAfterDeltas: errorAfterDeltas
+            )
+            lastStream = turnStream
+            stream = turnStream
+        }
         let model = AppModel(
             defaults: defaults,
             providerStore: store,

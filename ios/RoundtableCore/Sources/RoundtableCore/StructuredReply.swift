@@ -30,7 +30,7 @@ public enum StructuredReplyParser {
         let stance: Stance?
         let referenceMessageId: UUID?
         let referenceIndex: Int?
-        let challengeTargetAgentId: UUID?
+        let challengeTargetAgentId: String?
         let confidence: Double?
     }
 
@@ -56,12 +56,13 @@ public enum StructuredReplyParser {
             turn: turn,
             transcript: transcript
         )
-        let data = Data(jsonPayload(text).utf8)
 
-        let wire: WireReply
-        do {
-            wire = try JSONDecoder.roundtable.decode(WireReply.self, from: data)
-        } catch {
+        guard let wire = jsonPayloadCandidates(text).lazy.compactMap({ payload in
+            try? JSONDecoder.roundtable.decode(
+                WireReply.self,
+                from: Data(payload.utf8)
+            )
+        }).first else {
             throw StructuredReplyError.invalidJSON
         }
 
@@ -94,7 +95,7 @@ public enum StructuredReplyParser {
             index: wire.referenceIndex,
             candidates: candidates
         )
-        try validateChallengeTarget(
+        let challengeTargetAgentId = try resolveChallengeTargetID(
             wire.challengeTargetAgentId,
             stance: stance,
             participant: participant,
@@ -109,7 +110,7 @@ public enum StructuredReplyParser {
             body: body,
             stance: stance,
             references: [reference.id],
-            challengeTargetAgentId: wire.challengeTargetAgentId,
+            challengeTargetAgentId: challengeTargetAgentId,
             confidence: confidence
         )
     }
@@ -135,18 +136,53 @@ public enum StructuredReplyParser {
         }
     }
 
-    private static func jsonPayload(_ text: String) -> String {
-        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("```") {
-            value.removeFirst(3)
-            if value.lowercased().hasPrefix("json") {
-                value.removeFirst(4)
+    private static func jsonPayloadCandidates(_ text: String) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates = [trimmed]
+        candidates.append(contentsOf: balancedJSONObjects(in: trimmed))
+
+        var seen = Set<String>()
+        return candidates.filter { candidate in
+            !candidate.isEmpty && seen.insert(candidate).inserted
+        }
+    }
+
+    private static func balancedJSONObjects(in text: String) -> [String] {
+        let characters = Array(text)
+        var objects: [String] = []
+        var start: Int?
+        var depth = 0
+        var isInString = false
+        var isEscaped = false
+
+        for (index, character) in characters.enumerated() {
+            if isInString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\" {
+                    isEscaped = true
+                } else if character == "\"" {
+                    isInString = false
+                }
+                continue
             }
-            if value.hasSuffix("```") {
-                value.removeLast(3)
+
+            if character == "\"" {
+                isInString = true
+            } else if character == "{" {
+                if depth == 0 {
+                    start = index
+                }
+                depth += 1
+            } else if character == "}", depth > 0 {
+                depth -= 1
+                if depth == 0, let objectStart = start {
+                    objects.append(String(characters[objectStart ... index]))
+                    start = nil
+                }
             }
         }
-        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return objects
     }
 
     private static func resolveReference(
@@ -176,24 +212,34 @@ public enum StructuredReplyParser {
         return reference
     }
 
-    private static func validateChallengeTarget(
-        _ targetID: UUID?,
+    private static func resolveChallengeTargetID(
+        _ rawTarget: String?,
         stance: Stance,
         participant: Participant,
         reference: Message
-    ) throws {
-        if stance == .challenge {
-            guard let targetID else {
+    ) throws -> UUID? {
+        let target = rawTarget?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if stance != .challenge {
+            guard target.isEmpty else {
                 throw StructuredReplyError.invalidField("challenge_target_agent_id")
             }
-            guard targetID != participant.id else {
-                throw StructuredReplyError.invalidField("challenge_target_agent_id")
-            }
-            guard targetID == reference.author.roundtableAgentId else {
-                throw StructuredReplyError.invalidField("challenge_target_agent_id")
-            }
-        } else if targetID != nil {
+            return nil
+        }
+        guard !target.isEmpty,
+              let authorID = reference.author.roundtableAgentId,
+              authorID != participant.id
+        else {
             throw StructuredReplyError.invalidField("challenge_target_agent_id")
         }
+
+        let matchesID = UUID(uuidString: target) == authorID
+        let matchesName = target.caseInsensitiveCompare(reference.author.name) == .orderedSame
+        let matchesKey = reference.author.agentKey.map {
+            target.caseInsensitiveCompare($0) == .orderedSame
+        } ?? false
+        guard matchesID || matchesName || matchesKey else {
+            throw StructuredReplyError.invalidField("challenge_target_agent_id")
+        }
+        return authorID
     }
 }

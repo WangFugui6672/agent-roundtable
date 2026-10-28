@@ -5,14 +5,25 @@ final class ProviderRunMetrics {
     private let startedAt = Date()
     private var inputTokens: Int?
     private var outputTokens: Int?
+    private(set) var lastFinishReason: String?
+
+    func beginAttempt() {
+        lastFinishReason = nil
+    }
 
     func consume(_ event: ProviderStreamEvent) {
-        guard case let .usage(usage) = event else { return }
-        if let value = usage.inputTokens {
-            inputTokens = (inputTokens ?? 0) + value
-        }
-        if let value = usage.outputTokens {
-            outputTokens = (outputTokens ?? 0) + value
+        switch event {
+        case let .usage(usage):
+            if let value = usage.inputTokens {
+                inputTokens = (inputTokens ?? 0) + value
+            }
+            if let value = usage.outputTokens {
+                outputTokens = (outputTokens ?? 0) + value
+            }
+        case let .completed(finishReason):
+            lastFinishReason = finishReason
+        case .delta:
+            break
         }
     }
 
@@ -37,6 +48,25 @@ struct ProviderStreamContext {
     let prompt: [ChatMessage]
     let collector: ProviderTextCollector
     let metrics: ProviderRunMetrics
+    let maxTokens: Int
+
+    init(
+        configuration: ProviderConfiguration,
+        apiKey: String,
+        conversationID: UUID,
+        prompt: [ChatMessage],
+        collector: ProviderTextCollector,
+        metrics: ProviderRunMetrics,
+        maxTokens: Int = 400
+    ) {
+        self.configuration = configuration
+        self.apiKey = apiKey
+        self.conversationID = conversationID
+        self.prompt = prompt
+        self.collector = collector
+        self.metrics = metrics
+        self.maxTokens = maxTokens
+    }
 }
 
 struct TurnFailureContext {

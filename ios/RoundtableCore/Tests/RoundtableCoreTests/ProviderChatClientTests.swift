@@ -463,6 +463,7 @@ final class AgentPromptTests: XCTestCase {
         XCTAssertTrue(system.contains("reference_message_id"))
         XCTAssertTrue(system.contains("challenge_target_agent_id"))
         XCTAssertTrue(user.contains("6F0E0000"))
+        XCTAssertTrue(user.contains("roundtable_agent_id="))
         XCTAssertTrue(user.contains("指标可能被自选"))
     }
 

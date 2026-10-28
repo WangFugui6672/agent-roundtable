@@ -142,6 +142,59 @@ final class StructuredReplyTests: XCTestCase {
         )
     }
 
+    func testExtractsJSONObjectFromProviderPreludeFenceAndTrailingExplanation() throws {
+        let response = """
+        我会严格按以下 JSON 格式回答：
+
+        ```json
+        {
+          "message_type": "challenge",
+          "claim": "验证成本仍然被低估。",
+          "body": "我质疑这个观点，因为团队注意力也是成本。",
+          "stance": "challenge",
+          "reference_message_id": "\(referenceID.uuidString)",
+          "challenge_target_agent_id": "\(skepticID.uuidString)",
+          "confidence": 0.78
+        }
+        ```
+
+        以上是互评结果。
+        """
+
+        let submission = try StructuredReplyParser.parse(
+            response,
+            participant: advocate,
+            turn: secondRoundTurn,
+            transcript: [earlierOpinion]
+        )
+
+        XCTAssertEqual(submission.messageType, .challenge)
+        XCTAssertEqual(submission.references, [referenceID])
+    }
+
+    func testMapsChallengeTargetAgentNameToReferencedAuthorID() throws {
+        let json = """
+        {
+          "message_type": "challenge",
+          "claim": "对照店与口径检验只排除干扰，未定义有效判据。",
+          "body": "我质疑这条补充仍缺否证条件，两周后很难把改善归因到快诊动作。",
+          "stance": "challenge",
+          "reference_message_id": "\(referenceID.uuidString)",
+          "challenge_target_agent_id": "质疑派",
+          "confidence": 0.72
+        }
+        """
+
+        let submission = try StructuredReplyParser.parse(
+            json,
+            participant: advocate,
+            turn: secondRoundTurn,
+            transcript: [earlierOpinion]
+        )
+
+        XCTAssertEqual(submission.challengeTargetAgentId, skepticID)
+    }
+
     func testReferenceCandidatesExcludeAgentMessagesWithoutAnAgentID() {
         let malformed = Message(
             id: UUID(),

@@ -308,6 +308,7 @@ extension AppModel {
             configuration: stream.configuration,
             apiKey: stream.apiKey,
             messages: stream.prompt,
+            maxTokens: stream.maxTokens,
             conversationID: stream.conversationID
         ) {
             stream.metrics.consume(event)

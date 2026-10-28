@@ -126,7 +126,8 @@ def validate_agent_message(
 
     referenced_messages = list(
         Message.objects.filter(roundtable=roundtable, id__in=references).select_related(
-            "roundtable_agent"
+            "roundtable_agent",
+            "turn",
         )
     )
     if len(referenced_messages) != len(references):
@@ -141,7 +142,10 @@ def validate_agent_message(
         raise ValidationError({"references": "第二轮只能引用有效的 Agent 观点。"})
     if turn.round_number >= 2 and any(
         message.round_number > turn.round_number
-        or (message.round_number == turn.round_number and message.created_at >= turn.created_at)
+        or (
+            message.round_number == turn.round_number
+            and (message.turn_id is None or message.turn.created_at >= turn.created_at)
+        )
         for message in referenced_messages
     ):
         raise ValidationError({"references": "第二轮只能引用更早产生的观点。"})
