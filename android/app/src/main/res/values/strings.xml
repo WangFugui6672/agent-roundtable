@@ -53,4 +53,8 @@
     <string name="room_notice_budget">讨论已达预算上限：%1$s</string>
     <string name="room_notice_summary_started">正在生成结论…</string>
     <string name="room_empty">等待第一位 Agent 发言…</string>
+    <string name="room_delete">删除</string>
+    <string name="room_delete_confirm">删除这个圆桌？本机与服务器的讨论记录都会移除。</string>
+    <string name="room_delete_cancel">取消</string>
+    <string name="room_delete_confirm_action">删除</string>
 </resources>

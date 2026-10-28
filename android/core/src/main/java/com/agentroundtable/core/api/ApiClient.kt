@@ -77,6 +77,23 @@ class ApiClient(
             decode = { json.decodeFromString<Roundtable>(it) },
         )
 
+    /** 删除圆桌。成功返回 null 值，失败返回错误信封。 */
+    suspend fun deleteRoundtable(sessionId: String, roundtableId: String): ApiResult<Unit> {
+        val response = try {
+            transport.execute(
+                HttpRequest(
+                    method = "DELETE",
+                    url = baseUrl + "/api/v1/roundtables/" + roundtableId,
+                    headers = mapOf("X-Guest-Session" to sessionId),
+                ),
+            )
+        } catch (error: Exception) {
+            return ApiResult.Failure(ApiErrorCode.Unknown, "网络连接失败，请检查网络后重试。", 0)
+        }
+        if (response.statusCode in 200..299) return ApiResult.Success(Unit)
+        return errorBody(response.body, response.statusCode)
+    }
+
     private suspend inline fun <T> call(
         path: String,
         method: String,

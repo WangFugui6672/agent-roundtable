@@ -150,7 +150,12 @@ private fun RoomRoute(
             initializer {
                 RoomViewModel(
                     roundtableId = roundtableId,
-                    controller = RoomController(container.socketFactory),
+                    controller = RoomController(
+                        factory = container.socketFactory,
+                        cache = container.roomCache,
+                    ),
+                    api = container.apiClient,
+                    cache = container.roomCache,
                     sessionProvider = { container.guestSessionStore.read() },
                 )
             }
@@ -159,6 +164,18 @@ private fun RoomRoute(
     val viewModel: RoomViewModel = viewModel(key = roundtableId, factory = factory)
     val view by viewModel.view.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
+    val deleted by viewModel.deleted.collectAsStateWithLifecycle()
+    val deleteError by viewModel.deleteError.collectAsStateWithLifecycle()
 
-    RoomScreen(view = view, connection = connection, onBack = onBack)
+    LaunchedEffect(deleted) {
+        if (deleted) onBack()
+    }
+
+    RoomScreen(
+        view = view,
+        connection = connection,
+        onBack = onBack,
+        onDelete = viewModel::delete,
+        deleteError = deleteError,
+    )
 }

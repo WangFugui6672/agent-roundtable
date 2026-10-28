@@ -21,6 +21,18 @@ class RoomProjection(
 
     fun snapshot(): RoomView = view
 
+    /** 从本机缓存恢复，先给出可离线阅读的界面，再等待重连补发。 */
+    fun restore(stored: StoredRoom) {
+        seenEventIds.clear()
+        messagesById.clear()
+        entries.clear()
+        stored.messages.forEach { message ->
+            messagesById[message.id] = message
+            entries += messageEntry(message)
+        }
+        view = stored.toRoomView()
+    }
+
     /**
      * 应用 `room.joined`。
      *

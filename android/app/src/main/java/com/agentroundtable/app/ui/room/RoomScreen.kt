@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +26,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -47,8 +53,30 @@ fun RoomScreen(
     view: RoomView,
     connection: ConnectionState,
     onBack: () -> Unit,
+    onDelete: () -> Unit = {},
+    deleteError: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.room_delete)) },
+            text = { Text(stringResource(R.string.room_delete_confirm)) },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirmDelete = false; onDelete() },
+                    modifier = Modifier.testTag("room.delete.confirm"),
+                ) { Text(stringResource(R.string.room_delete_confirm_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.room_delete_cancel))
+                }
+            },
+        )
+    }
     val listState = rememberLazyListState()
 
     // 只有位于底部时才自动跟随新内容，向上翻阅历史时不打断阅读。
@@ -88,6 +116,12 @@ fun RoomScreen(
                         Text(stringResource(R.string.room_back))
                     }
                 },
+                actions = {
+                    TextButton(
+                        onClick = { confirmDelete = true },
+                        modifier = Modifier.testTag("room.delete"),
+                    ) { Text(stringResource(R.string.room_delete)) }
+                },
             )
         },
     ) { innerPadding ->
@@ -99,6 +133,14 @@ fun RoomScreen(
         ) {
             ParticipantStrip(view.participants)
             ConnectionBanner(connection)
+            deleteError?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
 
             if (view.entries.isEmpty()) {
                 Text(
