@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentroundtable.core.api.ApiClient
 import com.agentroundtable.core.api.ApiResult
+import com.agentroundtable.core.knowledge.RetrievalHit
 import com.agentroundtable.core.room.ConnectionState
 import com.agentroundtable.core.room.RoomCache
 import com.agentroundtable.core.room.RoomController
@@ -45,6 +46,15 @@ class RoomViewModel(
     /** 正在流式生成中的文本；提交后由 `message.completed` 事件替换为正式发言。 */
     private val _streaming = MutableStateFlow<String?>(null)
     val streaming: StateFlow<String?> = _streaming.asStateFlow()
+
+    /**
+     * 本地检索结果，按 Turn 标识关联到服务端随后产生的消息。
+     *
+     * 检索结果只在本机存在，不写入服务端，也不进入圆桌缓存。
+     */
+    private val _retrievalReferences = MutableStateFlow<Map<String, List<RetrievalHit>>>(emptyMap())
+    val retrievalReferences: StateFlow<Map<String, List<RetrievalHit>>> =
+        _retrievalReferences.asStateFlow()
 
     /** 控制命令失败时的可展示信息。 */
     private val _controlMessage = MutableStateFlow<String?>(null)
@@ -264,6 +274,15 @@ class RoomViewModel(
                 },
             )
             _streaming.value = null
+
+            // 只有真正注入了参考资料才记录，界面据此显示「参考了资料库的 N 个片段」。
+            if (result is TurnRunResult.Spoke &&
+                result.references.isNotEmpty() &&
+                result.turnId.isNotBlank()
+            ) {
+                _retrievalReferences.value =
+                    _retrievalReferences.value + (result.turnId to result.references)
+            }
 
             when (result) {
                 TurnRunResult.NoTurn, is TurnRunResult.Failed -> return

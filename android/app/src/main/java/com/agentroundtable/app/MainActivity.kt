@@ -217,6 +217,7 @@ private fun RoomRoute(
     val deleted by viewModel.deleted.collectAsStateWithLifecycle()
     val deleteError by viewModel.deleteError.collectAsStateWithLifecycle()
     val streaming by viewModel.streaming.collectAsStateWithLifecycle()
+    val retrievalReferences by viewModel.retrievalReferences.collectAsStateWithLifecycle()
     val controlMessage by viewModel.controlMessage.collectAsStateWithLifecycle()
     val summaryGenerating by viewModel.summaryGenerating.collectAsStateWithLifecycle()
     val summaryError by viewModel.summaryError.collectAsStateWithLifecycle()
@@ -229,6 +230,7 @@ private fun RoomRoute(
         view = view,
         connection = connection,
         streaming = streaming,
+        retrievalReferences = retrievalReferences,
         onBack = onBack,
         onDelete = viewModel::delete,
         deleteError = deleteError,

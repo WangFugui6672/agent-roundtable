@@ -28,6 +28,7 @@ import com.agentroundtable.core.local.LocalInferenceEngine
 import com.agentroundtable.core.knowledge.KnowledgeSearch
 import com.agentroundtable.core.provider.ProviderProbe
 import com.agentroundtable.core.turn.ProviderChatClient
+import com.agentroundtable.core.turn.Retrieval
 import com.agentroundtable.core.turn.TurnRunner
 import com.agentroundtable.core.provider.ProviderSettings
 import com.agentroundtable.core.summary.RoundSummaryGenerator
@@ -136,7 +137,14 @@ class AppContainer(context: Context) {
 
     val chatClient: ProviderChatClient by lazy { ProviderChatClient(OkHttpStreamSource()) }
 
-    val turnRunner: TurnRunner by lazy { TurnRunner(apiClient, chatClient) }
+    /** 圆桌发言时检索本机资料库；空资料库或嵌入不可用会自然降级为无检索。 */
+    val turnRunner: TurnRunner by lazy {
+        TurnRunner(
+            api = apiClient,
+            chat = chatClient,
+            retrieval = Retrieval { query -> knowledgeSearch.search(query) },
+        )
+    }
 
     val summaryGenerator: RoundSummaryGenerator by lazy {
         RoundSummaryGenerator(apiClient, chatClient)

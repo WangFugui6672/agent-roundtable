@@ -1,5 +1,7 @@
 package com.agentroundtable.core.turn
 
+import com.agentroundtable.core.knowledge.RetrievalHit
+
 /** 发给模型的一条消息。 */
 data class ChatMessage(val role: String, val content: String) {
     companion object {
@@ -39,17 +41,27 @@ data class TranscriptLine(
  * 把一位参与者与讨论记录转成两条消息。
  *
  * 与 iOS 的 `AgentPrompt` 保持同一语义：system 描述身份与规则，user 携带议题与讨论记录。
+ *
+ * [references] 是本次发言检索到的文档块，只追加在 system prompt 末尾的「参考资料」
+ * 段落；为空时不产生任何额外内容，送出的 prompt 与未接入资料库时逐字节一致。
  */
 object AgentPrompt {
+    /** 单次发言最多注入的参考资料数量。 */
+    const val MAX_REFERENCES = 3
+
     fun messages(
         context: PromptContext,
         transcript: List<TranscriptLine>,
+        references: List<RetrievalHit> = emptyList(),
     ): List<ChatMessage> = listOf(
-        ChatMessage.system(systemPrompt(context)),
+        ChatMessage.system(systemPrompt(context, references)),
         ChatMessage.user(userPrompt(context, transcript)),
     )
 
-    fun systemPrompt(context: PromptContext): String {
+    fun systemPrompt(
+        context: PromptContext,
+        references: List<RetrievalHit> = emptyList(),
+    ): String {
         val role = buildString {
             append("你是圆桌讨论中的「").append(context.agentName).append("」，")
             append(context.tagline).append("。\n")
@@ -63,11 +75,41 @@ object AgentPrompt {
             }
             append("讨论议题：").append(context.topic)
         }
-        if (context.roundNumber >= 2) {
-            return role + "\n\n" + STRUCTURED_RULES
+        val base = if (context.roundNumber >= 2) {
+            role + "\n\n" + STRUCTURED_RULES
+        } else {
+            role + "\n\n请只输出中文正文，不要输出 JSON、Markdown 或任何解释。" +
+                "控制在 " + context.maxReplyChars + " 字以内。"
         }
-        return role + "\n\n请只输出中文正文，不要输出 JSON、Markdown 或任何解释。" +
-            "控制在 " + context.maxReplyChars + " 字以内。"
+        return base + referenceSection(references)
+    }
+
+    /**
+     * 按相似度降序、最多 [MAX_REFERENCES] 条，结果与 [com.agentroundtable.core.knowledge.Retriever]
+     * 的排序规则一致，保证更上层拿到的引用与 prompt 内容相同。
+     */
+    fun selectReferences(references: List<RetrievalHit>): List<RetrievalHit> =
+        references
+            .sortedWith(
+                compareByDescending<RetrievalHit> { it.similarity }
+                    .thenBy { it.documentId }
+                    .thenBy { it.chunkIndex },
+            )
+            .take(MAX_REFERENCES)
+
+    private fun referenceSection(references: List<RetrievalHit>): String {
+        val selected = selectReferences(references)
+        if (selected.isEmpty()) return ""
+
+        return buildString {
+            append("\n\n参考资料（来自本机资料库，按相似度从高到低）：")
+            selected.forEachIndexed { index, hit ->
+                append('\n')
+                append(index + 1).append(". 来源：").append(hit.documentName)
+                append("（第 ").append(hit.chunkIndex + 1).append(" 块）\n")
+                append(hit.text)
+            }
+        }
     }
 
     fun userPrompt(context: PromptContext, transcript: List<TranscriptLine>): String {
