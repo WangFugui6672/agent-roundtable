@@ -2,8 +2,9 @@ package com.agentroundtable.app.data
 
 import android.content.Context
 import com.agentroundtable.app.BuildConfig
-import java.io.File
-import com.agentroundtable.app.data.cache.FileRoomCache
+import androidx.room.Room
+import com.agentroundtable.app.data.cache.RoomCacheRepository
+import com.agentroundtable.app.data.cache.RoundtableDatabase
 import com.agentroundtable.core.HomeRepository
 import com.agentroundtable.core.api.ApiClient
 
@@ -31,9 +32,12 @@ class AppContainer(context: Context) {
         HomeRepository(api = apiClient, sessions = guestSessionStore)
     }
 
-    val roomCache: FileRoomCache by lazy {
-        FileRoomCache(File(applicationContext.filesDir, "roundtable-cache"))
+    private val database: RoundtableDatabase by lazy {
+        Room.databaseBuilder(applicationContext, RoundtableDatabase::class.java, "roundtable.db")
+            .build()
     }
+
+    val roomCache: RoomCacheRepository by lazy { RoomCacheRepository(database) }
 
     val socketFactory: OkHttpSocketFactory by lazy {
         OkHttpSocketFactory(baseUrl = BuildConfig.BACKEND_BASE_URL)
