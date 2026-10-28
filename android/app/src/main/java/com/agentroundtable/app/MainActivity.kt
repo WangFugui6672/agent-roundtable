@@ -21,6 +21,8 @@ import com.agentroundtable.app.ui.HomeScreen
 import com.agentroundtable.app.ui.create.CreateScreen
 import com.agentroundtable.app.ui.create.CreateViewModel
 import com.agentroundtable.app.ui.home.HomeViewModel
+import com.agentroundtable.app.ui.provider.ProviderScreen
+import com.agentroundtable.app.ui.provider.ProviderViewModel
 import com.agentroundtable.app.ui.room.RoomScreen
 import com.agentroundtable.app.ui.room.RoomViewModel
 import com.agentroundtable.core.room.RoomController
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
 private sealed interface AppRoute {
     data object Home : AppRoute
     data object Create : AppRoute
+    data object Provider : AppRoute
     data class Room(val roundtableId: String) : AppRoute
 }
 
@@ -56,6 +59,11 @@ private fun AgentRoundtableApp(container: AppContainer) {
             container = container,
             onCreateClicked = { route = AppRoute.Create },
             onOpenRoom = { route = AppRoute.Room(it) },
+            onOpenProvider = { route = AppRoute.Provider },
+        )
+        AppRoute.Provider -> ProviderRoute(
+            container = container,
+            onBack = { route = AppRoute.Home },
         )
         AppRoute.Create -> CreateRoute(
             container = container,
@@ -75,12 +83,14 @@ private val RouteSaver = listSaver<AppRoute, String>(
         when (route) {
             AppRoute.Home -> listOf("home")
             AppRoute.Create -> listOf("create")
+            AppRoute.Provider -> listOf("provider")
             is AppRoute.Room -> listOf("room", route.roundtableId)
         }
     },
     restore = { saved ->
         when (saved.first()) {
             "create" -> AppRoute.Create
+            "provider" -> AppRoute.Provider
             "room" -> AppRoute.Room(saved.getOrElse(1) { "" })
             else -> AppRoute.Home
         }
@@ -92,6 +102,7 @@ private fun HomeRoute(
     container: AppContainer,
     onCreateClicked: () -> Unit,
     onOpenRoom: (String) -> Unit,
+    onOpenProvider: () -> Unit,
 ) {
     val factory = remember(container) {
         viewModelFactory { initializer { HomeViewModel(container.homeRepository) } }
@@ -101,7 +112,12 @@ private fun HomeRoute(
 
     LaunchedEffect(Unit) { viewModel.refresh() }
 
-    HomeScreen(state = state, onCreateClicked = onCreateClicked, onOpenRoom = onOpenRoom)
+    HomeScreen(
+        state = state,
+        onCreateClicked = onCreateClicked,
+        onOpenRoom = onOpenRoom,
+        onOpenProvider = onOpenProvider,
+    )
 }
 
 @Composable
@@ -116,6 +132,10 @@ private fun CreateRoute(
                 CreateViewModel(
                     api = container.apiClient,
                     sessionProvider = { container.guestSessionStore.read() },
+                    providerProvider = {
+                        val provider = container.providerSettings.load()
+                        provider.configuration?.takeIf { provider.isComplete }?.toMetadata()
+                    },
                 )
             }
         }
@@ -177,5 +197,35 @@ private fun RoomRoute(
         onBack = onBack,
         onDelete = viewModel::delete,
         deleteError = deleteError,
+    )
+}
+
+
+@Composable
+private fun ProviderRoute(container: AppContainer, onBack: () -> Unit) {
+    val factory = remember(container) {
+        viewModelFactory {
+            initializer {
+                ProviderViewModel(
+                    settings = container.providerSettings,
+                    probe = container.providerProbe,
+                )
+            }
+        }
+    }
+    val viewModel: ProviderViewModel = viewModel(factory = factory)
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    ProviderScreen(
+        state = state,
+        onKindSelected = viewModel::selectKind,
+        onBaseUrlChange = viewModel::updateBaseUrl,
+        onModelChange = viewModel::updateModel,
+        onApiKeyChange = viewModel::updateApiKey,
+        onSave = viewModel::save,
+        onProbe = viewModel::probe,
+        onDelete = viewModel::delete,
+        onAcknowledgeNotice = viewModel::acknowledgeNotice,
+        onBack = onBack,
     )
 }

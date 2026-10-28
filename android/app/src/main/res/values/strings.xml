@@ -7,6 +7,7 @@
     <string name="home_create">新建圆桌</string>
     <string name="home_retry">重试</string>
     <string name="home_loading">正在读取圆桌…</string>
+    <string name="home_provider">Provider</string>
 
     <string name="create_title">新建圆桌</string>
     <string name="create_topic_label">议题</string>
@@ -53,6 +54,27 @@
     <string name="room_notice_budget">讨论已达预算上限：%1$s</string>
     <string name="room_notice_summary_started">正在生成结论…</string>
     <string name="room_empty">等待第一位 Agent 发言…</string>
+    <string name="provider_title">Provider 设置</string>
+    <string name="provider_back">返回</string>
+    <string name="provider_kind">服务商</string>
+    <string name="provider_base_url">BaseURL</string>
+    <string name="provider_model">模型</string>
+    <string name="provider_api_key">API Key</string>
+    <string name="provider_api_key_hint">只保存在本机 Keystore，不会上传</string>
+    <string name="provider_api_key_saved">已保存密钥，留空表示不修改</string>
+    <string name="provider_save">保存</string>
+    <string name="provider_probe">检测连接</string>
+    <string name="provider_delete">删除配置</string>
+    <string name="provider_incomplete">Provider 配置不完整：缺少 API Key 或配置项</string>
+    <string name="provider_notice_title">第三方数据提示</string>
+    <string name="provider_notice_body">使用真实 Provider 时，你的议题、讨论内容与参考资料会直接发送给该服务商处理，不经过本项目服务器。请确认你了解并接受这一点。</string>
+    <string name="provider_notice_accept">我已知晓</string>
+    <string name="provider_probe_ok">连接成功。</string>
+    <string name="provider_probe_ok_count">连接成功，可用模型 %1$d 个。</string>
+    <string name="provider_probe_invalid_key">API Key 无效或没有访问权限（HTTP 401/403）。</string>
+    <string name="provider_probe_model_missing">连接成功，但模型 %1$s 不在该 Provider 的模型列表中。</string>
+    <string name="provider_probe_unreachable">网络请求失败：%1$s</string>
+
     <string name="room_delete">删除</string>
     <string name="room_delete_confirm">删除这个圆桌？本机与服务器的讨论记录都会移除。</string>
     <string name="room_delete_cancel">取消</string>

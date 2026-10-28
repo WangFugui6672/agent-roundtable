@@ -20,6 +20,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -44,11 +45,22 @@ fun HomeScreen(
     state: HomeState,
     onCreateClicked: () -> Unit,
     onOpenRoom: (String) -> Unit = {},
+    onOpenProvider: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.home_title)) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.home_title)) },
+                actions = {
+                    TextButton(
+                        onClick = onOpenProvider,
+                        modifier = Modifier.testTag("home.provider"),
+                    ) { Text(stringResource(R.string.home_provider)) }
+                },
+            )
+        },
         floatingActionButton = {
             if (state !is HomeState.Empty) {
                 Button(onClick = onCreateClicked, modifier = Modifier.testTag("home.create")) {

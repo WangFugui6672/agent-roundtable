@@ -38,7 +38,10 @@ class CreateViewModelTest {
     @Test
     fun `creating with a blank topic does not call the backend`() = runTest(dispatcher) {
         val transport = StubTransport { HttpResponse(200, PROFILES_JSON) }
-        val viewModel = CreateViewModel(ApiClient("http://backend.test", transport)) { "session" }
+        val viewModel = CreateViewModel(
+            api = ApiClient("http://backend.test", transport),
+            sessionProvider = { "session" },
+        )
         advanceUntilIdle()
         transport.requests.clear()
 
@@ -53,7 +56,10 @@ class CreateViewModelTest {
     @Test
     fun `creating without three agents does not call the backend`() = runTest(dispatcher) {
         val transport = StubTransport { HttpResponse(200, PROFILES_JSON) }
-        val viewModel = CreateViewModel(ApiClient("http://backend.test", transport)) { "session" }
+        val viewModel = CreateViewModel(
+            api = ApiClient("http://backend.test", transport),
+            sessionProvider = { "session" },
+        )
         advanceUntilIdle()
         transport.requests.clear()
 
@@ -75,7 +81,10 @@ class CreateViewModelTest {
                 HttpResponse(201, ROUNDTABLE_JSON)
             }
         }
-        val viewModel = CreateViewModel(ApiClient("http://backend.test", transport)) { "session" }
+        val viewModel = CreateViewModel(
+            api = ApiClient("http://backend.test", transport),
+            sessionProvider = { "session" },
+        )
         advanceUntilIdle()
 
         viewModel.updateTopic("该不该把验证周期压缩到两周？")
@@ -99,7 +108,10 @@ class CreateViewModelTest {
                 HttpResponse(429, """{"error":{"code":"active_roundtable_limit","message":"已有 3 个进行中的圆桌。"}}""")
             }
         }
-        val viewModel = CreateViewModel(ApiClient("http://backend.test", transport)) { "session" }
+        val viewModel = CreateViewModel(
+            api = ApiClient("http://backend.test", transport),
+            sessionProvider = { "session" },
+        )
         advanceUntilIdle()
 
         viewModel.updateTopic("议题")

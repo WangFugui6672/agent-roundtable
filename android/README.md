@@ -45,6 +45,12 @@ cd android
 
 配合 `adb reverse tcp:8000 tcp:8000` 可以在真机上直接连本机后端。
 
+## Provider 与密钥
+
+API Key 只写入 Android Keystore（AES-GCM 加密后再存入私有偏好文件），
+非秘密配置（类型 / BaseURL / 模型）单独保存，两者不混在一起。
+修改 BaseURL 时必须重新输入密钥——旧密钥属于另一个服务商。
+
 ## 依赖解析说明
 
 若构建时出现 `Remote host terminated the handshake`，属于本机到 Maven 仓库的瞬时 TLS 失败，重试即可；Gradle 会缓存已完成的下载。

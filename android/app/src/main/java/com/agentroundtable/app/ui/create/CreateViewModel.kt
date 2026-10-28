@@ -26,6 +26,7 @@ data class CreateUiState(
 class CreateViewModel(
     private val api: ApiClient,
     private val sessionProvider: suspend () -> String?,
+    private val providerProvider: suspend () -> com.agentroundtable.core.model.ProviderMetadata? = { null },
 ) : ViewModel() {
     private val _state = MutableStateFlow(CreateUiState())
     val state: StateFlow<CreateUiState> = _state.asStateFlow()
@@ -72,6 +73,7 @@ class CreateViewModel(
                 sessionId = sessionId,
                 topic = current.topic.trim(),
                 agentProfileIds = current.selectedProfileIds,
+                provider = providerProvider(),
             )
             _state.update {
                 when (result) {

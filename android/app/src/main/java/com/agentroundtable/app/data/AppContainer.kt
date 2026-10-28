@@ -4,6 +4,11 @@ import android.content.Context
 import com.agentroundtable.app.BuildConfig
 import androidx.room.Room
 import com.agentroundtable.app.data.cache.RoomCacheRepository
+import com.agentroundtable.app.data.provider.KeystoreSecretStore
+import com.agentroundtable.app.data.provider.PreferencesNoticeStore
+import com.agentroundtable.app.data.provider.PreferencesProviderStorage
+import com.agentroundtable.core.provider.ProviderProbe
+import com.agentroundtable.core.provider.ProviderSettings
 import com.agentroundtable.app.data.cache.RoundtableDatabase
 import com.agentroundtable.core.HomeRepository
 import com.agentroundtable.core.api.ApiClient
@@ -38,6 +43,24 @@ class AppContainer(context: Context) {
     }
 
     val roomCache: RoomCacheRepository by lazy { RoomCacheRepository(database) }
+
+    private val providerStorage: PreferencesProviderStorage by lazy {
+        PreferencesProviderStorage(applicationContext)
+    }
+
+    private val providerSecrets: KeystoreSecretStore by lazy {
+        KeystoreSecretStore(applicationContext)
+    }
+
+    val providerSettings: ProviderSettings by lazy {
+        ProviderSettings(
+            storage = providerStorage,
+            secrets = providerSecrets,
+            notices = PreferencesNoticeStore(applicationContext),
+        )
+    }
+
+    val providerProbe: ProviderProbe by lazy { ProviderProbe(OkHttpTransport()) }
 
     val socketFactory: OkHttpSocketFactory by lazy {
         OkHttpSocketFactory(baseUrl = BuildConfig.BACKEND_BASE_URL)
