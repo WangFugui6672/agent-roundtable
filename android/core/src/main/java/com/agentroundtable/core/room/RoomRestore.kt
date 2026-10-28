@@ -31,6 +31,7 @@ fun StoredRoom.toRoomView(): RoomView {
                 referenced = message.references.firstOrNull()?.let { byId[it] },
             )
         },
+        summary = summary,
         lastSequence = lastSequence,
     )
 }
@@ -59,6 +60,7 @@ fun RoomView.toStoredRoom(savedAt: Long): StoredRoom = StoredRoom(
         )
     },
     messages = entries.filterIsInstance<RoomEntry.MessageEntry>().map { it.message },
+    summary = summary,
     lastSequence = lastSequence,
     savedAt = savedAt,
 )

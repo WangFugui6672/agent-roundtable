@@ -101,6 +101,22 @@
     <string name="room_message_hint">说点什么，或点名某位 Agent</string>
     <string name="room_mention_hint">点名（可选）</string>
     <string name="room_pause_pending_hint">将在当前发言完成后暂停</string>
+    <string name="summary_title">AI 圆桌结论</string>
+    <string name="summary_version">v%1$d</string>
+    <string name="summary_degraded">模型总结不可用，已使用规则化降级结果（这不是模型生成的结论）</string>
+    <string name="summary_consensus">共识</string>
+    <string name="summary_dissent">分歧</string>
+    <string name="summary_recommendations">建议</string>
+    <string name="summary_unresolved">未决问题</string>
+    <string name="summary_empty_section">暂无</string>
+    <string name="summary_no_content">这轮讨论没有形成可引用的有效观点。</string>
+    <string name="summary_generating">正在整理共识、分歧与建议…</string>
+    <string name="summary_waiting">等待生成结论</string>
+    <string name="summary_generate">生成结论</string>
+    <string name="summary_regenerate">重新生成</string>
+    <string name="summary_generating_action">生成中</string>
+    <string name="summary_reference">AI · %1$s：%2$s</string>
+
     <string name="room_delete">删除</string>
     <string name="room_delete_confirm">删除这个圆桌？本机与服务器的讨论记录都会移除。</string>
     <string name="room_delete_cancel">取消</string>

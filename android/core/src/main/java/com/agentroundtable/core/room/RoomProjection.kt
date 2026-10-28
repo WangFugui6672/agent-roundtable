@@ -1,5 +1,6 @@
 package com.agentroundtable.core.room
 
+import com.agentroundtable.core.model.RoundSummary
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
@@ -70,6 +71,7 @@ class RoomProjection(
                 )
             },
             entries = entries.toList(),
+            summary = payload.summary ?: view.summary,
             lastSequence = cursor,
             cursorExpired = cursorExpired,
             isMock = payload.roundtable.provider == null,
@@ -107,7 +109,7 @@ class RoomProjection(
             EventTypes.ROOM_RESUMED -> applyRoomStatus(envelope.payload, NoticeKind.Resumed, "running")
             EventTypes.ROOM_ENDED -> applyRoomStatus(envelope.payload, NoticeKind.Ended, "summarizing")
             EventTypes.SUMMARY_STARTED -> applySummaryStarted(envelope.payload)
-            EventTypes.SUMMARY_COMPLETED -> applySummaryCompleted()
+            EventTypes.SUMMARY_COMPLETED -> applySummaryCompleted(envelope.payload)
             else -> false // 未知事件：忽略，但游标已经前进
         }
 
@@ -214,9 +216,35 @@ class RoomProjection(
         return true
     }
 
-    private fun applySummaryCompleted(): Boolean {
-        view = view.copy(status = "completed")
+    private fun applySummaryCompleted(payload: JsonObject): Boolean {
+        val data = decode<SummaryCompletedPayload>(payload) ?: return false
+        view = view.copy(status = "completed", summary = data.summary)
         return true
+    }
+
+    /**
+     * 合并一次结论提交响应。
+     *
+     * 幂等重试可能没有 `summary.completed` 事件，因此这里直接用响应中的结论与快照校正状态。
+     */
+    fun applySummary(
+        summary: RoundSummary,
+        status: String? = null,
+        currentRound: Int? = null,
+    ): Boolean {
+        val nextStatus = status?.takeIf { it.isNotBlank() } ?: view.status
+        val nextRound = currentRound?.takeIf { it > 0 } ?: view.currentRound
+        val changed = view.summary != summary ||
+            view.status != nextStatus ||
+            view.currentRound != nextRound
+        if (changed) {
+            view = view.copy(
+                status = nextStatus,
+                currentRound = nextRound,
+                summary = summary,
+            )
+        }
+        return changed
     }
 
     private fun notice(envelope: EventEnvelope, kind: NoticeKind): Boolean {

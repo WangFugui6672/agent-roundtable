@@ -1,5 +1,6 @@
 package com.agentroundtable.core.room
 
+import com.agentroundtable.core.summary.RoundSummaryResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -109,6 +110,27 @@ class RoomController(
         if (envelopes.isEmpty()) return
         var changed = false
         envelopes.forEach { envelope ->
+            if (envelope.eventType == EventTypes.ROOM_JOINED) return@forEach
+            if (projection.apply(envelope)) changed = true
+        }
+        if (changed) {
+            _view.value = projection.snapshot()
+            persist()
+        }
+    }
+
+    /**
+     * 合并一次结论提交响应。
+     *
+     * 幂等重试可能不返回事件，所以响应里的结论和圆桌快照也必须并入投影。
+     */
+    suspend fun applySummaryResponse(response: RoundSummaryResponse) {
+        var changed = projection.applySummary(
+            summary = response.summary,
+            status = response.roundtable.status,
+            currentRound = response.roundtable.currentRound,
+        )
+        response.events.forEach { envelope ->
             if (envelope.eventType == EventTypes.ROOM_JOINED) return@forEach
             if (projection.apply(envelope)) changed = true
         }
