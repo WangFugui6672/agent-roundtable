@@ -4,9 +4,17 @@ import android.content.Context
 import com.agentroundtable.app.BuildConfig
 import androidx.room.Room
 import com.agentroundtable.app.data.cache.RoomCacheRepository
+import com.agentroundtable.app.data.knowledge.AndroidDocumentParser
+import com.agentroundtable.app.data.knowledge.ContentResolverDocumentSourceReader
+import com.agentroundtable.app.data.knowledge.DocumentSourceReader
+import com.agentroundtable.app.data.knowledge.KnowledgeDatabase
+import com.agentroundtable.app.data.knowledge.RoomDocumentStore
 import com.agentroundtable.app.data.provider.KeystoreSecretStore
 import com.agentroundtable.app.data.provider.PreferencesNoticeStore
 import com.agentroundtable.app.data.provider.PreferencesProviderStorage
+import com.agentroundtable.core.knowledge.DocumentParser
+import com.agentroundtable.core.knowledge.DocumentStore
+import com.agentroundtable.core.knowledge.KnowledgeBase
 import com.agentroundtable.core.provider.ProviderProbe
 import com.agentroundtable.core.turn.ProviderChatClient
 import com.agentroundtable.core.turn.TurnRunner
@@ -45,6 +53,26 @@ class AppContainer(context: Context) {
     }
 
     val roomCache: RoomCacheRepository by lazy { RoomCacheRepository(database) }
+
+    private val knowledgeDatabase: KnowledgeDatabase by lazy {
+        Room.databaseBuilder(applicationContext, KnowledgeDatabase::class.java, "knowledge.db")
+            .build()
+    }
+
+    /** 资料库存储；#32 的检索直接复用这个接缝。 */
+    val documentStore: DocumentStore by lazy { RoomDocumentStore(knowledgeDatabase) }
+
+    private val documentParser: DocumentParser by lazy {
+        AndroidDocumentParser(applicationContext)
+    }
+
+    val knowledgeBase: KnowledgeBase by lazy {
+        KnowledgeBase(parser = documentParser, store = documentStore)
+    }
+
+    val documentSourceReader: DocumentSourceReader by lazy {
+        ContentResolverDocumentSourceReader(applicationContext)
+    }
 
     private val providerStorage: PreferencesProviderStorage by lazy {
         PreferencesProviderStorage(applicationContext)

@@ -2,8 +2,10 @@ package com.agentroundtable.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -21,12 +23,15 @@ import com.agentroundtable.app.ui.HomeScreen
 import com.agentroundtable.app.ui.create.CreateScreen
 import com.agentroundtable.app.ui.create.CreateViewModel
 import com.agentroundtable.app.ui.home.HomeViewModel
+import com.agentroundtable.app.ui.library.LibraryScreen
+import com.agentroundtable.app.ui.library.LibraryViewModel
 import com.agentroundtable.app.ui.provider.ProviderScreen
 import com.agentroundtable.app.ui.provider.ProviderViewModel
 import com.agentroundtable.app.ui.room.RoomScreen
 import com.agentroundtable.app.ui.room.RoomViewModel
 import com.agentroundtable.core.room.RoomController
 import com.agentroundtable.app.ui.theme.AgentRoundtableTheme
+import com.agentroundtable.core.knowledge.DocumentFormat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,6 +50,7 @@ private sealed interface AppRoute {
     data object Home : AppRoute
     data object Create : AppRoute
     data object Provider : AppRoute
+    data object Library : AppRoute
     data class Room(val roundtableId: String) : AppRoute
 }
 
@@ -60,8 +66,13 @@ private fun AgentRoundtableApp(container: AppContainer) {
             onCreateClicked = { route = AppRoute.Create },
             onOpenRoom = { route = AppRoute.Room(it) },
             onOpenProvider = { route = AppRoute.Provider },
+            onOpenLibrary = { route = AppRoute.Library },
         )
         AppRoute.Provider -> ProviderRoute(
+            container = container,
+            onBack = { route = AppRoute.Home },
+        )
+        AppRoute.Library -> LibraryRoute(
             container = container,
             onBack = { route = AppRoute.Home },
         )
@@ -84,6 +95,7 @@ private val RouteSaver = listSaver<AppRoute, String>(
             AppRoute.Home -> listOf("home")
             AppRoute.Create -> listOf("create")
             AppRoute.Provider -> listOf("provider")
+            AppRoute.Library -> listOf("library")
             is AppRoute.Room -> listOf("room", route.roundtableId)
         }
     },
@@ -91,6 +103,7 @@ private val RouteSaver = listSaver<AppRoute, String>(
         when (saved.first()) {
             "create" -> AppRoute.Create
             "provider" -> AppRoute.Provider
+            "library" -> AppRoute.Library
             "room" -> AppRoute.Room(saved.getOrElse(1) { "" })
             else -> AppRoute.Home
         }
@@ -103,6 +116,7 @@ private fun HomeRoute(
     onCreateClicked: () -> Unit,
     onOpenRoom: (String) -> Unit,
     onOpenProvider: () -> Unit,
+    onOpenLibrary: () -> Unit,
 ) {
     val factory = remember(container) {
         viewModelFactory { initializer { HomeViewModel(container.homeRepository) } }
@@ -117,6 +131,7 @@ private fun HomeRoute(
         onCreateClicked = onCreateClicked,
         onOpenRoom = onOpenRoom,
         onOpenProvider = onOpenProvider,
+        onOpenLibrary = onOpenLibrary,
     )
 }
 
@@ -210,6 +225,33 @@ private fun RoomRoute(
     )
 }
 
+
+@Composable
+private fun LibraryRoute(container: AppContainer, onBack: () -> Unit) {
+    val factory = remember(container) {
+        viewModelFactory {
+            initializer {
+                LibraryViewModel(
+                    knowledgeBase = container.knowledgeBase,
+                    sourceReader = container.documentSourceReader,
+                )
+            }
+        }
+    }
+    val viewModel: LibraryViewModel = viewModel(factory = factory)
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.import(uri.toString())
+    }
+
+    LibraryScreen(
+        state = state,
+        onImportClicked = { picker.launch(DocumentFormat.pickerMimeTypes) },
+        onDelete = viewModel::delete,
+        onDismissError = viewModel::dismissError,
+        onBack = onBack,
+    )
+}
 
 @Composable
 private fun ProviderRoute(container: AppContainer, onBack: () -> Unit) {
