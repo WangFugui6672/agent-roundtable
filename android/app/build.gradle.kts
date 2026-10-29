@@ -4,6 +4,12 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// llama.cpp 源码不入库。只有源码就位（或显式 -PwithLocalInference=true 触发拉取）时才编译原生库；
+// 否则跳过原生构建，端侧推理在运行时报告「原生库不可用」，其余功能不受影响。
+val llamaSourceDir = file("src/main/cpp/llama.cpp")
+val withLocalInference = providers.gradleProperty("withLocalInference").orNull == "true"
+val nativeReady = llamaSourceDir.resolve("CMakeLists.txt").exists()
+
 android {
     namespace = "com.agentroundtable.app"
     compileSdk = 37
@@ -24,20 +30,24 @@ android {
             "BACKEND_BASE_URL",
             "\"${project.findProperty("backendBaseUrl") ?: "http://10.0.2.2:8000"}\"",
         )
-        externalNativeBuild {
-            cmake {
-                arguments += listOf(
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DANDROID_STL=c++_shared",
-                )
+        if (nativeReady) {
+            externalNativeBuild {
+                cmake {
+                    arguments += listOf(
+                        "-DCMAKE_BUILD_TYPE=Release",
+                        "-DANDROID_STL=c++_shared",
+                    )
+                }
             }
         }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.31.6"
+    if (nativeReady) {
+        externalNativeBuild {
+            cmake {
+                path = file("src/main/cpp/CMakeLists.txt")
+                version = "3.31.6"
+            }
         }
     }
 
@@ -113,10 +123,12 @@ val verifyEmbeddingModel by tasks.registering {
     doLast {
         val missing = listOf("model_int8.onnx", "vocab.txt")
             .filterNot { embeddingModelDir.file(it).asFile.isFile }
-        check(missing.isEmpty()) {
-            "缺少端侧嵌入模型：${missing.joinToString()}。先运行 " +
-                "scripts/fetch_embedding_model.sh。"
-        }
+        if (missing.isEmpty()) return@doLast
+        // 模型不入库：CI 与普通克隆没有这两个文件也必须能构建。
+        // 只有显式要求随包分发时（-PrequireLocalAssets=true）才视为失败。
+        val requireAssets = providers.gradleProperty("requireLocalAssets").orNull == "true"
+        val message = "缺少端侧嵌入模型：${missing.joinToString()}。运行 scripts/fetch_embedding_model.sh 可补齐。"
+        if (requireAssets) error(message) else logger.lifecycle("跳过端侧嵌入模型校验：$message")
     }
 }
 
@@ -135,11 +147,12 @@ val fetchLlamaCpp = tasks.register<Exec>("fetchLlamaCpp") {
     outputs.dir(file("src/main/cpp/llama.cpp"))
 }
 
-tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn(fetchLlamaCpp)
-}
-
-// CMake 的配置任务早于 preBuild 执行，必须显式依赖拉取任务，否则首次构建会缺源码。
-tasks.matching { it.name.startsWith("configureCMake") }.configureEach {
-    dependsOn(fetchLlamaCpp)
+// 只有显式要求时才联网拉取源码：默认构建与 CI 不依赖任何大文件下载。
+if (withLocalInference) {
+    tasks.matching { it.name == "preBuild" }.configureEach {
+        dependsOn(fetchLlamaCpp)
+    }
+    tasks.matching { it.name.startsWith("configureCMake") }.configureEach {
+        dependsOn(fetchLlamaCpp)
+    }
 }

@@ -39,6 +39,20 @@ cd android
 
 调试包只包含 `arm64-v8a`，`minSdk 26`，包名 `com.agentroundtable.app`。
 
+## 端侧资产（可选）
+
+llama.cpp 源码与嵌入模型都不入库。默认构建**不需要**它们：原生库不编译、端侧推理在运行时报告不可用，其余功能不受影响。
+
+需要端侧推理时：
+
+```bash
+cd android
+./gradlew :app:assembleDebug -PwithLocalInference=true   # 自动拉取 llama.cpp 源码
+bash ../scripts/fetch_embedding_model.sh                  # 拉取嵌入模型并校验 SHA256
+```
+
+发布构建若要求模型随包分发，加 `-PrequireLocalAssets=true`，缺失时构建会失败。
+
 ## 连接后端
 
 默认后端地址是 `http://10.0.2.2:8000`（Android 模拟器访问宿主机的固定地址）。用其他地址构建：
