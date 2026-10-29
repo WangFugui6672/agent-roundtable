@@ -10,6 +10,7 @@ import org.junit.Test
 class AgentPromptTest {
     private val context = PromptContext(
         topic = "是否把验证周期压缩到两周？",
+        agentId = "p1",
         agentName = "方案派",
         tagline = "先给方案",
         expertise = "拆解",
@@ -57,6 +58,7 @@ class AgentPromptTest {
     @Test
     fun `second round prompts are byte-identical to the pre-RAG prompt`() {
         val secondRound = context.copy(
+            agentId = "p2",
             agentName = "质疑派",
             tagline = "先找漏洞",
             expertise = "风险",
@@ -215,7 +217,6 @@ class AgentPromptTest {
                 "\n" +
                 "可引用的候选观点：\n" +
                 "1. author=方案派 agent_id=p1 message_id=m1 主张=先做两周验证\n" +
-                "2. author=质疑派 agent_id=p2 message_id=m2 主张=我不同意\n" +
                 "\n" +
                 "请引用其中一条，并按要求返回 JSON。"
     }

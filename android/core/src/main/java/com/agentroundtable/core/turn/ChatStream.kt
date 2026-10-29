@@ -19,7 +19,7 @@ fun interface StreamSource {
 sealed interface ChatStreamEvent {
     data class Delta(val text: String) : ChatStreamEvent
 
-    data class Completed(val outputTokens: Int?) : ChatStreamEvent
+    data object Completed : ChatStreamEvent
 
     data class Failed(val message: String) : ChatStreamEvent
 }
@@ -56,7 +56,7 @@ class ProviderChatClient(private val source: StreamSource) {
                 if (line.isEmpty() || !line.startsWith(DATA_PREFIX)) return@collect
                 val payload = line.removePrefix(DATA_PREFIX).trim()
                 if (payload == DONE) {
-                    emit(ChatStreamEvent.Completed(null))
+                    emit(ChatStreamEvent.Completed)
                     return@collect
                 }
                 val text = extractDelta(payload) ?: return@collect

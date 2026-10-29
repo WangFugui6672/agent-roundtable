@@ -24,6 +24,7 @@ import com.agentroundtable.app.local.LocalInferenceViewModel
 import com.agentroundtable.app.ui.HomeScreen
 import com.agentroundtable.app.ui.create.CreateScreen
 import com.agentroundtable.app.ui.create.CreateViewModel
+import com.agentroundtable.app.ui.create.ProviderGate
 import com.agentroundtable.app.ui.home.HomeViewModel
 import com.agentroundtable.app.ui.library.LibraryScreen
 import com.agentroundtable.app.ui.library.LibraryViewModel
@@ -87,7 +88,7 @@ private fun AgentRoundtableApp(container: AppContainer) {
         AppRoute.Create -> CreateRoute(
             container = container,
             onBack = { route = AppRoute.Home },
-            onCreated = { route = AppRoute.Home },
+            onCreated = { route = AppRoute.Room(it) },
         )
         is AppRoute.Room -> RoomRoute(
             container = container,
@@ -159,9 +160,14 @@ private fun CreateRoute(
                 CreateViewModel(
                     api = container.apiClient,
                     sessionProvider = { container.guestSessionStore.read() },
-                    providerProvider = {
+                    providerGate = {
                         val provider = container.providerSettings.load()
-                        provider.configuration?.takeIf { provider.isComplete }?.toMetadata()
+                        val configuration = provider.configuration
+                        when {
+                            configuration == null -> ProviderGate.NotConfigured
+                            !provider.isComplete -> ProviderGate.Incomplete
+                            else -> ProviderGate.Ready(configuration.toMetadata())
+                        }
                     },
                 )
             }

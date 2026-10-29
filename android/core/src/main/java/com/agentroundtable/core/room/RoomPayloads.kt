@@ -24,7 +24,19 @@ data class RoomSnapshot(
     @SerialName("max_rounds") val maxRounds: Int = 0,
     @SerialName("last_sequence") val lastSequence: Int = 0,
     val provider: com.agentroundtable.core.model.ProviderMetadata? = null,
+    @SerialName("pause_pending") val pausePending: Boolean = false,
     val participants: List<ParticipantSnapshot> = emptyList(),
+)
+
+/** 快照里带出的历史失败记录。 */
+@Serializable
+data class FailureSnapshot(
+    val round: Int = 0,
+    @SerialName("agent_name") val agentName: String = "",
+    @SerialName("failure_code") val failureCode: String = "",
+    val message: String = "",
+    val retryable: Boolean = false,
+    val partial: String? = null,
 )
 
 /** 补发窗口信息。 */
@@ -42,6 +54,8 @@ data class ReplayMetadata(
 data class RoomJoinedPayload(
     val roundtable: RoomSnapshot,
     val messages: List<Message> = emptyList(),
+    /** 历史失败记录；重连或重启后要能重新展示。 */
+    val failures: List<FailureSnapshot> = emptyList(),
     /** 已完成圆桌的结论；未生成时为 null。 */
     val summary: RoundSummary? = null,
     val replay: ReplayMetadata? = null,

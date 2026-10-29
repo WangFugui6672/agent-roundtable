@@ -17,6 +17,7 @@ class TurnRunnerTest {
 
     private val context = PromptContext(
         topic = "议题",
+        agentId = "p1",
         agentName = "方案派",
         tagline = "先给方案",
         expertise = "拆解",

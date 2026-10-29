@@ -14,6 +14,8 @@ data class ChatMessage(val role: String, val content: String) {
 /** 一位参与者在某个圆桌中的上下文，用于组装 prompt。 */
 data class PromptContext(
     val topic: String,
+    /** 当前发言人（RoundtableAgent）的 id，用于把「自己的观点」排除出引用候选。 */
+    val agentId: String,
     val agentName: String,
     val tagline: String,
     val expertise: String,
@@ -35,6 +37,8 @@ data class TranscriptLine(
     val body: String,
     val messageId: String = "",
     val authorAgentId: String? = null,
+    /** 已被后续版本替代的发言不能作为引用候选。 */
+    val superseded: Boolean = false,
 )
 
 /**
@@ -118,8 +122,11 @@ object AgentPrompt {
         }
         val history = transcript.joinToString("\n") { "${it.authorName}：${it.body}" }
         if (context.roundNumber >= 2) {
+            // 候选只能是「其他参与者」的有效观点：排除用户消息、自己的观点与已被替代的版本。
             val candidates = transcript
                 .filter { it.authorAgentId != null && it.messageId.isNotBlank() }
+                .filter { it.authorAgentId != context.agentId }
+                .filterNot { it.superseded }
                 .mapIndexed { index, line ->
                     "${index + 1}. author=${line.authorName} agent_id=${line.authorAgentId} " +
                         "message_id=${line.messageId} 主张=${line.body.take(40)}"

@@ -232,8 +232,9 @@ class RoomViewModel(
             val current = controller.view.value
             if (current.isMock) return
             if (current.status in TERMINAL_STATUSES) return
-            // 暂停期间不签发新 Turn；继续时由 resume 重新启动本循环。
-            if (current.status == "paused") return
+            // 暂停期间不签发新 Turn；协议 3.4 还要求 pause_pending 期间同样停止签发，
+            // 否则暂停边界永远到不了。继续时由 resume 重新启动本循环。
+            if (current.status == "paused" || current.pausePending) return
             if (controller.connection.value == ConnectionState.Closed) return
 
             val transcript = current.entries
@@ -244,6 +245,7 @@ class RoomViewModel(
                         body = it.message.body,
                         messageId = it.message.id,
                         authorAgentId = it.message.author.roundtableAgentId,
+                        superseded = it.message.supersededByMessageId != null,
                     )
                 }
 
@@ -257,6 +259,7 @@ class RoomViewModel(
                     current.participants.firstOrNull { it.id == agentId }?.let { participant ->
                         com.agentroundtable.core.turn.PromptContext(
                             topic = current.topic,
+                            agentId = participant.id,
                             agentName = participant.name,
                             tagline = participant.tagline,
                             expertise = participant.expertise,

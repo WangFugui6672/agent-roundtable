@@ -2,7 +2,7 @@
 	backend-install backend-migrate backend-purge backend-run backend-test \
 	backend-lint backend-check ios-project ios-build ios-app-build ios-test \
 	ios-lint ios-app-test ios-ui-test record-demo scripts-test secret-scan \
-	verify release-check
+	android-core-purity android-lint android-test verify release-check
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -103,6 +103,17 @@ scripts-test: ## 测试发布脚本中的模拟器选择等纯逻辑
 secret-scan: scripts-test ## 扫描密钥、.env、生成工程和构建产物
 	python3 scripts/secret_scan.py
 
-verify: backend-lint backend-test ios-build ios-lint ## 提交前最小验证
+android-core-purity: ## :core 不得引用 android.* 或 androidx.*
+	@if grep -rnE '^import (android|androidx)\.' android/core/src; then \
+		echo ':core 必须保持纯 JVM 语义，不得引用 android.* 或 androidx.*' >&2; exit 1; \
+	fi
+
+android-lint: ## Android Lint（:core 与 :app 的 debug 变体）
+	cd android && ./gradlew :core:lintDebug :app:lintDebug
+
+android-test: ## Android 纯 JVM 单测、应用单测与调试包编译
+	cd android && ./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug
+
+verify: backend-lint backend-test ios-build ios-lint android-core-purity android-lint android-test ## 提交前最小验证
 
 release-check: backend-check ios-test ios-lint ios-app-test secret-scan docker-smoke ## 发布静态/后端/App/Compose 门禁
