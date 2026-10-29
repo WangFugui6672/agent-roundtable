@@ -17,6 +17,7 @@ class TurnRunnerSecondRoundTest {
 
     private val context = PromptContext(
         topic = "议题",
+        agentId = "p2",
         agentName = "质疑派",
         tagline = "先找漏洞",
         expertise = "风险",

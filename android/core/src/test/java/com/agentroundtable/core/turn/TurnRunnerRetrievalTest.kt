@@ -23,6 +23,7 @@ class TurnRunnerRetrievalTest {
 
     private val context = PromptContext(
         topic = "是否把验证周期压缩到两周？",
+        agentId = "p1",
         agentName = "方案派",
         tagline = "先给方案",
         expertise = "拆解",

@@ -11,7 +11,7 @@ import kotlinx.serialization.json.JsonObject
  * 因此可以完全脱离 Android 与网络在 JVM 上测试。
  */
 class RoomProjection(
-    private val maxSeenEventIds: Int = 500,
+    private val maxSeenEventIds: Int = 512, // 与 iOS 的 StoredRoomState 取同一数值
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val seenEventIds = LinkedHashSet<String>()
@@ -56,6 +56,21 @@ class RoomProjection(
             messagesById[message.id] = message
             entries += messageEntry(message)
         }
+        // 历史失败要能在重连或重启后重新展示，否则失败卡会凭空消失。
+        payload.failures.forEachIndexed { index, failure ->
+            addNotice(
+                NoticeKind.Failed,
+                id = "joined-failure-$index",
+                agentName = failure.agentName,
+                round = failure.round,
+                detail = failure.message.ifBlank { failure.failureCode },
+                retryable = com.agentroundtable.core.turn.FailureKind.retryable(
+                    failure.failureCode,
+                    failure.retryable,
+                ),
+                partial = failure.partial,
+            )
+        }
 
         view = RoomView(
             roundtableId = payload.roundtable.id,
@@ -76,6 +91,7 @@ class RoomProjection(
             cursorExpired = cursorExpired,
             isMock = payload.roundtable.provider == null,
             hasSnapshot = true,
+            pausePending = payload.roundtable.pausePending,
         )
         return view
     }
@@ -88,6 +104,9 @@ class RoomProjection(
     fun apply(envelope: EventEnvelope): Boolean {
         if (envelope.eventType == EventTypes.ROOM_JOINED) return false
         if (!remember(envelope.eventId)) return false
+        // 协议 3.2：按 sequence 忽略重复或过期事件。先到的高序号事件之后，
+        // 迟到的低序号事件不能再被应用，否则投影会倒退。
+        if (envelope.sequence <= view.lastSequence) return false
 
         // 游标按已持久化事件的最大序号推进，与投影是否产生可见变化无关。
         val advanced = envelope.sequence > view.lastSequence
@@ -104,9 +123,15 @@ class RoomProjection(
             EventTypes.AGENT_PASSED -> applyPassed(envelope.payload)
             EventTypes.AGENT_FAILED -> applyFailed(envelope.payload)
             EventTypes.BUDGET_EXHAUSTED -> applyBudget(envelope.payload)
-            EventTypes.ROOM_PAUSE_PENDING -> notice(envelope, NoticeKind.PausePending)
+            EventTypes.ROOM_PAUSE_PENDING -> {
+                view = view.copy(pausePending = true)
+                notice(envelope, NoticeKind.PausePending)
+            }
             EventTypes.ROOM_PAUSED -> applyRoomStatus(envelope.payload, NoticeKind.Paused, "paused")
-            EventTypes.ROOM_RESUMED -> applyRoomStatus(envelope.payload, NoticeKind.Resumed, "running")
+            EventTypes.ROOM_RESUMED -> {
+                view = view.copy(pausePending = false)
+                applyRoomStatus(envelope.payload, NoticeKind.Resumed, "running")
+            }
             EventTypes.ROOM_ENDED -> applyRoomStatus(envelope.payload, NoticeKind.Ended, "summarizing")
             EventTypes.SUMMARY_STARTED -> applySummaryStarted(envelope.payload)
             EventTypes.SUMMARY_COMPLETED -> applySummaryCompleted(envelope.payload)

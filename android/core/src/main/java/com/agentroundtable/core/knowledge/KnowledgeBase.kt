@@ -65,8 +65,6 @@ class KnowledgeBase(
 
     suspend fun documents(): List<KnowledgeDocument> = store.listDocuments()
 
-    suspend fun chunks(documentId: String): List<DocumentChunk> = store.listChunks(documentId)
-
     /** 删除文档时由存储实现级联删除全部文档块。 */
     suspend fun delete(documentId: String) = store.deleteDocument(documentId)
 

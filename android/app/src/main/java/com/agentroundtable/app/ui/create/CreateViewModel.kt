@@ -13,6 +13,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/** 创建圆桌时对 Provider 的处理方式。 */
+sealed interface ProviderGate {
+    /** 完全没有配置：允许以 Mock 演示创建。 */
+    data object NotConfigured : ProviderGate
+
+    /** 配置存在但不完整（例如缺 Key）：不得静默降级为 Mock。 */
+    data object Incomplete : ProviderGate
+
+    /** 配置完整：提交非秘密元数据。 */
+    data class Ready(val metadata: com.agentroundtable.core.model.ProviderMetadata) : ProviderGate
+}
+
 data class CreateUiState(
     val topic: String = "",
     val profiles: List<AgentProfile> = emptyList(),
@@ -26,7 +38,7 @@ data class CreateUiState(
 class CreateViewModel(
     private val api: ApiClient,
     private val sessionProvider: suspend () -> String?,
-    private val providerProvider: suspend () -> com.agentroundtable.core.model.ProviderMetadata? = { null },
+    private val providerGate: suspend () -> ProviderGate = { ProviderGate.NotConfigured },
 ) : ViewModel() {
     private val _state = MutableStateFlow(CreateUiState())
     val state: StateFlow<CreateUiState> = _state.asStateFlow()
@@ -69,11 +81,22 @@ class CreateViewModel(
                 _state.update { it.copy(isSubmitting = false, message = "还没有可用的匿名会话，请返回首页重试。") }
                 return@launch
             }
+            val gate = providerGate()
+            if (gate is ProviderGate.Incomplete) {
+                _state.update {
+                    it.copy(
+                        isSubmitting = false,
+                        message = "Provider 配置不完整（缺少 API Key 或配置项），请补全后再创建；" +
+                            "如需 Mock 演示，请先在设置里删除 Provider。",
+                    )
+                }
+                return@launch
+            }
             val result = api.createRoundtable(
                 sessionId = sessionId,
                 topic = current.topic.trim(),
                 agentProfileIds = current.selectedProfileIds,
-                provider = providerProvider(),
+                provider = (gate as? ProviderGate.Ready)?.metadata,
             )
             _state.update {
                 when (result) {

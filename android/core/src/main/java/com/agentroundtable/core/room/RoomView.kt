@@ -81,6 +81,8 @@ data class RoomView(
     val isMock: Boolean = false,
     /** 是否已经收到过 `room.joined` 快照；缓存恢复的视图为 false。 */
     val hasSnapshot: Boolean = false,
+    /** 已请求暂停但仍有在途 Turn；此时不得再签发新 Turn。 */
+    val pausePending: Boolean = false,
     val diagnostic: String? = null,
 )
 

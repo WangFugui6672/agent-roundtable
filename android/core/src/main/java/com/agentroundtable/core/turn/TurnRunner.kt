@@ -86,7 +86,7 @@ class TurnRunner(
                     onDelta(event.text)
                 }
                 is ChatStreamEvent.Failed -> streamError = event.message
-                is ChatStreamEvent.Completed -> Unit
+                ChatStreamEvent.Completed -> Unit
             }
         }
 
