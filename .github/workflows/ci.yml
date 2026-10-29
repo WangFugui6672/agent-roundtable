@@ -77,6 +77,36 @@ jobs:
       - name: Secret and generated artifact scan
         run: python3 scripts/secret_scan.py
 
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Core unit tests
+        working-directory: android
+        run: ./gradlew :core:test
+      - name: App unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest
+      - name: Assemble debug APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-failure-diagnostics
+          path: |
+            android/**/build/reports/
+            android/**/build/test-results/
+          if-no-files-found: ignore
+
   ios:
     name: iOS
     runs-on: macos-15
