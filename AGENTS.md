@@ -14,6 +14,7 @@
 - 后端：`make db-up` 起 PostgreSQL，`make backend-run` 起 `127.0.0.1:8000`；首次运行先 `make backend-migrate`。
 - iOS 工程由 `ios/project.yml` 生成且不入库；增删文件后运行 `make ios-project` 再开 Xcode。
 - iOS 单元测试：`make ios-test`；SwiftLint：`make ios-lint`（首次需 `brew install swiftlint`）。UI 测试需要本地后端，命令见 `README.md`「测试与检查」。
+- Android：`make android-test`、`make android-lint`、`make android-core-purity`；JDK 与 SDK 要求见 `android/README.md`「环境要求」。
 - 完整步骤与故障排查见 `README.md`「快速开始」。
 
 ## Git 提交类型
@@ -35,7 +36,7 @@
 - 实现与评审细则见 `docs/agents/coding-standards.md`。
 - 产品需求以 `docs/PRD.md` 为准。
 - 领域术语以 `GLOSSARY.md` 为准。
-- 客户端采用 iOS 先行、Android 后补的顺序。
+- iOS（`ios/`）与 Android（`android/`）客户端共用 `docs/protocol.md` 契约；Android 细则见 `android/README.md`。
 - iOS 使用 SwiftUI、Swift Concurrency、URLSessionWebSocketTask 和 SwiftData。
 - 后端使用 Django、Django REST Framework、Django Channels、PostgreSQL、Redis 和 Celery。
 - 真实模型调用由 iOS 直接访问用户选择的 Provider，API Key 保存在 iOS Keychain。

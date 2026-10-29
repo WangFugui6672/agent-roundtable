@@ -37,6 +37,15 @@
 - API Key 不得进入 `StoredRoomState`、SwiftData payload、日志或普通缓存。
 - UI 标识符（accessibilityIdentifier）用 `feature.element` 形式，便于 UI 测试定位。
 
+## Android
+
+- 协议解码、游标、投影与回合执行放在 `:core`；`:app` 只做渲染、导航和 Android 存储适配。
+- `API Key` 只经 `SecretStore` 接口读写，实现必须落在 Android Keystore；禁止进入 Room、日志或后端请求体。
+- 本地游标与快照的关系与 iOS 一致：正常 `room.joined` 快照不能覆盖已处理游标，只有 `cursor_expired` 才能重置。
+- 缺失或不完整的 Provider 阻止创建圆桌，不允许静默降级为 Mock。
+- 端侧推理与检索的失败行为见 `android/README.md`「失败时的行为」，实现与该节保持一致。
+- `:core` 保持纯 JVM 语义，机械检查见 `make android-core-purity`。
+
 ## 后端
 
 - 错误统一走 `roundtable.exceptions` 的信封，`code` 稳定、`message` 只用于展示。
@@ -47,6 +56,7 @@
 ## 测试
 
 - 先写测试再实现（红 → 绿 → 重构）；一个测试只验证一个行为。
+- 黄金夹具（逐字节比较的期望文本）必须按规格人工核对后写入，不能从当前输出反推生成；夹具与规格冲突时以规格为准并修正代码。（第二轮引用候选的夹具曾把「引用自己」写进期望值，修复 #27 时才被发现。）
 - 断言可观察行为；只有「密钥不外泄」这类安全性质才允许断言存储内部结构。
 - 测试替身放测试目标内；跨测试目标重复的小替身可以接受，不为此新建共享库。
 - Keychain 相关测试需要模拟器 ad-hoc 签名（`CODE_SIGNING_ALLOWED=NO` 会得到 `errSecMissingEntitlement`）。
@@ -56,7 +66,7 @@
 
 - Swift 代码必须通过 `make ios-lint`（SwiftLint `--strict`），配置见 `ios/.swiftlint.yml`。
 - 后端必须通过 `ruff check` 与 `ruff format --check`。
-- `make verify` 是本机提交前的最小验证：后端 lint + 测试 + iOS 编译 + SwiftLint。
+- `make verify` 是本机提交前的最小验证：后端 lint + 测试 + iOS 编译 + SwiftLint + Android 纯净性检查、Lint 与单测。
 - `make release-check` 覆盖后端全门禁、RoundtableCore、SwiftLint、App 单测、secret scan 与 Compose 冷启动；`make ios-ui-test` 执行完整 UI 回归，需要先启动后端。
-- CI 执行后端、Compose、secret scan、RoundtableCore、App 单测和完整 UI 回归；失败时上传后端日志与 `.xcresult`。
+- CI 执行后端、Compose、secret scan、RoundtableCore、App 单测和完整 UI 回归；Android job 执行纯净性检查、Android Lint 与单测。失败时上传后端日志与 `.xcresult`，Android 失败时上传 `build/reports` 与 `build/test-results`。
 - 生成物（`ios/AgentRoundtable.xcodeproj`、`ios/AgentRoundtable/Info.plist`、`.build`）不入库。
