@@ -1,10 +1,10 @@
 # Agent Roundtable
 
-Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
+Agent Roundtable 是一个双端原生的 AI 多智能体圆桌应用（iOS SwiftUI / Android Jetpack Compose）。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
 **当前版本：** MVP `v0.1.0`。发布说明见 [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md)。
 
-[观看完整演示](docs/assets/demo-v0.1.0.mp4) · [演示封面（结论卡）](docs/assets/demo-v0.1.0-poster.png) · [三个演示议题与录制脚本](docs/demo.md) · [架构说明](docs/architecture.md)
+[观看 60 秒双端演示](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.2.0/demo-v0.2.0-dual-end.mp4) · [4 分 43 秒 iOS 完整录屏](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.1.0/demo-v0.1.0.mp4) · [演示封面（结论卡）](docs/assets/demo-v0.1.0-poster.png) · [三个演示议题与录制脚本](docs/demo.md) · [架构说明](docs/architecture.md)
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
@@ -25,7 +25,7 @@ Agent Roundtable 是一个 iOS 原生的 AI 多智能体圆桌应用。用户提
 | BYOK 直连 Provider 的真实 Turn 执行 | ✅ | ✅ |
 | 第二轮引用式互评 | ✅ | ✅ |
 | 结论生成与展示 | ✅ | ✅ |
-| Mock 演示 | ✅ | ✅ |
+| Mock 演示 | ✅ | ⚠️ 仅第一轮（见 [#38](https://github.com/WangFugui6672/agent-roundtable/issues/38)） |
 | 结论卡保存与分享 | ✅ | — |
 | 消息举报、本地隐藏、关键观点、重新生成 | ✅ | — |
 | 继续追问（follow-up） | ✅ | — |

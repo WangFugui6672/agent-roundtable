@@ -63,6 +63,9 @@ bash ../scripts/fetch_embedding_model.sh                  # 拉取嵌入模型�
 
 配合 `adb reverse tcp:8000 tcp:8000` 可以在真机上直接连本机后端。
 
+部分模拟器镜像或网络环境访问不到 `10.0.2.2`；此时同样使用 `adb reverse`，并以
+`-PbackendBaseUrl=http://127.0.0.1:8000` 构建。
+
 ## Provider 与密钥
 
 API Key 只写入 Android Keystore（AES-GCM 加密后再存入私有偏好文件），
