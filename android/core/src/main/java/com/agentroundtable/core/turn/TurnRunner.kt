@@ -52,6 +52,7 @@ class TurnRunner(
         transcript: List<TranscriptLine>,
         contextFor: (agentId: String) -> PromptContext?,
         onDelta: (String) -> Unit,
+        onReset: () -> Unit = {},
     ): TurnRunResult {
         val next = when (val result = api.nextTurn(sessionId, roundtableId)) {
             is ApiResult.Failure -> return TurnRunResult.Failed(result.message, retryable = false)
@@ -73,34 +74,42 @@ class TurnRunner(
         // 检索在发起 Provider 请求前完成；失败、超时或空资料库都降级为空列表。
         val references = retrieveReferences(turnContext, transcript)
 
-        val builder = StringBuilder()
-        var streamError: String? = null
-        chat.stream(
+        val messages = AgentPrompt.messages(turnContext, transcript, references)
+        var collected = collectReply(
             configuration = configuration,
             apiKey = apiKey,
-            messages = AgentPrompt.messages(turnContext, transcript, references),
-        ).collect { event ->
-            when (event) {
-                is ChatStreamEvent.Delta -> {
-                    builder.append(event.text)
-                    onDelta(event.text)
-                }
-                is ChatStreamEvent.Failed -> streamError = event.message
-                ChatStreamEvent.Completed -> Unit
-            }
+            messages = messages,
+            maxTokens = turnMaxTokens(turnContext.roundNumber),
+            onDelta = onDelta,
+        )
+
+        // 结构化输出偶尔会缺字段或返回空正文；用一次更明确的修复提示重试，
+        // 避免把一次格式抖动直接变成用户可见的失败。
+        if (turnContext.roundNumber >= 2 &&
+            collected.error == null &&
+            needsStructuredRepair(collected.text, transcript, turn.roundtableAgentId)
+        ) {
+            onReset()
+            collected = collectReply(
+                configuration = configuration,
+                apiKey = apiKey,
+                messages = messages + ChatMessage.user(REPAIR_PROMPT),
+                maxTokens = REPAIR_MAX_TOKENS,
+                onDelta = onDelta,
+            )
         }
 
-        streamError?.let { reason ->
+        collected.error?.let { reason ->
             return failTurn(
                 sessionId, roundtableId, turn,
                 code = "provider_error",
                 message = reason,
                 retryable = true,
-                partial = builder.toString().ifBlank { null },
+                partial = collected.text.ifBlank { null },
             )
         }
 
-        val text = builder.toString().trim()
+        val text = collected.text
         if (text.isEmpty()) {
             return failTurn(
                 sessionId, roundtableId, turn,
@@ -235,11 +244,66 @@ class TurnRunner(
         return TurnRunResult.Failed(message, retryable)
     }
 
+    private suspend fun collectReply(
+        configuration: ProviderConfiguration,
+        apiKey: String,
+        messages: List<ChatMessage>,
+        maxTokens: Int,
+        onDelta: (String) -> Unit,
+    ): CollectedReply {
+        val builder = StringBuilder()
+        var error: String? = null
+        chat.stream(
+            configuration = configuration,
+            apiKey = apiKey,
+            messages = messages,
+            maxTokens = maxTokens,
+        ).collect { event ->
+            when (event) {
+                is ChatStreamEvent.Delta -> {
+                    builder.append(event.text)
+                    onDelta(event.text)
+                }
+                is ChatStreamEvent.Failed -> error = event.message
+                ChatStreamEvent.Completed -> Unit
+            }
+        }
+        return CollectedReply(builder.toString().trim(), error)
+    }
+
+    private fun needsStructuredRepair(
+        text: String,
+        transcript: List<TranscriptLine>,
+        agentId: String,
+    ): Boolean {
+        if (text.isEmpty()) return true
+        return StructuredReplyParser.parse(text, transcript, agentId) is ReplyParseResult.Invalid
+    }
+
+    private data class CollectedReply(val text: String, val error: String?)
+
+    /**
+     * 单次发言的输出预算。
+     *
+     * 思考型模型会先消耗推理 Token，再输出正文；预算过小时正文可能为空。
+     * 第二轮要求结构化 JSON，额外留出引用与字段开销，与 iOS 的
+     * `SecondRoundTokenBudget.initial` 保持一致。
+     */
+    internal fun turnMaxTokens(round: Int): Int =
+        if (round >= 2) SECOND_ROUND_MAX_TOKENS else FIRST_ROUND_MAX_TOKENS
+
     private companion object {
         /**
          * 检索超时上限。端侧嵌入首次加载约数百毫秒，留出余量后仍能在
          * 明显拖慢发言前降级为无检索。
          */
         const val RETRIEVAL_TIMEOUT_MS = 1_500L
+        const val FIRST_ROUND_MAX_TOKENS = 600
+        const val SECOND_ROUND_MAX_TOKENS = 1_200
+        const val REPAIR_MAX_TOKENS = 2_000
+        const val REPAIR_PROMPT =
+            "上一次输出不是合法的互评 JSON。请严格只返回 system 要求的 JSON 对象，" +
+                "必须包含合法 stance、一条候选引用、challenge 时原样填写被质疑者的 " +
+                "roundtable_agent_id、confidence。不要输出 Markdown 或解释。"
     }
 }

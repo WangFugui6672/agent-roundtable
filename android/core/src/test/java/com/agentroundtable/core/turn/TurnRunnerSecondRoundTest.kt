@@ -64,6 +64,37 @@ class TurnRunnerSecondRoundTest {
     }
 
     @Test
+    fun `an invalid structured reply is retried once with a repair prompt`() = runTest {
+        transport.enqueue(
+            200,
+            """{"round":2,"turn":{"turn_id":"t2","round":2,"roundtable_agent_id":"p2","position":1,"agent_key":"skeptic","agent_name":"质疑派"}}""",
+        )
+        transport.enqueue(201, "{}")
+
+        val invalid = """{"message_type":"supplement","claim":"补充","body":"正文","stance":"supplement"}"""
+        val valid = """{"message_type":"challenge","claim":"成本被低估","body":"我质疑这个判断。","stance":"challenge","reference_message_id":"m1","challenge_target_agent_id":"p1"}"""
+        val bodies = mutableListOf<String>()
+        var resets = 0
+        val runner = TurnRunner(api, ProviderChatClient(StreamSource { request ->
+            bodies += request.body.orEmpty()
+            val json = if (bodies.size == 1) invalid else valid
+            flowOf("data: {\"choices\":[{\"delta\":{\"content\":${quote(json)}}}]}", "data: [DONE]")
+        }))
+
+        val result = runner.runOnce(
+            "s", "r", configuration, "sk-test",
+            listOf(TranscriptLine("方案派", "先做两周验证", messageId = "m1", authorAgentId = "p1")),
+            { context }, {}, { resets += 1 },
+        )
+
+        assertTrue(result is TurnRunResult.Spoke)
+        assertTrue(bodies.size == 2)
+        assertTrue(bodies[1].contains("上一次输出不是合法的互评 JSON"))
+        assertTrue(bodies[1].contains("\"max_tokens\":2000"))
+        assertTrue(resets == 1)
+    }
+
+    @Test
     fun `an invalid structured reply fails the turn as retryable`() = runTest {
         transport.enqueue(
             200,
