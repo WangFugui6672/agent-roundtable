@@ -93,7 +93,7 @@ object StructuredSummaryParser {
                     (reference as? JsonPrimitive)?.intOrNull
                         ?: return SummaryParseResult.Invalid("reference_indexes 必须是整数编号。")
                 }
-                if (indexes.isEmpty() || indexes.size > maxReferencesPerItem) {
+                if (indexes.isEmpty()) {
                     return SummaryParseResult.Invalid("单个结论项必须引用 1 到 3 条观点。")
                 }
                 if (indexes.toSet().size != indexes.size) {
@@ -103,9 +103,11 @@ object StructuredSummaryParser {
                     return SummaryParseResult.Invalid("结论项引用了候选讨论之外的来源。")
                 }
 
+                // 模型偶尔会多给一两个引用；按顺序截断到上限，
+                // 而不是因为一条超出上限把整份结论降级成规则化结果。
                 items += SummaryItem(
                     text = text,
-                    referenceMessageIds = indexes.map { candidates[it].id },
+                    referenceMessageIds = indexes.take(maxReferencesPerItem).map { candidates[it].id },
                 )
             }
             parsed[key] = items

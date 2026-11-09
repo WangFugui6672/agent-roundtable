@@ -179,7 +179,7 @@ extension AppModel {
                     configuration: configuration,
                     apiKey: apiKey,
                     messages: prompt,
-                    maxTokens: 1_200,
+                    maxTokens: attempt == 0 ? 16_000 : 20_000,
                     conversationID: room.snapshot?.id
                 ) {
                     guard !Task.isCancelled else { throw CancellationError() }
