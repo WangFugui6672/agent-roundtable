@@ -53,13 +53,16 @@ Provider（两端各配置一次，Key 不出现在录屏中）：
 
 | 时间 | 画面 | 说明 |
 | --- | --- | --- |
-| 0–3s | 标题卡 | 「同一议题 · 两个独立圆桌 · 同一协议」 |
-| 3–13s | 双栏 | 两端第一轮流式发言，展示不同立场 |
-| 13–25s | 双栏，Android 放大 | 第二轮引用式互评：质疑 + 引用原观点 |
-| 25–37s | 双栏 | Android 暂停、点名体验派、继续；iOS 展示同一控制 |
-| 37–47s | Android 全屏 | 资料库导入与「参考了资料库的 N 个片段」，标注「Android 独有」 |
-| 47–55s | 双栏 | 两端结论四分区与引用跳转 |
-| 55–60s | 片尾卡 | 仓库地址与「iOS / Android · 同一套协议」 |
+| 0–5s | 标题卡 | 「同一议题 · 两个独立圆桌 · 同一协议」 |
+| 5–19s | 双栏 | 两端第一轮流式发言，展示不同立场 |
+| 19–29s | 双栏 | 第二轮结构化互评：质疑 + 引用原观点 |
+| 29–38s | Android 全屏 | 资料库与「参考了资料库的 2 个片段」，标注「Android 独有」 |
+| 38–44s | 协议卡 | 同一份 `docs/protocol.md`，两个原生客户端各自实现 |
+| 44–56s | 片尾卡 | 仓库地址、发布说明与「真实设备录屏 · 剪辑压缩」 |
+
+剪辑说明：双栏使用 take4 的同步录制；Android 第二轮与资料库素材来自同一议题的
+另一场 Android 圆桌（同一版本、同一协议、同一 Provider），用于补齐 take4 中未滚动到
+的第二轮画面。片尾卡已注明「真实设备录屏 · 为时长做剪辑压缩」，不宣称两端逐帧同步。
 
 ## 录制
 
@@ -81,21 +84,16 @@ make docker-down
 4. 逐帧检查：无 API Key、无系统通知、无真实姓名/公司资料、无未授权的第三方内容。
 5. 从成片抽一帧作为封面，存为 `docs/assets/demo-v0.2.0-dual-end-poster.png`。
 
-可复现的合成命令（无字幕初版）：
+可复现的合成命令（`scripts/demo/` 下的素材生成与拼接脚本）：
 
 ```bash
-ffmpeg -y \
-  -i ../artifacts/dual-demo-raw/ios-raw.mp4 \
-  -i ../artifacts/dual-demo-raw/android-raw.mp4 \
-  -filter_complex "\
-    [0:v]scale=-2:880,pad=430:880:(ow-iw)/2:(oh-ih)/2:color=0x11151c[ios];\
-    [1:v]scale=-2:880,pad=430:880:(ow-iw)/2:(oh-ih)/2:color=0x11151c[android];\
-    color=c=0x0b0e13:s=1920x1080[bg];\
-    [bg][ios]overlay=470:70[a];\
-    [a][android]overlay=1020:70[v]" \
-  -map "[v]" -an -c:v libx264 -pix_fmt yuv420p -crf 20 \
-  ../artifacts/demo-v0.2.0-dual-end-draft.mp4
+python3 scripts/demo/build_assets.py     # 标题卡、分栏背景、字幕、协议卡、片尾卡
+python3 scripts/demo/build_poster.py     # 封面图
+scripts/demo/make_video.sh               # 按分镜裁切、叠字、拼接、烧录字幕
 ```
+
+脚本默认读取 `../artifacts/dual-demo-raw/take4/` 下的原始素材，输出 1920×1080、
+30 fps、H.264 的无音轨成片；素材目录可用环境变量覆盖。
 
 ## 产物
 
@@ -107,4 +105,6 @@ ffmpeg -y \
 
 Provider 闸门已通过：iOS 模拟器与 Android 模拟器各完成一次真实请求，使用应用真实
 提示词测得首个可见 token 分别为 1.5 秒和 2.8 秒（本地网关，仅代表录制环境）。
-双端视频尚未录制；脚本与分镜已就绪。
+
+成片已按本文分镜完成（56 秒、1920×1080、无音轨），并作为 `v0.2.0` Release 资产发布；
+封面在 `docs/assets/demo-v0.2.0-dual-end-poster.png`。成片不进入仓库历史。

@@ -2,9 +2,9 @@
 
 Agent Roundtable 是一个双端原生的 AI 多智能体圆桌应用（iOS SwiftUI / Android Jetpack Compose）。用户提出议题并选择三个不同立场的 AI Agent，Agent 之间按照受控规则讨论、互相引用，最终收敛为共识、分歧和建议。
 
-**当前版本：** MVP `v0.1.0`。发布说明见 [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md)。
+**当前版本：** `v0.2.0`（Android 客户端 + 端侧资料库 + 双端演示）。发布说明见 [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md)。
 
-[观看 60 秒双端演示](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.2.0/demo-v0.2.0-dual-end.mp4) · [4 分 43 秒 iOS 完整录屏](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.1.0/demo-v0.1.0.mp4) · [演示封面（结论卡）](docs/assets/demo-v0.1.0-poster.png) · [三个演示议题与录制脚本](docs/demo.md) · [架构说明](docs/architecture.md)
+[观看 56 秒双端演示](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.2.0/demo-v0.2.0-dual-end.mp4) · [4 分 43 秒 iOS 完整录屏](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.1.0/demo-v0.1.0.mp4) · [双端演示封面](docs/assets/demo-v0.2.0-dual-end-poster.png) · [三个演示议题与录制脚本](docs/demo.md) · [架构说明](docs/architecture.md)
 
 | 空圆桌 | Mock 一轮 |
 | --- | --- |
