@@ -48,6 +48,38 @@ final class SummaryGenerationTests: XCTestCase {
         }
     }
 
+    func testStructuredSummaryTruncatesExtraReferencesInsteadOfFailing() throws {
+        let base = try transcriptMessages()
+        let messages = (0 ..< 4).map { index in
+            Message(
+                id: UUID(uuidString: "6F0E0000-0000-4000-8000-00000000001\(index)")!,
+                roundNumber: 1,
+                author: base[0].author,
+                messageType: .proposal,
+                claim: "第 \(index) 条主张。",
+                body: "第 \(index) 条正文。",
+                stance: .support,
+                references: [],
+                createdAt: base[0].createdAt
+            )
+        }
+        let output = """
+        {
+          "consensus": [{"text": "多给了引用。", "reference_indexes": [0, 1, 2, 3]}],
+          "dissent": [],
+          "recommendations": [],
+          "unresolved": []
+        }
+        """
+
+        let draft = try StructuredSummaryParser.parse(output, transcript: messages)
+
+        XCTAssertEqual(
+            draft.consensus[0].referenceMessageIds,
+            messages.prefix(3).map { $0.id }
+        )
+    }
+
     func testStructuredSummaryRejectsUnknownFields() throws {
         let output = """
         {

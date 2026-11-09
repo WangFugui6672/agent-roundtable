@@ -96,15 +96,18 @@ class StructuredSummaryTest {
     }
 
     @Test
-    fun `more than three references are rejected`() {
+    fun `more than three references are truncated instead of rejecting the summary`() {
         val result = StructuredSummaryParser.parse(
             """{"consensus":[{"text":"太多引用","reference_indexes":[0,1,2,3]}],
                 "dissent":[],"recommendations":[],"unresolved":[]}""",
             transcript,
         )
 
-        result as SummaryParseResult.Invalid
-        assertTrue(result.reason.contains("1 到 3"))
+        result as SummaryParseResult.Valid
+        assertEquals(
+            listOf("m1", "m2", "m3"),
+            result.draft.consensus.single().referenceMessageIds,
+        )
     }
 
     @Test
@@ -437,6 +440,15 @@ class RoundSummaryGeneratorTest {
         result as SummaryRunResult.Failed
         assertTrue(result.message.startsWith("结论保存失败"))
         assertEquals(1, transport.requests.size)
+    }
+
+    @Test
+    fun `summary budget leaves room for reasoning tokens and grows on retry`() {
+        // 思考型模型先花大量 reasoning token 才输出 JSON；1200 的预算会把 JSON 截断成非法 JSON。
+        val generator = RoundSummaryGenerator(api, chatWith("{}"), retryDelayMs = 0)
+
+        assertTrue(generator.summaryMaxTokens(0) >= 12_000)
+        assertTrue(generator.summaryMaxTokens(1) > generator.summaryMaxTokens(0))
     }
 
     @Test

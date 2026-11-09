@@ -99,7 +99,6 @@ public enum StructuredSummaryParser {
                     throw StructuredSummaryError.invalidText
                 }
                 guard !item.referenceIndexes.isEmpty,
-                      item.referenceIndexes.count <= maxReferencesPerItem,
                       Set(item.referenceIndexes).count == item.referenceIndexes.count,
                       item.referenceIndexes.allSatisfy({
                           candidates.indices.contains($0)
@@ -107,9 +106,12 @@ public enum StructuredSummaryParser {
                 else {
                     throw StructuredSummaryError.invalidReference
                 }
+                // 模型偶尔会多给一两个引用；按顺序截断到上限，
+                // 而不是因为一条越界把整份结论降级成规则化结果。
+                let kept = item.referenceIndexes.prefix(maxReferencesPerItem)
                 return SummaryItem(
                     text: text,
-                    referenceMessageIds: item.referenceIndexes.map { candidates[$0].id }
+                    referenceMessageIds: kept.map { candidates[$0].id }
                 )
             }
         }

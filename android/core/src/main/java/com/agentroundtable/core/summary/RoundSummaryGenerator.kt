@@ -72,7 +72,8 @@ class RoundSummaryGenerator(
             } else {
                 basePrompt + ChatMessage.user(RETRY_INSTRUCTION)
             }
-            val text = collectReply(configuration, apiKey, messages) ?: return@repeat
+            val text = collectReply(configuration, apiKey, messages, summaryMaxTokens(attempt))
+                ?: return@repeat
             when (val parsed = StructuredSummaryParser.parse(text, transcript)) {
                 is SummaryParseResult.Valid -> return parsed.draft
                 is SummaryParseResult.Invalid -> Unit
@@ -114,10 +115,19 @@ class RoundSummaryGenerator(
         )
     }
 
+    /**
+     * 思考型模型会先产出大量 reasoning token，再输出 JSON。
+     * 预算太小时 JSON 会在中途被截断（finish_reason=length），表现为「模型返回的结论不是合法 JSON」。
+     * 重试时再放宽一档，避免同一预算下重复截断。
+     */
+    internal fun summaryMaxTokens(attempt: Int): Int =
+        if (attempt == 0) SUMMARY_MAX_TOKENS else SUMMARY_RETRY_MAX_TOKENS
+
     private suspend fun collectReply(
         configuration: ProviderConfiguration,
         apiKey: String,
         messages: List<ChatMessage>,
+        maxTokens: Int,
     ): String? {
         val builder = StringBuilder()
         var failure: String? = null
@@ -126,7 +136,7 @@ class RoundSummaryGenerator(
                 configuration = configuration,
                 apiKey = apiKey,
                 messages = messages,
-                maxTokens = SUMMARY_MAX_TOKENS,
+                maxTokens = maxTokens,
             ).collect { event ->
                 when (event) {
                     is ChatStreamEvent.Delta -> builder.append(event.text)
@@ -149,7 +159,10 @@ class RoundSummaryGenerator(
 
     private companion object {
         const val MAX_MODEL_ATTEMPTS = 2
-        const val SUMMARY_MAX_TOKENS = 1_200
+        // 思考型模型的 reasoning 长度波动极大（实测同一提示词 0–12k 字符），
+        // 预算需覆盖 reasoning + JSON 正文，否则 finish_reason=length 会把 JSON 截断。
+        const val SUMMARY_MAX_TOKENS = 16_000
+        const val SUMMARY_RETRY_MAX_TOKENS = 20_000
         const val CONFLICT_MESSAGE = "结论已在其他生成中更新（版本冲突），请刷新后基于最新版本重新生成。"
         const val RETRY_INSTRUCTION =
             "上一次输出未通过严格 schema 校验。请只返回包含 consensus、dissent、" +
