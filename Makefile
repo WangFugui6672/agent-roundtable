@@ -97,6 +97,9 @@ ios-ui-test: ios-project ## 运行完整 UI 回归（需 localhost:8000 后端�
 record-demo: ios-project ## 录制完整 UI 演示到 docs/assets/demo-v0.1.0.mp4
 	./scripts/record_demo.sh
 
+record-dual-demo: ## 同时录制 iOS 与 Android，原始素材写入 ../artifacts/dual-demo-raw/
+	./scripts/record_dual_demo.sh
+
 scripts-test: ## 测试发布脚本中的模拟器选择等纯逻辑
 	python3 -m unittest discover -s scripts -p 'test_*.py'
 

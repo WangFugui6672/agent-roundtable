@@ -127,6 +127,28 @@ class TurnRunnerTest {
         assertTrue(captured.orEmpty().contains("质疑派：我不同意"))
     }
 
+    @Test
+    fun `the first round requests a budget large enough for reasoning models`() = runTest {
+        transport.enqueue(200, NEXT_TURN_JSON)
+        transport.enqueue(201, "{}")
+        var captured: String? = null
+        val runner = TurnRunner(api, ProviderChatClient(StreamSource { request ->
+            captured = request.body
+            flowOf("data: [DONE]")
+        }))
+
+        runner.runOnce("s", "r", configuration, "sk-test", emptyList(), { context }, {})
+
+        assertTrue(captured.orEmpty().contains("\"max_tokens\":600"))
+    }
+
+    @Test
+    fun `the structured second round gets a larger budget than the first`() {
+        val runner = TurnRunner(api, chatWith(emptyList()))
+        assertEquals(600, runner.turnMaxTokens(1))
+        assertEquals(1200, runner.turnMaxTokens(2))
+    }
+
     private fun chatWith(chunks: List<String>) = ProviderChatClient(
         StreamSource { _ ->
             flowOf(

@@ -275,6 +275,7 @@ class RoomViewModel(
                 onDelta = { delta ->
                     _streaming.value = (_streaming.value ?: "") + delta
                 },
+                onReset = { _streaming.value = "" },
             )
             _streaming.value = null
 

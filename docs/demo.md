@@ -1,8 +1,8 @@
 # Agent Roundtable 演示
 
-完整录屏：[`demo-v0.1.0.mp4`](assets/demo-v0.1.0.mp4)
+完整录屏：[`demo-v0.1.0.mp4`](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.1.0/demo-v0.1.0.mp4)
 
-[![结论卡演示帧](assets/demo-v0.1.0-poster.png)](assets/demo-v0.1.0.mp4)
+[![结论卡演示帧](assets/demo-v0.1.0-poster.png)](https://github.com/WangFugui6672/agent-roundtable/releases/download/v0.1.0/demo-v0.1.0.mp4)
 
 本次录屏使用 iPhone 17 / iOS 27.0 模拟器和真实本地 Compose 后端，实际覆盖：
 
@@ -74,7 +74,7 @@ make docker-down
 默认输出：
 
 ```text
-docs/assets/demo-v0.1.0.mp4
+artifacts/demo-v0.1.0.mp4（上传到 GitHub Release v0.1.0）
 ```
 
 脚本调用 `ReleaseDemoUITests/testReleaseDemoFlow`，同时录制同一模拟器画面。后端不在 `localhost:8000` 时，请先调整 `RT_API_BASE_URL` 对应的启动配置或端口映射。
@@ -86,5 +86,5 @@ ffprobe -v error \
   -show_entries format=duration,size \
   -show_entries stream=codec_name,width,height \
   -of default=noprint_wrappers=1 \
-  docs/assets/demo-v0.1.0.mp4
+  artifacts/demo-v0.1.0.mp4
 ```

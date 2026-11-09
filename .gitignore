@@ -68,3 +68,6 @@ android/app/src/main/assets/models/**/vocab.txt
 *.gguf
 *.gguf.part
 android/app/src/main/cpp/llama.cpp/
+
+# 演示视频只放 GitHub Release 资产，不进仓库历史
+docs/assets/*.mp4
